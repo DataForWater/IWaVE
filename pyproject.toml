@@ -50,7 +50,7 @@ full = ["iwave[io,extra,dev,test,docs]"]
 slim = ["iwave[io]"]
 
 [project.urls]
-Source = "https://github.com/localdevices/iwave"
+Source = "https://github.com/DataForWater/IWaVE"
 
 # consideration to make a light command-line interface
 # with input: video, output: velocimetry fields stored in common file template
