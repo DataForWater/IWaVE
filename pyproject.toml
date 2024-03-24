@@ -1,0 +1,59 @@
+[build-system]
+requires = ["flit_core"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "iwave"
+authors = [
+  { name = "Giulio Dolcetti", email = "giulio.dolcetti@unitn.it" },
+  { name = "Salvador Pena Haro", email = "pena@photrack.ch" },
+  { name = "Hessel Winsemius", email = "winsemius@rainbowsensing.com" }
+]
+dependencies = [
+    "numpy",
+    "numba",
+    "rocket-fft",
+    "matplotlib" # for numba accelerated jittable fast fourier transforms
+]
+
+requires-python =">=3.10"
+readme = "README.md"
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Hydrology",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12"
+]
+dynamic = ['version', 'description']
+
+[project.optional-dependencies]
+io = [
+]
+extra = [
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-lazy-fixtures"
+]
+docs = [
+    "sphinx", # + several subpackages for docs
+]
+
+full = ["iwave[io,extra,dev,test,docs]"]
+slim = ["iwave[io]"]
+
+[project.urls]
+Source = "https://github.com/localdevices/iwave"
+
+# consideration to make a light command-line interface
+# with input: video, output: velocimetry fields stored in common file template
+# [project.scripts]
+# iwave = "iwave.cli:main"
+
