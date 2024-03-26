@@ -2,7 +2,7 @@ import numpy as np
 from typing import Tuple
 
 
-def sliding_window_array(
+def sliding_window_idx(
     image: np.ndarray,
     window_size: Tuple[int, int] = (64, 64),
     overlap: Tuple[int, int] = (32, 32),
@@ -24,9 +24,31 @@ def sliding_window_array(
     )
     win_x = win_x[np.newaxis, :, :] + xi
     win_y = win_y[np.newaxis, :, :] + yi
-    windows = image[win_y, win_x]
-    return windows
+    return win_x, win_y
 
+def sliding_window_array(
+    img,
+    win_x,
+    win_y,
+):
+    return img[win_y, win_x]
+    # return windows
+
+
+def multi_sliding_window_array(
+    imgs,
+    win_x,
+    win_y,
+):
+    return np.stack(
+        [
+            sliding_window_array(
+                img,
+                win_x,
+                win_y
+            ) for img in imgs
+        ]
+    )
 
 
 def get_axis_shape(

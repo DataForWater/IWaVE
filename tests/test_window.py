@@ -60,6 +60,13 @@ def test_sliding_window_array(imgs):
     plt.imshow(img_wins[0])
     plt.show()
 
+def test_multi_sliding_window_array(imgs):
+    # get the x and y coordinates per window
+    win_x, win_y = window.sliding_window_idx(imgs[0])
+    # apply the coordinates on all images
+    window_stack = window.multi_sliding_window_array(imgs, win_x, win_y)
+    assert(window_stack.shape==(4, 11**2, 64, 64))
+
 
 
 
