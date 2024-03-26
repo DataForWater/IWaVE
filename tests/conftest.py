@@ -12,7 +12,7 @@ def path_img():
         os.path.dirname(__file__),
         "..",
         "examples",
-        "todmorden",
+        "sheaf",
     )
 
 

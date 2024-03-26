@@ -26,13 +26,32 @@ from typing import Tuple
 #     return windows
 #
 
+
 def get_axis_shape(
     dim_size: int,
     window_size: int,
     overlap: int,
 ) -> int:
+    """
+    get shape of image axis given its dimension size
+
+    Parameters
+    ----------
+    dim_size : int
+        size of axis [pix]
+    window_size : int
+        size of interrogation window over axis dimension [pix]
+    overlap : int
+        size of overlap [pix]
+
+    Returns
+    -------
+    int, amount of interrogation windows over provided axis
+
+    """
     axis_shape = (dim_size - window_size) // (window_size - overlap) + 1
     return axis_shape
+
 
 def get_array_shape(
     dim_sizes: Tuple[int, int],
@@ -52,30 +71,26 @@ def get_array_shape(
     )
     return array_shape
 
-# def get_coordinates(
-#     dim_size,
-#     window_size,
-#     overlap,
-# ):
-#     """
-#
-#     Parameters
-#     ----------
-#     dim
-#     window_size
-#     overlap
-#
-#     Returns
-#     -------
-#
-#     """
-#     x = np.arange(dim_size) * (window_size - overlap)
-#         + (window_size) / 2.0
-#     if center_on_field is True:
-#         x += (dim_size - 1 - ((field_shape[1] - 1) * (search_area_size -
-#                                                            overlap) + (search_area_size - 1))
-#         ) // 2
-#
+
+def get_axis_coords(
+    dim_size,
+    window_size,
+    overlap,
+    center_on_field=False,
+):
+
+    coords = np.arange(dim_size) * (window_size - overlap) + (window_size) / 2.0
+    if center_on_field is True:
+        coords_shape = get_axis_shape(
+            dim_size=dim_size,
+            window_size=window_size,
+            overlap=overlap
+        )
+        coords += (dim_size - 1 - ((coords_shape - 1) * (window_size - overlap) + (
+                window_size - 1))
+        ) // 2
+    return coords
+
 # def get_rect_coordinates(
 #     image_size: Tuple[int, int],
 #     window_size: Union[int, Tuple[int, int]],

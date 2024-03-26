@@ -1,4 +1,5 @@
 """ tests for window manipulations """
+import numpy as np
 
 from iwave import window
 
@@ -24,3 +25,17 @@ def test_get_array_shape(imgs):
         overlaps=(32, 32)
     )
     assert(xy_shape == (11, 11))
+
+
+def test_get_axis_coords(imgs):
+    dim_size = imgs.shape[-1]
+    coords = window.get_axis_coords(
+        dim_size,
+        64,
+        32,
+    )
+    assert(np.allclose(np.array(coords[0:4]), np.array([32., 64., 96., 128.])))
+
+
+
+
