@@ -31,7 +31,7 @@ def fns_img(path_img):
 def fn_windows(path_img):
     return os.path.join(
         path_img,
-        "window_sample.asc"
+        "windows.bin"
     )
 
 @fixture
@@ -43,8 +43,6 @@ def imgs(fns_img):
 
 @fixture
 def img_windows(fn_windows):
-    """
-    100 timestamps for 4 (64x64) windows
-    :return: 
-    """
-
+    with open(fn_windows, "rb") as f:
+        windows = np.load(f)
+    return windows

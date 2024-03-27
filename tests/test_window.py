@@ -1,5 +1,6 @@
 """ tests for window manipulations """
 import numpy as np
+import pytest
 
 from iwave import window
 
@@ -60,13 +61,26 @@ def test_sliding_window_array(imgs):
     plt.imshow(img_wins[0])
     plt.show()
 
-def test_multi_sliding_window_array(imgs):
+
+@pytest.mark.parametrize(
+    ("swap_time_dim", "test_dims"),
+    [
+        (False, (4, 11**2, 64, 64)),
+        (True, (11**2, 4, 64, 64))
+    ]
+)
+def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):
     # get the x and y coordinates per window
     win_x, win_y = window.sliding_window_idx(imgs[0])
     # apply the coordinates on all images
-    window_stack = window.multi_sliding_window_array(imgs, win_x, win_y)
-    assert(window_stack.shape==(4, 11**2, 64, 64))
+    window_stack = window.multi_sliding_window_array(
+        imgs,
+        win_x,
+        win_y,
+        swap_time_dim=swap_time_dim
+    )
+    assert(window_stack.shape == test_dims)
 
-
-
-
+def test_fourier_transform(img_windows):
+    # TODO: implement fourier transform funcs
+    pass

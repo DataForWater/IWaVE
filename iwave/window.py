@@ -39,8 +39,9 @@ def multi_sliding_window_array(
     imgs,
     win_x,
     win_y,
+    swap_time_dim=False
 ):
-    return np.stack(
+    windows = np.stack(
         [
             sliding_window_array(
                 img,
@@ -49,6 +50,9 @@ def multi_sliding_window_array(
             ) for img in imgs
         ]
     )
+    if swap_time_dim:
+        return np.swapaxes(windows, 0, 1)
+    return windows
 
 
 def get_axis_shape(
