@@ -31,7 +31,7 @@ def fns_img(path_img):
 def fn_windows(path_img):
     return os.path.join(
         path_img,
-        "windows.bin"
+        "windows_200.bin"
     )
 
 @fixture

@@ -81,6 +81,12 @@ def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):
     )
     assert(window_stack.shape == test_dims)
 
+
+def test_normalize(img_windows):
+    img_norm = window.normalize(img_windows)
+    assert(img_windows.shape == img_norm.shape)
+
+
 def test_fourier_transform(img_windows):
     # TODO: implement fourier transform funcs
     pass
