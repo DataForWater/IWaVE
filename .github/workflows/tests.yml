@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:  
+  test_:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v4
+        name: Install Python
+        with:
+          python-version: '3.11'
+      - name: generate env
+        run: |
+          pip install tomli flit twine
+          pip install .[test]
+      - name: Test
+        run: python -m pytest --verbose --cov=IWaVE --cov-report xml
+      - uses: codecov/codecov-action@v1
