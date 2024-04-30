@@ -7,6 +7,26 @@ def sliding_window_idx(
     window_size: Tuple[int, int] = (64, 64),
     overlap: Tuple[int, int] = (32, 32),
 ) -> np.ndarray:
+    """Create y and x indices per interrogation window.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        black-white image or template
+    window_size : tuple
+        size of interrogation window (y, x)
+    overlap : tuple
+        overlap of pixels of interrogation windows (y, x)
+
+    Returns
+    -------
+    win_x : np.ndarray (w * y * x)
+        x-indices of interrogation windows (w)
+    win_y : np.ndarray (w * y * x)
+        y-indices of interrogation windows (w)
+
+
+    """
 
     xi, yi = get_rect_coordinates(
         image.shape,
