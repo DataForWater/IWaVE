@@ -110,17 +110,39 @@ def numba_fourier_transform(windows):
     return power[:int(np.ceil(len(power)/2))]
 
 
-    # # Initialize an empty array to store the Fourier transform
-    # fourier_transform = np.zeros_like(windows, dtype=np.complex128)
-    # # Apply the 2D Fourier transform to each frame
-    # for i in nb.prange(windows.shape[0]):
-    #     fourier_transform[i] = fft2_(windows[i])
-    #
-    # # 1D Fourier transform along the time dimension
-    # for axis in range(1, 3):
-    #     fourier_transform = ifft_(fourier_transform, axis=0)
-    # # ...
-    # raise NotImplementedError
+@nb.njit(parallel=True, cache=True, nogil=True)
+def numba_fourier_transform_multi(imgs):
+    """
+    Numba implementation of 3D spectral analysis
+
+    Parameters
+    ----------
+    windows : np.ndarray
+        time x Y x X windows with intensities
+    norm : bool
+        normalize spectrum (default: False)
+
+    Returns
+    -------
+    power : np.ndarray
+        3D power spectrum of 3D fourier transform
+
+    """
+    spectrum = np.zeros((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
+    for m in nb.prange(imgs.shape[0]):
+        windows = imgs[m]
+        spectrum_2d = np.zeros(windows.shape, dtype=np.complex128)
+        for n in nb.prange(windows.shape[0]):
+            spectrum_2d[n] = fftshift_(
+                fft_ax_(
+                    fft_(windows[n])
+                )
+            )
+        spectrum_3d = ifft_(spectrum_2d, axis=0)
+        # return spectrum_3d
+        power = spectrum_3d.real ** 2
+        spectrum[m] = power[:int(np.ceil(len(power)/2))]
+    return spectrum
 
 
 def numpy_fourier_transform(windows, norm=False):
