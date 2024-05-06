@@ -3,7 +3,11 @@ import numpy as np
 
 @nb.njit(cache=True)
 def fft_(x):
-    return np.fft.fft(x)
+    return np.fft.fft(x, axis=-1)
+
+@nb.njit(cache=True)
+def fft_ax_(x):
+    return np.fft.fft(x, axis=-2)
 
 # base functions
 @nb.njit(cache=True)
@@ -25,7 +29,7 @@ def ifft_(x, axis=0):
     return np.fft.ifft(x, axis=axis)
 
 @nb.njit(cache=True)
-def fftshift_(x, axes):
+def fftshift_(x, axes=0):
     return np.fft.fftshift(x, axes)
 
 @nb.njit(cache=True)
@@ -73,8 +77,8 @@ def _get_wave_numbers(window_dims, res, fps):
     return kt, ky, kx
 
 
-@nb.njit(parallel=True, nogil=True, cache=True)
-def numba_fourier_transform(windows, norm=False):
+@nb.njit(parallel=True, cache=True, nogil=True)
+def numba_fourier_transform(windows):
     """
     Numba implementation of 3D spectral analysis
 
@@ -91,17 +95,32 @@ def numba_fourier_transform(windows, norm=False):
         3D power spectrum of 3D fourier transform
 
     """
-    # Initialize an empty array to store the Fourier transform
-    fourier_transform = np.zeros_like(windows, dtype=np.complex128)
-    # Apply the 2D Fourier transform to each frame
-    for i in nb.prange(windows.shape[0]):
-        fourier_transform[i] = fft2_(windows[i])
+    spectrum_2d = np.zeros(windows.shape, dtype=np.complex128)
+    for n in nb.prange(windows.shape[0]):
+        spectrum_2d[n] = fftshift_(
+        fft_ax_(
+            fft_(windows[n])
+        )
+    )
+    spectrum_3d = ifft_(spectrum_2d, axis=0)
+    # return spectrum_3d
+    power = spectrum_3d.real ** 2
 
-    # 1D Fourier transform along the time dimension
-    for axis in range(1, 3):
-        fourier_transform = ifft_(fourier_transform, axis=0)
-    # ...
-    raise NotImplementedError
+    # abbreviate to positive omega
+    return power[:int(np.ceil(len(power)/2))]
+
+
+    # # Initialize an empty array to store the Fourier transform
+    # fourier_transform = np.zeros_like(windows, dtype=np.complex128)
+    # # Apply the 2D Fourier transform to each frame
+    # for i in nb.prange(windows.shape[0]):
+    #     fourier_transform[i] = fft2_(windows[i])
+    #
+    # # 1D Fourier transform along the time dimension
+    # for axis in range(1, 3):
+    #     fourier_transform = ifft_(fourier_transform, axis=0)
+    # # ...
+    # raise NotImplementedError
 
 
 def numpy_fourier_transform(windows, norm=False):

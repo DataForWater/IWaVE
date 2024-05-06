@@ -33,3 +33,10 @@ def test_numpy_fft(img_windows):
     # plt.show()
     # print(spectrum.shape)
 
+def test_numba_fft(img_windows):
+    # normalize images
+    img_windows = img_windows - img_windows.mean(axis=0)
+    img_windows = img_windows / img_windows.std(axis=0)
+    img_windows[np.isinf(img_windows)] = 0
+    img_windows[np.isnan(img_windows)] = 0
+    spectrum = spectral.numba_fourier_transform(img_windows[-1])
