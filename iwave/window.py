@@ -47,20 +47,21 @@ def sliding_window_idx(
     return win_x, win_y
 
 def sliding_window_array(
-    img,
-    win_x,
-    win_y,
-):
-    return img[win_y, win_x]
-    # return windows
+    image: np.ndarray,
+    win_x: np.ndarray,
+    win_y: np.ndarray,
+) -> np.ndarray:
+
+    return image[win_y, win_x]
 
 
 def multi_sliding_window_array(
-    imgs,
-    win_x,
-    win_y,
+    imgs: np.ndarray,
+    win_x: np.ndarray,
+    win_y: np.ndarray,
     swap_time_dim=False
-):
+) -> np.ndarray:
+
     windows = np.stack(
         [
             sliding_window_array(

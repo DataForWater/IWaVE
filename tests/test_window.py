@@ -52,14 +52,13 @@ def test_get_rect_coordinates(imgs):
 
 
 def test_sliding_window_array(imgs):
-    import matplotlib.pyplot as plt
+    win_x, win_y = window.sliding_window_idx(imgs[0])
     img_wins = window.sliding_window_array(
-        image=imgs[0],
-        window_size=(64, 64),
-        overlap=(32, 32),
+        imgs[0],
+        win_x,
+        win_y
     )
-    plt.imshow(img_wins[0])
-    plt.show()
+    assert img_wins.shape == (11**2, 64, 64)
 
 
 @pytest.mark.parametrize(
