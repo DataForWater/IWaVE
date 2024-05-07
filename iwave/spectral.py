@@ -1,44 +1,25 @@
 import numba as nb
 import numpy as np
 
+
 @nb.njit(cache=True)
-def fft_(x):
+def fft_x(x):
     return np.fft.fft(x, axis=-1)
 
+
 @nb.njit(cache=True)
-def fft_ax_(x):
+def fft_y(x):
     return np.fft.fft(x, axis=-2)
 
-# base functions
-@nb.njit(cache=True)
-def fft2_(x):
-    return np.fft.fft2(x)
-
 
 @nb.njit(cache=True)
-def fft2__(x, fsize):
-    return np.fft.fft2(x, fsize)
+def ifft_(x):
+    return np.fft.ifft(x, axis=0)
 
 
 @nb.njit(cache=True)
-def ifft2_(x):
-    return np.fft.ifft2(x)
-
-@nb.njit(cache=True)
-def ifft_(x, axis=0):
-    return np.fft.ifft(x, axis=axis)
-
-@nb.njit(cache=True)
-def fftshift_(x, axes=0):
-    return np.fft.fftshift(x, axes)
-
-@nb.njit(cache=True)
-def fftn_(x):
-    return np.fft.fftn(x)
-
-@nb.njit(cache=True)
-def conj_(x):
-    return np.conj(x)
+def fftshift_(x):
+    return np.fft.fftshift(x)
 
 
 def _get_wave_numbers(window_dims, res, fps):
@@ -80,32 +61,29 @@ def _get_wave_numbers(window_dims, res, fps):
 @nb.njit(parallel=True, cache=True, nogil=True)
 def numba_fourier_transform(windows):
     """
-    Numba implementation of 3D spectral analysis
+    Perform 3D spectral analysis with numba jitted code.
 
     Parameters
     ----------
     windows : np.ndarray
         time x Y x X windows with intensities
-    norm : bool
-        normalize spectrum (default: False)
 
     Returns
     -------
-    power : np.ndarray
+    spectrum : np.ndarray
         3D power spectrum of 3D fourier transform
 
     """
-    spectrum_2d = np.zeros(windows.shape, dtype=np.complex128)
+    spectrum_2d = np.empty(windows.shape, dtype=np.complex128)
     for n in nb.prange(windows.shape[0]):
         spectrum_2d[n] = fftshift_(
-        fft_ax_(
-            fft_(windows[n])
+        fft_y(
+            fft_x(windows[n])
         )
     )
-    spectrum_3d = ifft_(spectrum_2d, axis=0)
+    spectrum_3d = ifft_(spectrum_2d)
     # return spectrum_3d
     power = spectrum_3d.real ** 2
-
     # abbreviate to positive omega
     return power[:int(np.ceil(len(power)/2))]
 
@@ -113,36 +91,36 @@ def numba_fourier_transform(windows):
 @nb.njit(parallel=True, cache=True, nogil=True)
 def numba_fourier_transform_multi(imgs):
     """
-    Numba implementation of 3D spectral analysis
+    Perform 3D spectral analysis for multiple windows at once with numba jitted code.
 
     Parameters
     ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
-    norm : bool
-        normalize spectrum (default: False)
+    imgs : np.ndarray
+        n x time x Y x X windows with intensities
 
     Returns
     -------
-    power : np.ndarray
-        3D power spectrum of 3D fourier transform
+    spectra : np.ndarray
+        n x 3D power spectrum of 3D fourier transform of all imgs
 
     """
-    spectrum = np.zeros((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
+    spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
     for m in nb.prange(imgs.shape[0]):
-        windows = imgs[m]
-        spectrum_2d = np.zeros(windows.shape, dtype=np.complex128)
-        for n in nb.prange(windows.shape[0]):
-            spectrum_2d[n] = fftshift_(
-                fft_ax_(
-                    fft_(windows[n])
+        spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
+        for n in nb.prange(imgs.shape[1]):
+            spectrum_3d[n] = fftshift_(
+                fft_y(
+                    fft_x(imgs[m, n])
                 )
             )
-        spectrum_3d = ifft_(spectrum_2d, axis=0)
+        for y in nb.prange(spectrum_3d.shape[1]):
+            for x in nb.prange(spectrum_3d.shape[2]):
+                spectrum_3d[:, y, x] = ifft_(spectrum_3d[:, y, x])
         # return spectrum_3d
         power = spectrum_3d.real ** 2
-        spectrum[m] = power[:int(np.ceil(len(power)/2))]
-    return spectrum
+        # abbreviate to positive omega
+        spectra[m] = power[:int(np.ceil(len(power)/2))]
+    return spectra
 
 
 def numpy_fourier_transform(windows, norm=False):

@@ -1,7 +1,5 @@
-import pytest
 import numpy as np
 from iwave import spectral
-import matplotlib.pyplot as plt
 
 
 def test_get_wave_numbers(img_windows, res=0.02, fps=25):
@@ -10,20 +8,15 @@ def test_get_wave_numbers(img_windows, res=0.02, fps=25):
     print(ky.shape)
 
 
-def test_numpy_fft(img_windows):
-    # normalize images
-    img_windows = img_windows - img_windows.mean(axis=0)
-    img_windows = img_windows / img_windows.std(axis=0)
-    img_windows[np.isinf(img_windows)] = 0
-    img_windows[np.isnan(img_windows)] = 0
-    spectrum = spectral.numpy_fourier_transform(img_windows[-1])
-
-    # make too large components equal to zero (?)
-    # test_min_val = 1 * spectrum.mean(axis=0)repmat(mean(kOmegaSpectrum(:,:, 2: ceil(
-    #     end / 2)), 3), ...
-    # [1, 1, size(kOmegaSpectrum, 3)]))
-    # spectrum[spectrum < min_spectrum] = 0.
-    # check = np.abs(np.fft.ifft(spectrum, axis=0))**2
+def test_numpy_fft(img_windows_norm):
+    windows = img_windows_norm[-1]
+    spectrum = spectral.numpy_fourier_transform(windows)
+    assert spectrum.shape == (
+        int(np.ceil(len(windows) / 2)),
+        windows.shape[1],
+        windows.shape[2]
+    )
+    # TODO: code below for plotting, may be moved to API
     # kt, ky, kx = spectral._get_wave_numbers(
     #     img_windows[0].shape,
     #     0.02, 20
@@ -34,21 +27,18 @@ def test_numpy_fft(img_windows):
     # print(spectrum.shape)
 
 
-def test_numba_fft(img_windows):
-    # normalize images
-    img_windows = img_windows - img_windows.mean(axis=0)
-    img_windows = img_windows / img_windows.std(axis=0)
-    img_windows[np.isinf(img_windows)] = 0
-    img_windows[np.isnan(img_windows)] = 0
-    spectrum = spectral.numba_fourier_transform(img_windows[-1])
+def test_numba_fft(img_windows_norm):
+    spectrum = spectral.numba_fourier_transform(img_windows_norm[-1])
+    spectrum_numpy = spectral.numpy_fourier_transform(img_windows_norm[-1])
+    # test if the answer is (very) close to the answer of the numpy version
+    assert np.allclose(spectrum_numpy, spectrum)
 
 
-def test_numba_fft_multi(img_windows):
-    # normalize images
-    img_windows = img_windows - img_windows.mean(axis=0)
-    img_windows = img_windows / img_windows.std(axis=0)
-    img_windows[np.isinf(img_windows)] = 0
-    img_windows[np.isnan(img_windows)] = 0
-    spectrum = spectral.numba_fourier_transform_multi(img_windows)
+def test_numba_fft_multi(img_windows_norm):
+    spectra = spectral.numba_fourier_transform_multi(img_windows_norm)
+    # test if all image windows give the same result as the numpy version of the spectrum code
+    for windows, spectrum in zip(img_windows_norm, spectra):
+        spectrum_numpy = spectral.numpy_fourier_transform(windows)
+        assert np.allclose(spectrum_numpy, spectrum)
 
 
