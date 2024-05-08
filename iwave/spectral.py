@@ -30,7 +30,7 @@ def _get_wave_numbers(window_dims, res, fps):
     ----------
     windows : np.ndarray
         time x Y x X windows with intensities
-    res
+    res :
 
     Returns
     -------
@@ -83,7 +83,7 @@ def numba_fourier_transform(windows):
     )
     spectrum_3d = ifft_(spectrum_2d)
     # return spectrum_3d
-    power = abs(spectrum_3d) ** 2
+    power = np.abs(spectrum_3d) ** 2
     # abbreviate to positive omega
     return power[:int(np.ceil(len(power)/2))]
 
@@ -117,7 +117,7 @@ def numba_fourier_transform_multi(imgs):
             for x in nb.prange(spectrum_3d.shape[2]):
                 spectrum_3d[:, y, x] = ifft_(spectrum_3d[:, y, x])
         # return spectrum_3d
-        power = abs(spectrum_3d) ** 2
+        power = np.abs(spectrum_3d) ** 2
         # abbreviate to positive omega
         spectra[m] = power[:int(np.ceil(len(power)/2))]
     return spectra
@@ -144,7 +144,7 @@ def numpy_fourier_transform(windows, norm=False):
         np.fft.fft(np.fft.fft(windows, axis=-2), axis=-1)
     )
     spectrum_3d = np.fft.ifft(spectrum_2d, axis=0)
-    power = abs(spectrum_3d) ** 2
+    power = np.abs(spectrum_3d) ** 2
 
     # abbreviate to positive omega
     power = power[:int(np.ceil(len(power)/2))]
