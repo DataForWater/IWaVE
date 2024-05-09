@@ -17,11 +17,12 @@ def test_numpy_fft(img_windows_norm):
         windows.shape[2]
     )
     # TODO: code below for plotting, may be moved to API
+    # import matplotlib.pyplot as plt
     # kt, ky, kx = spectral._get_wave_numbers(
-    #     img_windows[0].shape,
+    #     windows.shape,
     #     0.02, 20
     # )
-    # plt.imshow(np.log(check[50]))
+    # plt.imshow(np.log(spectrum[:, :, 32]))
     # plt.colorbar()
     # plt.show()
     # print(spectrum.shape)

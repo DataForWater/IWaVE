@@ -223,6 +223,7 @@ def get_rect_coordinates(
     xi, yi = np.meshgrid(x, y)
     return xi, yi
 
+
 def normalize(imgs):
     """
     normalizes images assuming the last two dimensions contain the x/y image intensities
@@ -239,11 +240,13 @@ def normalize(imgs):
     """
     # compute means and stds
     imgs_std = np.expand_dims(
-        imgs.std(axis=-1).mean(axis=-1),
+        # imgs.std(axis=-1).mean(axis=-1),
+        imgs.reshape(imgs.shape[0], imgs.shape[1], -1).std(axis=-1),
         axis=(-1, -2)
     )
     imgs_mean = np.expand_dims(
-        imgs.mean(axis=-1).mean(axis=-1),
+        # imgs.mean(axis=-1).mean(axis=-1),
+        imgs.reshape(imgs.shape[0], imgs.shape[1], -1).mean(axis=-1),
         axis=(-1, -2)
     )
     return (imgs - imgs_mean) / imgs_std

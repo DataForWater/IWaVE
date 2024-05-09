@@ -83,7 +83,11 @@ def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):
 
 def test_normalize(img_windows):
     img_norm = window.normalize(img_windows)
-    assert(img_windows.shape == img_norm.shape)
+    # check if shape remains the same
+    assert img_windows.shape == img_norm.shape
+    # check if any window has mean / std of 0. / 1.
+    assert np.isclose(img_norm[0][0].std(), 1.)
+    assert np.isclose(img_norm[0][0].mean(), 0.)
 
 
 def test_fourier_transform(img_windows):

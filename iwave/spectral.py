@@ -36,13 +36,14 @@ def _get_wave_numbers(window_dims, res, fps):
     -------
 
     """
+    kts = 2 * np.pi * fps  #
     ks = 2 * np.pi / res  # this assumes the resolution is the same in x and
     # y-direction: TODO make variable for both directions
-    dkt = fps / window_dims[0]
+    dkt = kts / window_dims[0]
     dky = ks / window_dims[1]
     dkx = ks / window_dims[2]
     # omega wave numbers (time dim)
-    kt = np.arange(0, fps, dkt)
+    kt = np.arange(0, kts, dkt)
     kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
     # determine wave numbers in x-direction
     kx = np.arange(0, ks, dkx)
