@@ -1,5 +1,6 @@
 import numba as nb
 import numpy as np
+from typing import Literal
 
 
 @nb.njit(cache=True)
@@ -22,7 +23,11 @@ def fftshift_(x):
     return np.fft.fftshift(x)
 
 
-def _get_wave_numbers(window_dims, res, fps):
+def wave_numbers(
+    window_dims: tuple,
+    res: float,
+    fps: float
+) -> np.ndarray | np.ndarray | np.ndarray :
     """
     get t, y, x wave numbers
 
@@ -34,6 +39,8 @@ def _get_wave_numbers(window_dims, res, fps):
 
     Returns
     -------
+    kt, ky, kx: np.ndarray
+        wave numbers of time, y and x
 
     """
     kts = 2 * np.pi * fps  #
@@ -60,7 +67,9 @@ def _get_wave_numbers(window_dims, res, fps):
 
 
 @nb.njit(parallel=True, cache=True, nogil=True)
-def numba_fourier_transform(windows):
+def _numba_fourier_transform(
+    windows: np.ndarray
+) -> np.ndarray:
     """
     Perform 3D spectral analysis with numba jitted code.
 
@@ -90,7 +99,9 @@ def numba_fourier_transform(windows):
 
 
 @nb.njit(parallel=True, cache=True, nogil=True)
-def numba_fourier_transform_multi(imgs):
+def _numba_fourier_transform_multi(
+    imgs: np.ndarray
+) -> np.ndarray:
     """
     Perform 3D spectral analysis for multiple windows at once with numba jitted code.
 
@@ -124,7 +135,10 @@ def numba_fourier_transform_multi(imgs):
     return spectra
 
 
-def numpy_fourier_transform(windows, norm=False):
+def _numpy_fourier_transform(
+        windows: np.ndarray,
+        norm: bool = False
+) -> np.ndarray:
     """
     Pure numpy implementation of 3D spectral analysis
 
@@ -145,15 +159,47 @@ def numpy_fourier_transform(windows, norm=False):
         np.fft.fft(np.fft.fft(windows, axis=-2), axis=-1)
     )
     spectrum_3d = np.fft.ifft(spectrum_2d, axis=0)
-    power = np.abs(spectrum_3d) ** 2
+    spectrum = np.abs(spectrum_3d) ** 2
 
     # abbreviate to positive omega
-    power = power[:int(np.ceil(len(power)/2))]
+    spectrum = spectrum[:int(np.ceil(len(spectrum)/2))]
 
     if norm:
-        power_norm = power / np.expand_dims(
-            power.mean(axis=-1).mean(axis=-1),
+        spectrum_norm = spectrum / np.expand_dims(
+            spectrum.mean(axis=-1).mean(axis=-1),
             axis=(-1, -2)
         )
-        return power_norm
-    return power
+        return spectrum_norm
+    return spectrum
+
+
+def spectral_imgs(
+    imgs: np.ndarray,
+    engine: Literal["numpy", "numba"] = "numba",
+    **kwargs
+) -> np.ndarray:
+    """
+    Perform 3D spectral analysis.
+
+    Parameters
+    ----------
+    imgs : np.ndarray
+        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in subwindows of Y * X pixels
+    engine : str, optional
+        "numpy" or "numba", compute method to use, typically numba (default) is a lot faster. Numpy function is easier
+        to read.
+    kwargs : dict with additional keyword arguments for processing
+
+    Returns
+    -------
+    spectra : np.ndarray
+        wave spectra for all image window sequences
+
+    """
+    if engine == "numpy":
+        return np.array([_numpy_fourier_transform(windows, **kwargs) for windows in imgs])
+    elif engine == "numba":
+        return _numba_fourier_transform_multi(imgs, **kwargs)
+    else:
+        raise ValueError(f'engine "{engine}" does not exist. Choose "numba" (default) or "numpy"')
+
