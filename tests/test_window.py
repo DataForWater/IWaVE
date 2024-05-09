@@ -89,7 +89,3 @@ def test_normalize(img_windows):
     assert np.isclose(img_norm[0][0].std(), 1.)
     assert np.isclose(img_norm[0][0].mean(), 0.)
 
-
-def test_fourier_transform(img_windows):
-    # TODO: implement fourier transform funcs
-    pass
