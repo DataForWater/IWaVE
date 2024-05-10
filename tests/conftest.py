@@ -31,7 +31,7 @@ def fns_img(path_img):
 def fn_windows(path_img):
     return os.path.join(
         path_img,
-        "windows.bin"
+        "windows_200.bin"
     )
 
 @fixture
@@ -46,3 +46,12 @@ def img_windows(fn_windows):
     with open(fn_windows, "rb") as f:
         windows = np.load(f)
     return windows
+
+@fixture
+def img_windows_norm(img_windows):
+    img_windows = img_windows - img_windows.mean(axis=0)
+    img_windows = img_windows / img_windows.std(axis=0)
+    img_windows[np.isinf(img_windows)] = 0
+    img_windows[np.isnan(img_windows)] = 0
+    return img_windows
+

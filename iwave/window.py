@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Literal
 
 
 def sliding_window_idx(
@@ -7,6 +7,26 @@ def sliding_window_idx(
     window_size: Tuple[int, int] = (64, 64),
     overlap: Tuple[int, int] = (32, 32),
 ) -> np.ndarray:
+    """Create y and x indices per interrogation window.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        black-white image or template
+    window_size : tuple
+        size of interrogation window (y, x)
+    overlap : tuple
+        overlap of pixels of interrogation windows (y, x)
+
+    Returns
+    -------
+    win_x : np.ndarray (w * y * x)
+        x-indices of interrogation windows (w)
+    win_y : np.ndarray (w * y * x)
+        y-indices of interrogation windows (w)
+
+
+    """
 
     xi, yi = get_rect_coordinates(
         image.shape,
@@ -27,20 +47,21 @@ def sliding_window_idx(
     return win_x, win_y
 
 def sliding_window_array(
-    img,
-    win_x,
-    win_y,
-):
-    return img[win_y, win_x]
-    # return windows
+    image: np.ndarray,
+    win_x: np.ndarray,
+    win_y: np.ndarray,
+) -> np.ndarray:
+
+    return image[win_y, win_x]
 
 
 def multi_sliding_window_array(
-    imgs,
-    win_x,
-    win_y,
+    imgs: np.ndarray,
+    win_x: np.ndarray,
+    win_y: np.ndarray,
     swap_time_dim=False
-):
+) -> np.ndarray:
+
     windows = np.stack(
         [
             sliding_window_array(
@@ -201,3 +222,46 @@ def get_rect_coordinates(
 
     xi, yi = np.meshgrid(x, y)
     return xi, yi
+
+
+def normalize(
+    imgs: np.ndarray,
+    mode: Literal["xy", "time"] = "time"
+):
+    """
+    normalizes images assuming the last two dimensions contain the x/y image intensities
+
+    Parameters
+    ----------
+    imgs : np.ndarray (n x Y x X) or (n x m x Y x X)
+        input images, organized in at least one stack
+    Returns
+    -------
+
+    imgs_norm : np.ndarray (n x Y x X) or (n x m x Y x X)
+        output normalized images, organized in at least one stack, similar to imgs
+    """
+    # compute means and stds
+    if mode == "xy":
+        imgs_std = np.expand_dims(
+            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).std(axis=-1),
+            axis=(-1, -2)
+        )
+        imgs_mean = np.expand_dims(
+            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).mean(axis=-1),
+            axis=(-1, -2)
+        )
+    elif mode == "time":
+        imgs_std = np.expand_dims(
+            imgs.std(axis=-3),
+            axis=-3
+        )
+        imgs_mean = np.expand_dims(
+            imgs.mean(axis=-3),
+            axis=-3
+        )
+    else:
+        raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
+    return (imgs - imgs_mean) / imgs_std
+
+
