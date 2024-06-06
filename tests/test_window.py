@@ -52,14 +52,13 @@ def test_get_rect_coordinates(imgs):
 
 
 def test_sliding_window_array(imgs):
-    import matplotlib.pyplot as plt
+    win_x, win_y = window.sliding_window_idx(imgs[0])
     img_wins = window.sliding_window_array(
-        image=imgs[0],
-        window_size=(64, 64),
-        overlap=(32, 32),
+        imgs[0],
+        win_x,
+        win_y
     )
-    plt.imshow(img_wins[0])
-    plt.show()
+    assert img_wins.shape == (11**2, 64, 64)
 
 
 @pytest.mark.parametrize(
@@ -83,10 +82,14 @@ def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):
 
 
 def test_normalize(img_windows):
-    img_norm = window.normalize(img_windows)
-    assert(img_windows.shape == img_norm.shape)
-
-
-def test_fourier_transform(img_windows):
-    # TODO: implement fourier transform funcs
-    pass
+    img_norm = window.normalize(img_windows, mode="xy")
+    # check if shape remains the same
+    assert img_windows.shape == img_norm.shape
+    # check if any window has mean / std of 0. / 1.
+    assert np.isclose(img_norm[0][0].std(), 1.)
+    assert np.isclose(img_norm[0][0].mean(), 0.)
+    # check time normalization also
+    img_norm = window.normalize(img_windows, mode="time")
+    # check if random single time slice has mean / std of 0. / 1.
+    assert np.isclose(img_norm[1, :, 1, 1].std(), 1.)
+    assert np.isclose(img_norm[1, :, 1, 1].mean(), 0.)
