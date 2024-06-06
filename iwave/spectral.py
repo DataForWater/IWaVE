@@ -35,7 +35,10 @@ def wave_numbers(
     ----------
     windows : np.ndarray
         time x Y x X windows with intensities
-    res :
+    res : float
+        resolution in xy direction
+    fps : float
+        frames per second
 
     Returns
     -------
@@ -43,14 +46,13 @@ def wave_numbers(
         wave numbers of time, y and x
 
     """
-    kts = 2 * np.pi * fps  #
     ks = 2 * np.pi / res  # this assumes the resolution is the same in x and
     # y-direction: TODO make variable for both directions
-    dkt = kts / window_dims[0]
+    dkt = fps / window_dims[0]
     dky = ks / window_dims[1]
     dkx = ks / window_dims[2]
     # omega wave numbers (time dim)
-    kt = np.arange(0, kts, dkt)
+    kt = np.arange(0, fps, dkt)
     kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
     # determine wave numbers in x-direction
     kx = np.arange(0, ks, dkx)

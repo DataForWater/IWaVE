@@ -223,7 +223,6 @@ def get_rect_coordinates(
     xi, yi = np.meshgrid(x, y)
     return xi, yi
 
-
 def normalize(
     imgs: np.ndarray,
     mode: Literal["xy", "time"] = "time"

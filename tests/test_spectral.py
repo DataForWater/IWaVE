@@ -5,6 +5,7 @@ from iwave import spectral
 def test_get_wave_numbers(img_windows, res=0.02, fps=25):
     # feed in only the first image window, and of that, only the first frame
     kt, ky, kx = spectral.wave_numbers(img_windows[0].shape, res=res, fps=fps)
+    kt, ky, kx = spectral._get_wave_numbers(img_windows[0].shape, res=res, fps=fps)
     print(ky.shape)
 
 

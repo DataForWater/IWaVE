@@ -93,6 +93,3 @@ def test_normalize(img_windows):
     # check if random single time slice has mean / std of 0. / 1.
     assert np.isclose(img_norm[1, :, 1, 1].std(), 1.)
     assert np.isclose(img_norm[1, :, 1, 1].mean(), 0.)
-
-
-

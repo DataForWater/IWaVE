@@ -4,7 +4,7 @@ Image Wave Velocimetry Estimation
 This library performs simultaneous analysis of 2D velocimetry and stream depth 
 through 2D Fourier transform methods as outlined and demonstrated in
 
-Dolcetti, G., Hortobagyi, B., Perks, M., Tais, S. J. & Dervilis, N. (2022). 
+Dolcetti, G., Hortobágyi, B., Perks, M., Tait, S. J. & Dervilis, N. (2022). 
 Using non-contact measurement of water surface dynamics to estimate water discharge. 
 Water Resources Research, 58(9), e2022WR032829. 
 https://doi.org/10.1029/2022WR032829
