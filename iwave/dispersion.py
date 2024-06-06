@@ -18,11 +18,12 @@ def _get_wave_numbers(window_dims, res, fps):
     """
     ks = 2 * np.pi / res  # this assumes the resolution is the same in x and
     # y-direction: TODO make variable for both directions
-    dkt = fps / window_dims[0]
-    dky = ks / window_dims[1]
-    dkx = ks / window_dims[2]
+    kts = 2* np.pi * fps # change frequency units to rad/s
+    dkt = kts / window_dims[-3]
+    dky = ks / window_dims[-2]
+    dkx = ks / window_dims[-1]
     # omega wave numbers (time dim)
-    kt = np.arange(0, fps, dkt)
+    kt = np.arange(0, kts, dkt)
     kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
     # determine wave numbers in x-direction
     kx = np.arange(0, ks, dkx)
@@ -143,8 +144,8 @@ def dispersion(
     ky, kx = np.meshgrid(ky, kx)
 
     # transpose to 1 x N_y x N_x
-    ky = np.transpose(ky, (2, 0, 1))
-    kx = np.transpose(kx, (2, 0, 1))
+    ky = np.expand_dims(ky, axis=0)
+    kx = np.expand_dims(kx, axis=0)
 
     # wavenumber modulus
     k_mod = np.sqrt(ky ** 2 + kx ** 2)  
@@ -346,7 +347,8 @@ def theoretical_spectrum(
     kt_turb = np.tile(kt_turb, (len(kt), 1, 1))  
 
     # build 3D kt matrix with dimensions N_t x N_y x N_x
-    kt = np.tile(kt, (1, kt_gw.shape[1], kt_gw.shape[2]))
+    kt = np.expand_dims(kt, axis=(1, 2))
+    kt = np.tile(kt, (1, kt_gw.shape[-2], kt_gw.shape[-1]))
 
     # build 3D spectrum of gravity waves
     th_spectrum_gw = gauss_spectrum_calc(kt_gw, kt, gauss_width, gravity_waves_switch)
