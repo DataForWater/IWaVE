@@ -16,5 +16,5 @@ def test_intensity(img_windows_norm):
     measured_spectrum = spectral._numpy_fourier_transform(img_windows_norm)
     # test if the size of the theoretical spectrum is equal to the size of the spectrum measured with numba
     assert th_spectrum.shape == (
-    (measured_spectrum.shape[-3]/2, measured_spectrum.shape[-2], measured_spectrum.shape[-1])
+    (int(np.ceil(measured_spectrum.shape[-3] / 2)), measured_spectrum.shape[-2], measured_spectrum.shape[-1])
     )
