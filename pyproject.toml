@@ -42,8 +42,13 @@ test = [
     "pytest-cov",
     "pytest-lazy-fixtures"
 ]
+# + several subpackages for docs
 docs = [
-    "sphinx", # + several subpackages for docs
+    "iwave[extra]",
+    "pydata-sphinx-theme",
+    "sphinx",
+    "sphinx_autosummary_accessors",
+    "sphinx-design",
 ]
 
 full = ["iwave[io,extra,dev,test,docs]"]
