@@ -205,3 +205,48 @@ def spectral_imgs(
     else:
         raise ValueError(f'engine "{engine}" does not exist. Choose "numba" (default) or "numpy"')
 
+
+def sliding_window_spectrum(
+    imgs: np.ndarray,
+    win_t: int,
+    overlap: int,
+    engine: Literal["numpy", "numba"] = "numba",
+    **kwargs
+) -> np.ndarray:
+    """
+    Splits the video into shorter segments and calculates the average 3D spectrum.
+
+    Parameters
+    ----------
+    imgs : np.ndarray
+        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in subwindows of Y * X pixels
+    win_t : int
+        number of frames per segment
+    overlap : int
+        overlap (frames)
+    engine : str, optional
+        "numpy" or "numba", compute method to use, typically numba (default) is a lot faster. Numpy function is easier
+        to read.
+    kwargs : dict with additional keyword arguments for processing
+
+    Returns
+    -------
+    spectra : np.ndarray
+        average wave spectra for all image window sequences
+
+    """
+    
+    # Check for division by zero
+    if win_t == overlap:
+        raise ValueError("win_t and overlap should not be equal.")
+    
+    # number of segments
+    num_segments = imgs.shape[2] // (win_t - overlap)
+
+    # sum of individual segments
+    spectrum_sum = sum(spectral_imgs(imgs[:, segment_t0:segment_t0 + win_t, :, :], engine, **kwargs)
+                       for segment_t0 in range(0, imgs.shape[2], win_t - overlap))
+    
+    # renormalisation
+    spectra = spectrum_sum / num_segments
+    return spectra

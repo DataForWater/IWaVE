@@ -43,3 +43,7 @@ def test_numba_fft_multi(img_windows_norm):
         assert np.allclose(spectrum_numpy, spectrum)
 
 
+def test_sliding_window_spectrum(img_windows_norm):
+    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10, 'numpy')
+    # test if the spectra have the desired size
+    assert spectrum.shape[-3] == int(np.ceil(20 / 2))
