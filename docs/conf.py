@@ -41,8 +41,14 @@ html_theme_options = {
     "navbar_align": "content",
     "icon_links": [
         {
+            "name": "GitHub",
+            "url": "https://github.com/DataForWater/IWaVE",  # required
+            "icon": "https://upload.wikimedia.org/wikipedia/commons/9/91/Octicons-mark-github.svg",
+            "type": "url",
+        },
+        {
             "name": "Data4Water",
-            "url": "https://github.com/DataForWater/IWaVE",
+            "url": "https://github.com/DataForWater",
             "icon": "_static/logo.jpg",
             "type": "local",
         },
