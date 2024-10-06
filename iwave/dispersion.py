@@ -1,42 +1,7 @@
 import numpy as np
 from . import const
 from typing import Tuple
-
-def _get_wave_numbers(window_dims, res, fps):
-    """
-    get t, y, x wave numbers
-
-    Parameters
-    ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
-    res
-
-    Returns
-    -------
-
-    """
-    ks = 2 * np.pi / res  # this assumes the resolution is the same in x and
-    # y-direction: TODO make variable for both directions
-    kts = 2* np.pi * fps # change frequency units to rad/s
-    dkt = kts / window_dims[-3]
-    dky = ks / window_dims[-2]
-    dkx = ks / window_dims[-1]
-    # omega wave numbers (time dim)
-    kt = np.arange(0, kts, dkt)
-    kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
-    # determine wave numbers in x-direction
-    kx = np.arange(0, ks, dkx)
-    # kx = 0:dkx: (ks - dkx)
-    ky = np.arange(0, ks, dky)
-    # apply fftshift on determined wave numbers
-    kx = np.fft.fftshift(kx)
-    ky = np.fft.fftshift(ky)
-    idx_x0 = np.where(kx == 0)[0][0]
-    kx[0: idx_x0] = kx[0:idx_x0] - kx[idx_x0 - 1] - dkx
-    idx_y0 = np.where(ky == 0)[0][0]
-    ky[0: idx_y0] = ky[0:idx_y0] - ky[idx_y0 - 1] - dky
-    return kt, ky, kx
+from iwave import spectral
 
 def intensity(
         velocity: Tuple[float, float],
@@ -92,7 +57,7 @@ def intensity(
     """
 
     # calculate the wavenumber/frequency arrays
-    kt, ky, kx = _get_wave_numbers(window_dims, res, fps)
+    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
 
     # calculate theoretical dispersion relation of gravity waves and turbulence-forced waves
     kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)
