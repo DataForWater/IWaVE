@@ -27,7 +27,7 @@ def wave_numbers(
     window_dims: tuple,
     res: float,
     fps: float
-) -> np.ndarray | np.ndarray | np.ndarray :
+):
     """
     get t, y, x wave numbers
 
@@ -51,13 +51,16 @@ def wave_numbers(
     dkt = fps / window_dims[0]
     dky = ks / window_dims[1]
     dkx = ks / window_dims[2]
+
     # omega wave numbers (time dim)
     kt = np.arange(0, fps, dkt)
     kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
+
     # determine wave numbers in x-direction
     kx = np.arange(0, ks, dkx)
     # kx = 0:dkx: (ks - dkx)
     ky = np.arange(0, ks, dky)
+
     # apply fftshift on determined wave numbers
     kx = np.fft.fftshift(kx)
     ky = np.fft.fftshift(ky)
@@ -65,6 +68,7 @@ def wave_numbers(
     kx[0: idx_x0] = kx[0:idx_x0] - kx[idx_x0 - 1] - dkx
     idx_y0 = np.where(ky == 0)[0][0]
     ky[0: idx_y0] = ky[0:idx_y0] - ky[idx_y0 - 1] - dky
+
     return kt, ky, kx
 
 
