@@ -20,7 +20,7 @@ def test_nsp(img_size = (256, 64, 64), res = 0.02, fps = 25):
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
     cost = optimise.nsp_inv(synthetic_spectrum,synthetic_spectrum)
-    expected_cost = (np.sum(synthetic_spectrum)) ** 2 / np.sum(synthetic_spectrum ** 2)
+    expected_cost = 1 / np.sum(synthetic_spectrum ** 2)
     #test if the auto-correlation matches the theoretical expectation based on a synthetic spectrum
     assert np.allclose(cost, expected_cost)
 
@@ -53,18 +53,17 @@ def test_optimise_velocity(img_size = (256, 64, 64), res = 0.02, fps = 25):
     velocity = [1, 0]
     depth = 0.3
     velocity_indx = 1
-    kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity, depth, velocity_indx)
-    synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
-                                                         turbulence_switch=True)
     vel_y_min = 0
     vel_y_max = 2
     vel_x_min = -0.5
     vel_x_max = 0.5
     vel_threshold = 5
+    kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity, depth, velocity_indx)
+    synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
+                                                         turbulence_switch=True)
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max)]
-    optimal = optimise.optimise_velocity(synthetic_spectrum, bounds, depth, velocity_indx, img_size, kt, ky, kx,
-                                         res, fps, velocity_threshold=vel_threshold, spectrum_threshold=1, 
-                                         gauss_width=1, gravity_waves_switch=True, turbulence_switch=True)
+    optimal = optimise.optimise_velocity(synthetic_spectrum, bounds, depth, velocity_indx, img_size,
+                                         res, fps, gauss_width=1, gravity_waves_switch=True, turbulence_switch=True)
     vel_y_optimal = optimal[0]
     vel_x_optimal = optimal[1]
     assert vel_x_max >= vel_x_min
@@ -109,6 +108,7 @@ def test_optimise_velocity_depth(img_size = (256, 128, 128), res = 0.02, fps = 2
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity, depth, velocity_indx)
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
+    # synthetic_spectrum = optimise.spectrum_preprocessing(synthetic_spectrum, kt, ky, kx, velocity_threshold=10, spectrum_threshold=1)
     vel_y_min = 0
     vel_y_max = 2
     vel_x_min = -0.5
@@ -117,9 +117,8 @@ def test_optimise_velocity_depth(img_size = (256, 128, 128), res = 0.02, fps = 2
     depth_max = 1
     vel_threshold = 5
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]
-    optimal = optimise.optimise_velocity_depth(synthetic_spectrum, bounds, velocity_indx, img_size, kt, ky, kx,
-                                         res, fps, velocity_threshold=vel_threshold, spectrum_threshold=1, 
-                                         gauss_width=1, gravity_waves_switch=True, turbulence_switch=True)
+    optimal = optimise.optimise_velocity_depth(synthetic_spectrum, bounds, velocity_indx, img_size,
+                                         res, fps, gauss_width=1, gravity_waves_switch=True, turbulence_switch=True)
     vel_y_optimal = optimal[0]
     vel_x_optimal = optimal[1]
     depth_optimal = optimal[2]

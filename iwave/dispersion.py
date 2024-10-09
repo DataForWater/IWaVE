@@ -65,6 +65,8 @@ def intensity(
     # calculate the theoretical 3D spectrum intensity
     th_spectrum = theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width, gravity_waves_switch, turbulence_switch)
 
+    th_spectrum = th_spectrum / np.sum(th_spectrum)
+
     return th_spectrum
 
 def dispersion(

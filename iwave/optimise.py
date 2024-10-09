@@ -9,13 +9,8 @@ def optimise_velocity(
         depth: float,
         vel_indx: float,
         window_dims: Tuple[int, int, int], 
-        kt: np.ndarray,
-        ky: np.ndarray,
-        kx: np.ndarray,
         res: float, 
         fps: float,
-        velocity_threshold: float,
-        spectrum_threshold: float=1,
         gauss_width: float=1,
         gravity_waves_switch: bool=True,
         turbulence_switch: bool=True,
@@ -40,15 +35,6 @@ def optimise_velocity(
 
     window_dims: [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-        
-    kt: np.ndarray
-        radian frequency vector (rad/s)
-
-    ky: np.ndarray
-        y-wavenumber vector (rad/m)
-    
-    kx: np.ndarray
-        x-wavenumber vector (rad/m)
 
     res: float
         image resolution (m/pxl)
@@ -56,14 +42,6 @@ def optimise_velocity(
     fps: float
         image acquisition rate (fps)
     
-    velocity_threshold: float
-        maximum surface velocity for spectrum filtering (m/s).
-
-    spectrum_threshold: float=1
-        threshold parameter for spectrum filtering. 
-        The spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
-        threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
-
     gauss_width: float=1
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
@@ -87,9 +65,6 @@ def optimise_velocity(
     optimised_cost_function : float
         cost_function calculated with optimised velocity components
     """
-
-    # pre-processing of the measured spectrum
-    measured_spectrum = spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold, spectrum_threshold)
 
     # optimisation
     opt = optimize.differential_evolution(
@@ -180,13 +155,8 @@ def optimise_velocity_depth(
         bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
         vel_indx: float,
         window_dims: Tuple[int, int, int], 
-        kt: np.ndarray,
-        ky: np.ndarray,
-        kx: np.ndarray,
         res: float, 
         fps: float,
-        velocity_threshold: float,
-        spectrum_threshold: float=1,
         gauss_width: float=1,
         gravity_waves_switch: bool=True,
         turbulence_switch: bool=True,
@@ -224,14 +194,6 @@ def optimise_velocity_depth(
     fps: float
         image acquisition rate (fps)
     
-    velocity_threshold: float
-        maximum surface velocity for spectrum filtering (m/s).
-
-    spectrum_threshold: float=1
-        threshold parameter for spectrum filtering. 
-        The spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
-        threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
-
     gauss_width: float=1
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
@@ -258,8 +220,6 @@ def optimise_velocity_depth(
     optimised_cost_function : float
         cost_function calculated with optimised velocity components
     """
-    # pre-processing of the measured spectrum
-    measured_spectrum = spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold, spectrum_threshold)
 
     # optimisation
     opt = optimize.differential_evolution(
@@ -365,8 +325,8 @@ def nsp_inv(
 
     """
 
-    measured_spectrum = measured_spectrum / np.sum(measured_spectrum) # normalise measured spectrum
-    synthetic_spectrum = synthetic_spectrum / np.sum(synthetic_spectrum) # normalised synthetic spectrum
+    # measured_spectrum = measured_spectrum / np.sum(measured_spectrum) # normalise measured spectrum
+    # synthetic_spectrum = synthetic_spectrum / np.sum(synthetic_spectrum) # normalised synthetic spectrum
 
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
 
@@ -435,5 +395,8 @@ def spectrum_preprocessing(
 
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
+
+    # normalisation
+    preprocessed_spectrum = preprocessed_spectrum / np.sum(measured_spectrum)
 
     return preprocessed_spectrum
