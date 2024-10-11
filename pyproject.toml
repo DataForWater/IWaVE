@@ -12,8 +12,9 @@ authors = [
 dependencies = [
     "numpy",
     "numba",
-    "rocket-fft",
-    "matplotlib" # for numba accelerated jittable fast fourier transforms
+    "rocket-fft",  # for numba accelerated jittable fast fourier transforms
+    "matplotlib",
+    "scipy"
 ]
 
 requires-python =">=3.10"
