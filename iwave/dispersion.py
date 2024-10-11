@@ -1,4 +1,5 @@
 import numpy as np
+import numexpr as ne
 from . import const
 from typing import Tuple
 from iwave import spectral
@@ -364,7 +365,9 @@ def gauss_spectrum_calc(
     """
     # builds 3D spectrum intensity with Gaussian smoothing around the theoretical dispersion relation
     if switch:
-        gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
+        dkt = kt - kt_theory
+        gauss_spectrum = ne.evaluate('exp(-dkt**2 / gauss_width ** 2)')
+        # gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
     else:
         gauss_spectrum = np.zeros(kt.shape)
 

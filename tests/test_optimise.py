@@ -1,4 +1,5 @@
 import numpy as np
+import time
 import pytest
 from iwave import spectral, dispersion, optimise
 
@@ -78,6 +79,8 @@ def test_optimise_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
         turbulence_switch=True
     )
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max)]
+    t1 = time.time()
+
     optimal = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
@@ -89,8 +92,13 @@ def test_optimise_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
         gauss_width=1,
         gravity_waves_switch=True,
         turbulence_switch=True,
-        popsize=1
+        popsize=1,
+        maxiter=10000,
+        workers=-1
     )
+    t2 = time.time()
+    print(f"Took {t2 - t1} seconds")
+
     vel_y_optimal = optimal[0]
     vel_x_optimal = optimal[1]
     assert vel_x_max >= vel_x_min
@@ -120,30 +128,20 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
         turbulence_switch=True
     )
     cost_11 = optimise.cost_function_velocity_depth(
-        params_1,
-        synthetic_spectrum_1,
-        vel_indx,
-        img_size,
-        res,
-        fps,
-        gauss_width=1,
-        gravity_waves_switch=True,
-        turbulence_switch=True
+        params_1, synthetic_spectrum_1, vel_indx,
+        img_size, res, fps, gauss_width=1,
+        gravity_waves_switch=True, turbulence_switch=True
     )
     cost_12 = optimise.cost_function_velocity_depth(
-        params_2,
-        synthetic_spectrum_1,
-        vel_indx,
-        img_size,
-        res,
-        fps,
-        gauss_width=1,
-        gravity_waves_switch=True,
-        turbulence_switch=True
+        params_2, synthetic_spectrum_1, vel_indx,
+        img_size, res, fps, gauss_width=1,
+        gravity_waves_switch=True, turbulence_switch=True
     )
-    cost_13 = optimise.cost_function_velocity_depth(params_3, synthetic_spectrum_1, vel_indx, 
-                                                    img_size, res, fps, gauss_width=1,
-                                                    gravity_waves_switch=True, turbulence_switch=True)
+    cost_13 = optimise.cost_function_velocity_depth(
+        params_3, synthetic_spectrum_1, vel_indx,
+        img_size, res, fps, gauss_width=1,
+        gravity_waves_switch=True, turbulence_switch=True
+    )
     #test if the cost function increases when the depth deviates from optimal
     assert cost_12 > cost_11
     assert cost_13 > cost_11
@@ -179,6 +177,7 @@ def test_optimise_velocity_depth(img_size=(256, 128, 128), res=0.02, fps=25):
     depth_max = 1
     vel_threshold = 5
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]
+    t1 = time.time()
     optimal = optimise.optimise_velocity_depth(
         synthetic_spectrum,
         bounds,
@@ -189,13 +188,17 @@ def test_optimise_velocity_depth(img_size=(256, 128, 128), res=0.02, fps=25):
         gauss_width=1,
         gravity_waves_switch=True,
         turbulence_switch=True,
-        # popsize=1
+        popsize=2,
+        workers=10,
+        maxiter=10000,
+        updating="deferred"
     )
     vel_y_optimal = optimal[0]
     vel_x_optimal = optimal[1]
     depth_optimal = optimal[2]
     print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
-
+    t2 = time.time()
+    print(f"Took {t2 - t1} seconds")
     assert vel_x_max >= vel_x_min
     assert vel_y_max >= vel_y_min
     assert depth_max >= depth_min
