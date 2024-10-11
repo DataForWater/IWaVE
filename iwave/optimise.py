@@ -3,6 +3,7 @@ from typing import Tuple
 from iwave import dispersion, spectral
 from scipy import optimize
 
+
 def optimise_velocity(
         measured_spectrum: np.ndarray,
         bnds: Tuple[Tuple[float, float], Tuple[float, float]],
@@ -14,6 +15,7 @@ def optimise_velocity(
         gauss_width: float=1,
         gravity_waves_switch: bool=True,
         turbulence_switch: bool=True,
+        **kwargs
 ) -> Tuple[float, float, float]:
     """
     Pre-processes the measured spectrum, 
@@ -54,6 +56,10 @@ def optimise_velocity(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
 
+    **kwargs : dict
+        keyword arguments to pass to `scipy.optimize.differential_evolution, see also
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
+
     Returns
     -------
     optimised_velocity_y : float
@@ -71,6 +77,7 @@ def optimise_velocity(
         cost_function_velocity,
         bounds=bnds,
         args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
+        **kwargs
     )
 
     # optimised parameters and cost function
@@ -81,25 +88,25 @@ def optimise_velocity(
     return optimised_velocity_y, optimised_velocity_x, optimised_cost_function
 
 def cost_function_velocity(
-        x: Tuple[float, float],
-        measured_spectrum: np.ndarray,
-        depth: float,
-        vel_indx: float,
-        window_dims: Tuple[int, int, int], 
-        res: float, 
-        fps: float,
-        gauss_width: float,
-        gravity_waves_switch: bool=True,
-        turbulence_switch: bool=True,
-) -> float: 
+    velocity: Tuple[float, float],
+    measured_spectrum: np.ndarray,
+    depth: float,
+    vel_indx: float,
+    window_dims: Tuple[int, int, int],
+    res: float,
+    fps: float,
+    gauss_width: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True,
+) -> float:
     """
     Creates a synthetic spectrum based on guessed parameters, 
     then compares it with the measured spectrum and returns a cost function for minimisation
 
     Parameters
     ----------
-    x :  [float, float]
-        velocity_y x velocity_x
+    velocity :  [float, float]
+        velocity_y, velocity_x
         tentative surface velocity components along y and x (m/s)
 
     measured_spectrum : np.ndarray
@@ -138,28 +145,28 @@ def cost_function_velocity(
 
     """
     
-    vel_y = x[0]    # guessed y velocity component
-    vel_x = x[1]    # guessed x velocity component
-
-    velocity = [vel_y, vel_x]    # guessed velocity components
-
     # calculate the synthetic spectrum based on the guess velocity
-    synthetic_spectrum = dispersion.intensity(velocity, depth, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
-
+    synthetic_spectrum = dispersion.intensity(
+        velocity, depth, vel_indx,
+        window_dims, res, fps, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
-
+    print(cost_function)
     return cost_function
 
+
 def optimise_velocity_depth(
-        measured_spectrum: np.ndarray,
-        bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
-        vel_indx: float,
-        window_dims: Tuple[int, int, int], 
-        res: float, 
-        fps: float,
-        gauss_width: float=1,
-        gravity_waves_switch: bool=True,
-        turbulence_switch: bool=True,
+    measured_spectrum: np.ndarray,
+    bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
+    vel_indx: float,
+    window_dims: Tuple[int, int, int],
+    res: float,
+    fps: float,
+    gauss_width: float=1,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True,
+    **kwargs
 ) -> Tuple[float, float, float, float]:
     """
     Pre-processes the measured spectrum, 
@@ -206,6 +213,10 @@ def optimise_velocity_depth(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
 
+    **kwargs : dict
+        keyword arguments to pass to `scipy.optimize.differential_evolution, see also
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
+
     Returns
     -------
     optimised_velocity_y : float
@@ -226,8 +237,8 @@ def optimise_velocity_depth(
         cost_function_velocity_depth,
         bounds=bnds,
         args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
+        **kwargs
     )
-
     # optimised parameters and cost function
     optimised_velocity_y = opt.x[0]
     optimised_velocity_x = opt.x[1] 
@@ -236,16 +247,17 @@ def optimise_velocity_depth(
     
     return optimised_velocity_y, optimised_velocity_x, optimised_depth, optimised_cost_function
 
+
 def cost_function_velocity_depth(
-        x: Tuple[float, float, float],
-        measured_spectrum: np.ndarray,
-        vel_indx: float,
-        window_dims: Tuple[int, int, int], 
-        res: float, 
-        fps: float,
-        gauss_width: float,
-        gravity_waves_switch: bool=True,
-        turbulence_switch: bool=True,
+    x: Tuple[float, float, float],
+    measured_spectrum: np.ndarray,
+    vel_indx: float,
+    window_dims: Tuple[int, int, int],
+    res: float,
+    fps: float,
+    gauss_width: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True,
 ) -> float: 
     """
     Creates a synthetic spectrum based on guessed parameters, 
@@ -290,18 +302,19 @@ def cost_function_velocity_depth(
 
     """
     
-    vel_y = x[0]    # guessed y velocity component
-    vel_x = x[1]    # guessed x velocity component
     depth = x[2]    # guessed depth
-
-    velocity = [vel_y, vel_x]    # guessed velocity components
+    velocity = [x[0], x[1]]    # guessed velocity components
 
     # calculate the synthetic spectrum based on the guess velocity
-    synthetic_spectrum = dispersion.intensity(velocity, depth, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
-
+    synthetic_spectrum = dispersion.intensity(
+        velocity, depth, vel_indx,
+        window_dims, res, fps, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
-
+    print(cost_function)
     return cost_function
+
 
 def nsp_inv(
         measured_spectrum: np.ndarray,
@@ -324,15 +337,11 @@ def nsp_inv(
         cost function to be minimised
 
     """
-
-    # measured_spectrum = measured_spectrum / np.sum(measured_spectrum) # normalise measured spectrum
-    # synthetic_spectrum = synthetic_spectrum / np.sum(synthetic_spectrum) # normalised synthetic spectrum
-
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-
     cost = 1 / np.sum(spectra_correlation) # calculate cost function
 
     return cost
+
 
 def spectrum_preprocessing(
         measured_spectrum: np.ndarray, 
@@ -373,7 +382,6 @@ def spectrum_preprocessing(
         pre-processed and normalised measured 3D spectrum
 
     """
-    
     # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
     preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(1, 2), keepdims=True)
 
@@ -398,5 +406,4 @@ def spectrum_preprocessing(
 
     # normalisation
     preprocessed_spectrum = preprocessed_spectrum / np.sum(measured_spectrum)
-
     return preprocessed_spectrum

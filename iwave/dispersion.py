@@ -4,15 +4,15 @@ from typing import Tuple
 from iwave import spectral
 
 def intensity(
-        velocity: Tuple[float, float],
-        depth: float,
-        vel_indx: float,
-        window_dims: Tuple[int, int, int], 
-        res: float, 
-        fps: float,
-        gauss_width: float,
-        gravity_waves_switch: bool=True,
-        turbulence_switch: bool=True
+    velocity: Tuple[float, float],
+    depth: float,
+    vel_indx: float,
+    window_dims: Tuple[int, int, int],
+    res: float,
+    fps: float,
+    gauss_width: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True
 ):
     """
     Create synthetic 3D spectrum based on tentative velocity and depth.
@@ -63,7 +63,10 @@ def intensity(
     kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)
 
     # calculate the theoretical 3D spectrum intensity
-    th_spectrum = theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width, gravity_waves_switch, turbulence_switch)
+    th_spectrum = theoretical_spectrum(
+        kt_gw, kt_turb, kt, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
 
     th_spectrum = th_spectrum / np.sum(th_spectrum)
 
@@ -264,14 +267,15 @@ def omega_gw_calc(
     )
 
     return kt_gw
-    
+
+
 def theoretical_spectrum(
-        kt_gw: np.ndarray, 
-        kt_turb: np.ndarray, 
-        kt: np.ndarray, 
-        gauss_width: float, 
-        gravity_waves_switch: bool=True, 
-        turbulence_switch: bool=True
+    kt_gw: np.ndarray,
+    kt_turb: np.ndarray,
+    kt: np.ndarray,
+    gauss_width: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True
 ):
     """
     Assemble theoretical 3D spectrum with Gaussian width.
@@ -345,7 +349,7 @@ def gauss_spectrum_calc(
 
     kt : np.ndarray
         frequency array (rad/s)
-        
+
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
 
@@ -363,5 +367,5 @@ def gauss_spectrum_calc(
         gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
     else:
         gauss_spectrum = np.zeros(kt.shape)
-        
+
     return gauss_spectrum
