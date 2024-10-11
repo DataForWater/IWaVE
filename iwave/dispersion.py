@@ -1,53 +1,19 @@
 import numpy as np
+import numexpr as ne
 from . import const
 from typing import Tuple
-
-def _get_wave_numbers(window_dims, res, fps):
-    """
-    get t, y, x wave numbers
-
-    Parameters
-    ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
-    res
-
-    Returns
-    -------
-
-    """
-    ks = 2 * np.pi / res  # this assumes the resolution is the same in x and
-    # y-direction: TODO make variable for both directions
-    kts = 2* np.pi * fps # change frequency units to rad/s
-    dkt = kts / window_dims[-3]
-    dky = ks / window_dims[-2]
-    dkx = ks / window_dims[-1]
-    # omega wave numbers (time dim)
-    kt = np.arange(0, kts, dkt)
-    kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
-    # determine wave numbers in x-direction
-    kx = np.arange(0, ks, dkx)
-    # kx = 0:dkx: (ks - dkx)
-    ky = np.arange(0, ks, dky)
-    # apply fftshift on determined wave numbers
-    kx = np.fft.fftshift(kx)
-    ky = np.fft.fftshift(ky)
-    idx_x0 = np.where(kx == 0)[0][0]
-    kx[0: idx_x0] = kx[0:idx_x0] - kx[idx_x0 - 1] - dkx
-    idx_y0 = np.where(ky == 0)[0][0]
-    ky[0: idx_y0] = ky[0:idx_y0] - ky[idx_y0 - 1] - dky
-    return kt, ky, kx
+from iwave import spectral
 
 def intensity(
-        velocity: Tuple[float, float],
-        depth: float,
-        vel_indx: float,
-        window_dims: Tuple[int, int, int], 
-        res: float, 
-        fps: float,
-        gauss_width: float,
-        gravity_waves_switch: bool=True,
-        turbulence_switch: bool=True
+    velocity: Tuple[float, float],
+    depth: float,
+    vel_indx: float,
+    window_dims: Tuple[int, int, int],
+    res: float,
+    fps: float,
+    gauss_width: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True
 ):
     """
     Create synthetic 3D spectrum based on tentative velocity and depth.
@@ -92,13 +58,18 @@ def intensity(
     """
 
     # calculate the wavenumber/frequency arrays
-    kt, ky, kx = _get_wave_numbers(window_dims, res, fps)
+    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
 
     # calculate theoretical dispersion relation of gravity waves and turbulence-forced waves
     kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)
 
     # calculate the theoretical 3D spectrum intensity
-    th_spectrum = theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width, gravity_waves_switch, turbulence_switch)
+    th_spectrum = theoretical_spectrum(
+        kt_gw, kt_turb, kt, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
+
+    th_spectrum = th_spectrum / np.sum(th_spectrum)
 
     return th_spectrum
 
@@ -297,14 +268,15 @@ def omega_gw_calc(
     )
 
     return kt_gw
-    
+
+
 def theoretical_spectrum(
-        kt_gw: np.ndarray, 
-        kt_turb: np.ndarray, 
-        kt: np.ndarray, 
-        gauss_width: float, 
-        gravity_waves_switch: bool=True, 
-        turbulence_switch: bool=True
+    kt_gw: np.ndarray,
+    kt_turb: np.ndarray,
+    kt: np.ndarray,
+    gauss_width: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True
 ):
     """
     Assemble theoretical 3D spectrum with Gaussian width.
@@ -378,7 +350,7 @@ def gauss_spectrum_calc(
 
     kt : np.ndarray
         frequency array (rad/s)
-        
+
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
 
@@ -393,8 +365,10 @@ def gauss_spectrum_calc(
     """
     # builds 3D spectrum intensity with Gaussian smoothing around the theoretical dispersion relation
     if switch:
-        gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
+        dkt = kt - kt_theory
+        gauss_spectrum = ne.evaluate('exp(-dkt**2 / gauss_width ** 2)')
+        # gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
     else:
         gauss_spectrum = np.zeros(kt.shape)
-        
+
     return gauss_spectrum

@@ -10,10 +10,12 @@ authors = [
   { name = "Hessel Winsemius", email = "winsemius@rainbowsensing.com" }
 ]
 dependencies = [
+    "matplotlib",
     "numpy",
     "numba",
-    "rocket-fft",
-    "matplotlib" # for numba accelerated jittable fast fourier transforms
+    "numexpr",
+    "rocket-fft",  # for numba accelerated jittable fast fourier transforms
+    "scipy"
 ]
 
 requires-python =">=3.10"

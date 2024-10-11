@@ -53,7 +53,7 @@ def wave_numbers(
     dky = ks / window_dims[-2]
     dkx = ks / window_dims[-1]
     # omega wave numbers (time dim)
-    kt = np.arange(0, fps, dkt)
+    kt = np.arange(0, kts, dkt)
     kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
     # determine wave numbers in x-direction
     kx = np.arange(0, ks, dkx)
