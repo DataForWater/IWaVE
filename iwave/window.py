@@ -228,7 +228,8 @@ def normalize(
     mode: Literal["xy", "time"] = "time"
 ):
     """
-    normalizes images assuming the last two dimensions contain the x/y image intensities
+    normalizes images assuming the last two dimensions contain the x/y image
+    intensities
 
     Parameters
     ----------
@@ -238,7 +239,8 @@ def normalize(
     -------
 
     imgs_norm : np.ndarray (n x Y x X) or (n x m x Y x X)
-        output normalized images, organized in at least one stack, similar to imgs
+        output normalized images, organized in at least one stack, 
+        similar to imgs
     """
     # compute means and stds
     if mode == "xy":

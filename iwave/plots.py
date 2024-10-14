@@ -7,6 +7,13 @@ import spectral
 
 def plot_spectrum(windows: np.ndarray):
     windows = windows[-1]
+
+    """
+    for nn in range(0, 100):
+        plt.imshow(windows[nn])
+        plt.show()
+    """
+    
     spectrum = spectral._numpy_fourier_transform(windows)
 
     plt.imshow(np.log(spectrum[:, :, 32]))

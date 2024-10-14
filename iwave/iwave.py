@@ -4,15 +4,43 @@
 import os
 import sys
 import datetime
+from PIL import Image
 import numpy as np
+import matplotlib.pyplot as plt
 
+import window
 
 class Iwave(object):
-    def __init__(self, keeper_data):
-        self.keeper_data = keeper_data
+    def __init__(self, frames_path):
+        self.frames_path = frames_path
 
-    def read_frames(self):
-        pass
+    def readFrames(self, normalize=True):
+        images = os.listdir(self.frames_path)
+
+        for nn in range(0, len(images)):
+            if nn == 0:
+                pass
+            elif nn == 1:
+                img0 = np.asarray(Image.open(os.path.join(self.frames_path,
+                                                    images[0])))
+                img1 = np.asarray(Image.open(os.path.join(self.frames_path,
+                                                    images[1])))
+                imgs_array = np.vstack((img0[None], img1[None]))
+
+                #plt.imshow(img0)
+                #plt.show()
+
+            else:
+                img = np.asarray(Image.open(os.path.join(self.frames_path,
+                                                    images[nn])))
+                imgs_array = np.vstack((imgs_array, img[None]))
+            print ("Image: ", nn)
+
+        if normalize:
+            print("Normalizing")
+            imgs_normalized = window.normalize(imgs_array, "time")
+
+        print("Done")
 
     def data_norm(self):
         # data normalisation
@@ -33,25 +61,30 @@ class Iwave(object):
         windowed_data = window_data(normalised_data, window_coordinates) 
         
     def data_segmentation(self):
-        # data segmentation is currently included in the spectrum calculation using spectra.sliding_window_spectrum
-        # data segmentation and calculation of the average spectrum
-        measured_spectrum = spectral.sliding_window_spectrum(windowed_data, segment_duration, overlap, engine) #this function 
-               already does everything that is needed here
+        """
+        data segmentation is currently included in the spectrum calculation
+        using spectra.sliding_window_spectrum
+        data segmentation and calculation of the average spectrum
+        """
+        
+        measured_spectrum = spectral.sliding_window_spectrum(windowed_data,
+                                            segment_duration, overlap, engine)
 
     def wavenumber(self):
         # calculation of the wavenumber arrays
-        kt, ky, kx = wave_number_dims((segment_duration, windowed_data.shape[2], windowed_data.shape[3]), resolution, fps)
+        kt, ky, kx = wave_number_dims((segment_duration, windowed_data.shape[2],
+                                       windowed_data.shape[3]), resolution, fps)
 
     def spectrum_preprocessing(self):
-        preprocessed_spectrum = optimise.spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold, 
-            spectrum_threshold) 
+        preprocessed_spectrum = optimise.spectrum_preprocessing(measured_spectrum,
+                            kt, ky, kx, velocity_threshold, spectrum_threshold) 
 
         if depthisknown:
             optimised_parameters = optimise.optimise_velocity(measured_spectrum, bounds, depth, velocity_indx, img_size, resolution, fps)
         else:
             optimised_parameters = optimise.optimise_velocity_depth(measured_spectrum, bounds, velocity_indx, img_size, resolution, fps)
 
-    def plot(self:)
+    def plot(self):
         figures = plot_results(optimised_parameter, kt, ky, kx)
         """
         for iw = selected_windows:
@@ -71,8 +104,9 @@ class Iwave(object):
 
 if __name__ == '__main__':
     ############################################################################
-    vid_file = '/home/sp/workspace/dk_site/config/site_config.dkc'
+    frames_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/transformed'
     ############################################################################
     
-    iwave = Iwave(vid_file)
+    iwave = Iwave(frames_path)
+    iwave.readFrames()
     
