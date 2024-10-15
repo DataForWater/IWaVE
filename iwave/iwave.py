@@ -25,7 +25,7 @@ class Iwave(object):
                                                     images[0])))
                 img1 = np.asarray(Image.open(os.path.join(self.frames_path,
                                                     images[1])))
-                imgs_array = np.vstack((img0[None], img1[None]))
+                self.imgs_array = np.vstack((img0[None], img1[None]))
 
                 #plt.imshow(img0)
                 #plt.show()
@@ -33,20 +33,19 @@ class Iwave(object):
             else:
                 img = np.asarray(Image.open(os.path.join(self.frames_path,
                                                     images[nn])))
-                imgs_array = np.vstack((imgs_array, img[None]))
+                self.imgs_array = np.vstack((self.imgs_array, img[None]))
             print ("Image: ", nn)
 
         if normalize:
-            print("Normalizing")
-            imgs_normalized = window.normalize(imgs_array, "time")
-
+            self.imgNormalization()
+            
         print("Done")
 
-    def data_norm(self):
-        # data normalisation
-        normalised_data = window.normalize(imgs, "time")
+    def imgNormalization(self):
+        print("Normalizing...")
+        self.normalized_data = window.normalize(self.imgs_array, "time")
 
-    def data_split(self):
+    def subwindows(self, window_coordinates):
         """
         this function should read a set of data with 
         dimensions [t, y, x] and extract nw windows, returning an np.ndarray
@@ -58,7 +57,8 @@ class Iwave(object):
         assigned along a transect based on starting point, end point, 
         and number of points
         """
-        windowed_data = window_data(normalised_data, window_coordinates) 
+        self.windowed_data = window_data(self.normalized_data,
+                                         window_coordinates) 
         
     def data_segmentation(self):
         """
@@ -108,5 +108,6 @@ if __name__ == '__main__':
     ############################################################################
     
     iwave = Iwave(frames_path)
-    iwave.readFrames()
+    iwave.readFrames(normalize=True)
+    iwave.subwindows()
     
