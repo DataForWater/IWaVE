@@ -24,8 +24,6 @@ def sliding_window_idx(
         x-indices of interrogation windows (w)
     win_y : np.ndarray (w * y * x)
         y-indices of interrogation windows (w)
-
-
     """
 
     xi, yi = get_rect_coordinates(

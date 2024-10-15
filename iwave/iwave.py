@@ -57,8 +57,11 @@ class Iwave(object):
         assigned along a transect based on starting point, end point, 
         and number of points
         """
-        self.windowed_data = window_data(self.normalized_data,
-                                         window_coordinates) 
+        win_x, win_y = sliding_window_idx
+        w = windows.multi_sliding_window_array(self.normalized_data,
+                                               win_x, win_y)
+
+        #self.windowed_data = window_data(self.normalized_data, window_coordinates) 
         
     def data_segmentation(self):
         """
@@ -109,5 +112,5 @@ if __name__ == '__main__':
     
     iwave = Iwave(frames_path)
     iwave.readFrames(normalize=True)
-    iwave.subwindows()
+    iwave.subwindows([64, 64])
     
