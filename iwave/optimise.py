@@ -358,6 +358,7 @@ def spectrum_preprocessing(
     ----------
     measured_spectrum : np.ndarray
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
+        dimensions [wi, kti, kyi, kx]
 
     kt: np.ndarray
         radian frequency vector (rad/s)
@@ -383,14 +384,14 @@ def spectrum_preprocessing(
 
     """
     # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
-    preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(1, 2), keepdims=True)
+    preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
     # apply threshold
     threshold = spectrum_threshold 
     preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
 
     # set the first slice (frequency=0) to 0
-    preprocessed_spectrum[0,:,:] = 0
+    preprocessed_spectrum[:,0,:,:] = 0
 
     # calculate the threshold frequency based on threshold velocity
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, [velocity_threshold, velocity_threshold], 100, 1) # calculate frequency from velocity
@@ -399,11 +400,14 @@ def spectrum_preprocessing(
     kt_reshaped = kt[:, np.newaxis, np.newaxis] # reshape kt to be broadcastable
     kt_turb_bc = np.broadcast_to(kt_turb, (kt.shape[0], kt_turb.shape[1], kt_turb.shape[2])) # broadcast kt_turb to match the dimensions of kt
     kt_bc = np.broadcast_to(kt_reshaped, kt_turb_bc.shape) # broadcast kt to match the dimensions of kt_turb
-    preprocessed_spectrum[kt_bc > kt_turb_bc] = 0 # apply mask
+    mask = np.where(kt_bc <= kt_turb_bc, 1, 0) # create mask
+    mask = np.expand_dims(mask, axis=0)
+    
+    preprocessed_spectrum = preprocessed_spectrum *mask # apply mask
 
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
 
     # normalisation
-    preprocessed_spectrum = preprocessed_spectrum / np.sum(measured_spectrum)
+    preprocessed_spectrum = preprocessed_spectrum / np.sum(measured_spectrum, axis=(1, 2, 3), keepdims = True)
     return preprocessed_spectrum

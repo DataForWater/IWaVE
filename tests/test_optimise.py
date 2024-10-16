@@ -4,16 +4,15 @@ import pytest
 from iwave import spectral, dispersion, optimise
 
 def test_preprocessing():
-    img = np.random.rand(32, 32, 32)
+    img = np.random.rand(3, 32, 32, 32)
     kt, ky, kx = spectral.wave_numbers(img.shape, res=0.02, fps=25)
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity=[1, 0], depth=1, vel_indx=1)
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
-    measured_spectrum = spectral._numpy_fourier_transform(img)
+    measured_spectrum = spectral.sliding_window_spectrum(img, img.shape[1], 0, "numpy")
     preprocessed_spectrum = optimise.spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold=5)
     #test if the size of the preprocessed spectrum matches the one of the theoretical spectrum
-    assert preprocessed_spectrum.shape == synthetic_spectrum.shape
-
+    assert preprocessed_spectrum[0].shape == synthetic_spectrum.shape
 
 def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
