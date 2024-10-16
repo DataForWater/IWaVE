@@ -126,7 +126,7 @@ def cost_function_velocity_depth(
 
     """
     
-    depth = x[2]    # guessed depth
+    depth = np.exp(x[2])    # guessed depth
     velocity = [x[0], x[1]]    # guessed velocity components
 
     # calculate the synthetic spectrum based on the guess velocity
@@ -373,12 +373,18 @@ def optimize_single_spectrum_velocity_depth(
     turbulence_switch: bool,
     kwargs: dict
 ) -> Tuple[float, float, float, float]:
+    
+    bnds[2] = np.log(bnds[2]) # transform the boundaries for the depth parameter to improve convergence
+
     opt = optimize.differential_evolution(
         cost_function_velocity_depth_wrapper,
         bounds=bnds,
         args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
         **kwargs
     )
+
+    opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
+
     return float(opt.x[0]), float(opt.x[1]), float(opt.x[2]), float(opt.fun)
 
 def optimize_single_spectrum_velocity_depth_unpack(args):
@@ -452,7 +458,7 @@ def optimise_velocity_depth(
     optimal[:,3] : float
         cost_function calculated with optimised velocity components
     """
-
+    
     args_list = [
         (measured_spectrum, bnds, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch, kwargs)
         for measured_spectrum in measured_spectra
