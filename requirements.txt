@@ -1,4 +1,7 @@
+matplotlib
 numpy
 numba
+opencv-python
+pooch
 rocket-fft
 matplotlib

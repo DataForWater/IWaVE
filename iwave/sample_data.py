@@ -1,15 +1,15 @@
 """Retrieval of sample dataset."""
 import os.path
-
 import numpy as np
-import pooch
-import cv2
-
 from iwave import window
 
 
 def get_sheaf_dataset():
     """Retrieve and cache sample dataset of Sheaf river."""
+    try:
+        import pooch
+    except:
+        raise ImportError("This function needs pooch. Install iwave with pip install iwave[extra]")
     # Define the DOI link
     filename = "Fersina_20230630.avi"
     base_url = "doi:10.5281/zenodo.13935860"
@@ -39,6 +39,11 @@ def get_sheaf_windows(start_frame=0, end_frame=200, window_size=(64, 64), overla
     dst_path = os.path.join(
         os.path.split(src_path)[0], "windows_{:04d}_{:04d}.bin".format(start_frame, end_frame)
     )
+    try:
+        import cv2
+    except:
+        raise ImportError("This function needs cv2. Install iwave with pip install iwave[extra]")
+
     if not os.path.exists(dst_path):
         cap = cv2.VideoCapture(src_path)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
