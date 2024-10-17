@@ -152,7 +152,6 @@ def cost_function_velocity(
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
-    print(cost_function)
     return cost_function
 
 
@@ -312,7 +311,6 @@ def cost_function_velocity_depth(
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
-    print(cost_function)
     return cost_function
 
 

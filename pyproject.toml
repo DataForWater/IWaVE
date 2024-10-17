@@ -40,9 +40,11 @@ io = [
 extra = [
 ]
 test = [
+    "opencv-python",  # for retrieving some frames from sample videos
+    "pooch",  # for retrieval of sample video from DOI
     "pytest",
     "pytest-cov",
-    "pytest-lazy-fixtures"
+    "pytest-lazy-fixtures",
 ]
 # + several subpackages for docs
 docs = [
