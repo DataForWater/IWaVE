@@ -5,6 +5,7 @@ from iwave import spectral, dispersion, optimise
 
 
 def test_preprocessing():
+    """Check shape of preprocessed spectrum against expected shape."""
     img = np.random.rand(32, 32, 32)
     kt, ky, kx = spectral.wave_numbers(img.shape, res=0.02, fps=25)
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity=[1, 0], depth=1, vel_indx=1)
@@ -17,6 +18,7 @@ def test_preprocessing():
 
 
 def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
+    """Compute nsp cost function, compare against known value."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity=[1, 0], depth=1, vel_indx=1)
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
@@ -28,6 +30,7 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
 
 
 def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
+    """Check cost function (without depth) against expected gradients."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity_1 = [1, 0]
     velocity_2 = [1.01, 0]
@@ -60,6 +63,7 @@ def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
     
 
 def test_optimise_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
+    """Check hypothetical case optimization without depth (only u, v) for one single window."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity = [1, 0]
     depth = 0.3
@@ -109,6 +113,7 @@ def test_optimise_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
 
 
 def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
+    """Check cost function (with depth) against expected gradients."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     depth_1 = 0.30
     depth_2 = 0.29
@@ -150,6 +155,7 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
 
 @pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(256, 128, 128), res=0.02, fps=25):
+    """Check hypothetical case optimization with depth for one single window."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity = [1, 0]
     depth = 0.3

@@ -15,7 +15,6 @@ def fn_video():
     return sample_data.get_sheaf_dataset()
 
 
-
 @pytest.fixture
 def imgs(fn_video):
     """ 4 selected frames from sample dataset, read with reader helper function.
