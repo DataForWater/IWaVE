@@ -14,7 +14,7 @@ def test_get_axis_shape(imgs):
         window_size=64,
         overlap=32,
     )
-    assert(x_shape == 11)
+    assert(x_shape == 23)
 
 
 def test_get_array_shape(imgs):
@@ -25,7 +25,7 @@ def test_get_array_shape(imgs):
         window_sizes=(64, 64),
         overlaps=(32, 32)
     )
-    assert(xy_shape == (11, 11))
+    assert(xy_shape == (23, 23))
 
 
 def test_get_axis_coords(imgs):
@@ -35,7 +35,7 @@ def test_get_axis_coords(imgs):
         64,
         32,
     )
-    assert(len(coords)==11)
+    assert(len(coords)==23)
     assert(np.allclose(np.array(coords[0:4]), np.array([32., 64., 96., 128.])))
 
 
@@ -46,7 +46,7 @@ def test_get_rect_coordinates(imgs):
         overlap=(32, 32),
     )
     # test first block of coords
-    assert(xi.shape==(11, 11))
+    assert(xi.shape==(23, 23))
     assert(np.allclose(xi[0:2, 0:2], np.array([[32., 64], [32., 64.]])))
     assert(np.allclose(yi[0:2, 0:2], np.array([[32., 32.], [64., 64.]])))
 
@@ -58,14 +58,14 @@ def test_sliding_window_array(imgs):
         win_x,
         win_y
     )
-    assert img_wins.shape == (11**2, 64, 64)
+    assert img_wins.shape == (23**2, 64, 64)
 
 
 @pytest.mark.parametrize(
     ("swap_time_dim", "test_dims"),
     [
-        (False, (4, 11**2, 64, 64)),
-        (True, (11**2, 4, 64, 64))
+        (False, (4, 23**2, 64, 64)),
+        (True, (23**2, 4, 64, 64))
     ]
 )
 def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):

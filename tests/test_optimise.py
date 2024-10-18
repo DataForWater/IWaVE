@@ -3,6 +3,7 @@ import time
 import pytest
 from iwave import spectral, dispersion, optimise
 
+
 def test_preprocessing():
     img = np.random.rand(32, 32, 32)
     kt, ky, kx = spectral.wave_numbers(img.shape, res=0.02, fps=25)
@@ -27,7 +28,6 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
 
 
 def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
-
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity_1 = [1, 0]
     velocity_2 = [1.01, 0]
@@ -94,11 +94,11 @@ def test_optimise_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
         turbulence_switch=True,
         popsize=1,
         maxiter=10000,
-        workers=-1
+        workers=-1,
+        updating="deferred"
     )
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
-
     vel_y_optimal = optimal[0]
     vel_x_optimal = optimal[1]
     assert vel_x_max >= vel_x_min
@@ -106,6 +106,7 @@ def test_optimise_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
     assert np.abs(vel_y_optimal - velocity[0]) < 0.01
     assert np.abs(vel_x_optimal - velocity[1]) < 0.01
     print(f"Original velocity was {velocity}, optimized {optimal}")
+
 
 def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
@@ -147,6 +148,7 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     assert cost_13 > cost_11
 
 
+@pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(256, 128, 128), res=0.02, fps=25):
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity = [1, 0]

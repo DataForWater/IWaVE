@@ -15,41 +15,13 @@ def fn_video():
     return sample_data.get_sheaf_dataset()
 
 
-@pytest.fixture
-def path_img():
-    return os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "examples",
-        "sheaf",
-    )
-
 
 @pytest.fixture
-def fns_img(path_img):
-    fns = glob.glob(
-        os.path.join(
-            path_img,
-            "*.jpg"
-        )
-    )
-    fns.sort()
-    return fns
-
-
-@pytest.fixture
-def fn_windows(path_img):
-    return os.path.join(
-        path_img,
-        "windows_200.bin"
-    )
-
-
-@pytest.fixture
-def imgs(fns_img):
+def imgs(fn_video):
     """ 4 selected frames from sample dataset, read with reader helper function.
     Result is [4 x n x m ] np.ndarray """
-    return np.stack([np.array(Image.open(fn)) for fn in fns_img])
+    return sample_data.get_frames(fn_video)
+    # return np.stack([np.array(Image.open(fn)) for fn in fns_img])
     # concatenate
 
 
