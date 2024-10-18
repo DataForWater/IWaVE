@@ -81,7 +81,7 @@ def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max)]
     t1 = time.time()
 
-    synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
+    synthetic_spectrum = np.tile(synthetic_spectrum, (200,1,1,1)) # simulate multiple windows
     optimal = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
@@ -95,7 +95,7 @@ def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
         turbulence_switch=True,
         popsize=10,
         maxiter=10000,
-        workers=-1
+        workers=1
     )
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
@@ -171,7 +171,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     # synthetic_spectrum = optimise.spectrum_preprocessing(synthetic_spectrum, kt, ky, kx, velocity_threshold=10, spectrum_threshold=1)
     # define ranges for optimization
 
-    synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
+    synthetic_spectrum = np.tile(synthetic_spectrum, (100,1,1,1)) # simulate multiple windows
     vel_y_min = 0
     vel_y_max = 2
     vel_x_min = -0.5
@@ -192,7 +192,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         gravity_waves_switch=True,
         turbulence_switch=True,
         popsize=10,
-        workers=10,
+        workers=1,
         maxiter=1000,
         updating="deferred"
     )

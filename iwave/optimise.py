@@ -1,8 +1,11 @@
 import numpy as np
-from typing import Tuple
-from iwave import dispersion, spectral
 from scipy import optimize
-import concurrent.futures
+
+from concurrent.futures import ProcessPoolExecutor
+from tqdm import tqdm
+from typing import Tuple
+
+from iwave import dispersion, spectral
 
 def cost_function_velocity(
     velocity: Tuple[float, float],
@@ -69,7 +72,6 @@ def cost_function_velocity(
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
-    print(cost_function)
     return cost_function
 
 def cost_function_velocity_depth(
@@ -136,7 +138,6 @@ def cost_function_velocity_depth(
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
-    print(cost_function)
     return cost_function
 
 
@@ -344,8 +345,14 @@ def optimise_velocity(
         for measured_spectrum in measured_spectra
     ]
 
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        results = list(executor.map(optimize_single_spectrum_velocity_unpack, args_list))
+    with ProcessPoolExecutor() as executor:
+        results = list(
+            tqdm(
+                executor.map(optimize_single_spectrum_velocity_unpack, args_list),
+                total=len(args_list),
+                desc="Optimizing windows"
+            )
+        )
 
     optimised_params = np.array([
         [float(result[0]), float(result[1]), float(result[2])] 
@@ -463,8 +470,14 @@ def optimise_velocity_depth(
         for measured_spectrum in measured_spectra
     ]
 
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        results = list(executor.map(optimize_single_spectrum_velocity_depth_unpack, args_list))
+    with ProcessPoolExecutor() as executor:
+        results = list(
+            tqdm(
+                executor.map(optimize_single_spectrum_velocity_depth_unpack, args_list),
+                total=len(args_list),
+                desc="Optimizing windows"
+            )
+        )
 
     optimised_params = np.array([
         [float(result[0]), float(result[1]), float(result[2]), float(result[3])] 
