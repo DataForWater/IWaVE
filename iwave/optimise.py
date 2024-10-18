@@ -90,8 +90,8 @@ def cost_function_velocity_depth(
     Parameters
     ----------
     x :  [float, float, float]
-        velocity_y, velocity_x, depth
-        tentative surface velocity components along y and x (m/s) and depth (m)
+        velocity_y, velocity_x, log-depth
+        tentative surface velocity components along y and x (m/s) and log of depth (m)
 
     measured_spectrum : np.ndarray
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
@@ -244,6 +244,7 @@ def cost_function_velocity_wrapper(
 ) -> float:
     return cost_function_velocity(x, *args)
 
+
 def optimize_single_spectrum_velocity(
     measured_spectrum: np.ndarray,
     bnds: Tuple[Tuple[float, float], Tuple[float, float]],
@@ -354,12 +355,12 @@ def optimise_velocity(
     return optimised_params
 
 
-
 def cost_function_velocity_depth_wrapper(
     x: Tuple[float, float, float],
     *args
 ) -> float:
     return cost_function_velocity_depth(x, *args)
+
 
 def optimize_single_spectrum_velocity_depth(
     measured_spectrum: np.ndarray,
@@ -373,22 +374,20 @@ def optimize_single_spectrum_velocity_depth(
     turbulence_switch: bool,
     kwargs: dict
 ) -> Tuple[float, float, float, float]:
-    
     bnds[2] = np.log(bnds[2]) # transform the boundaries for the depth parameter to improve convergence
-
     opt = optimize.differential_evolution(
         cost_function_velocity_depth_wrapper,
         bounds=bnds,
         args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
         **kwargs
     )
-
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
-
     return float(opt.x[0]), float(opt.x[1]), float(opt.x[2]), float(opt.fun)
+
 
 def optimize_single_spectrum_velocity_depth_unpack(args):
     return optimize_single_spectrum_velocity_depth(*args)
+
 
 def optimise_velocity_depth(
     measured_spectra: np.ndarray,
@@ -407,7 +406,7 @@ def optimise_velocity_depth(
 
     Parameters
     ----------
-    measured_spectrum : np.ndarray
+    measured_spectra : np.ndarray
         measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
         dimensions [N_windows, Nt, Ny, Nx]
 
@@ -417,24 +416,24 @@ def optimise_velocity_depth(
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
 
-    window_dims: [int, int, int]
+    window_dims : [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
 
-    res: float
+    res : float
         image resolution (m/pxl)
 
-    fps: float
+    fps : float
         image acquisition rate (fps)
     
-    gauss_width: float=1
+    gauss_width : float=1
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
 
-    gravity_waves_switch: bool=True
+    gravity_waves_switch : bool=True
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
 
-    turbulence_switch: bool=True
+    turbulence_switch : bool=True
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
 

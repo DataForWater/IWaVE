@@ -115,9 +115,9 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     depth_3 = 0.31
     velocity_y = 1
     velocity_x = 0
-    params_1 = [velocity_y, velocity_x, depth_1]
-    params_2 = [velocity_y, velocity_x, depth_2]
-    params_3 = [velocity_y, velocity_x, depth_3]
+    params_1 = [velocity_y, velocity_x, np.log(depth_1)]
+    params_2 = [velocity_y, velocity_x, np.log(depth_2)]
+    params_3 = [velocity_y, velocity_x, np.log(depth_3)]
     vel_indx = 1
     kt_gw_1, kt_turb_1 = dispersion.dispersion(ky, kx, [velocity_y, velocity_x], depth_1, vel_indx)
     synthetic_spectrum_1 = dispersion.theoretical_spectrum(
