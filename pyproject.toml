@@ -40,8 +40,8 @@ io = [
 extra = [
     "opencv-python",  # for retrieving some frames from sample videos
     "pooch",  # for retrieval of sample video from DOI
-    "matplotlib"  # plotting
-
+    "matplotlib",  # plotting
+    "tqdm"
 ]
 test = [
     "iwave[extra]",
