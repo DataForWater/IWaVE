@@ -2,6 +2,7 @@
 
 
 import os
+import cv2
 import sys
 import datetime
 from PIL import Image
@@ -11,19 +12,25 @@ import matplotlib.pyplot as plt
 import window
 
 class Iwave(object):
-    def __init__(self, frames_path):
-        self.frames_path = frames_path
+    def __init__(self):
+        #self.video_path = video_path
+        pass
 
-    def readFrames(self, normalize=True):
-        images = os.listdir(self.frames_path)
+    def readFrames(self, frames_path):
+        """Reads saved images 
+
+        Args:
+            normalize (bool, optional): _description_. Defaults to True.
+        """
+        images = os.listdir(frames_path)
 
         for nn in range(0, len(images)):
             if nn == 0:
                 pass
             elif nn == 1:
-                img0 = np.asarray(Image.open(os.path.join(self.frames_path,
+                img0 = np.asarray(Image.open(os.path.join(frames_path,
                                                     images[0])))
-                img1 = np.asarray(Image.open(os.path.join(self.frames_path,
+                img1 = np.asarray(Image.open(os.path.join(frames_path,
                                                     images[1])))
                 self.imgs_array = np.vstack((img0[None], img1[None]))
 
@@ -31,19 +38,35 @@ class Iwave(object):
                 #plt.show()
 
             else:
-                img = np.asarray(Image.open(os.path.join(self.frames_path,
+                img = np.asarray(Image.open(os.path.join(frames_path,
                                                     images[nn])))
                 self.imgs_array = np.vstack((self.imgs_array, img[None]))
             print ("Image: ", nn)
-
-        if normalize:
-            self.imgNormalization()
-            
+          
         print("Done")
 
-    def imgNormalization(self):
-        print("Normalizing...")
-        self.normalized_data = window.normalize(self.imgs_array, "time")
+    def framesFromVideo(self, vid, start_frame=0, end_frame=4):
+        cap = cv2.VideoCapture(vid)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+        # retrieve images from start to end frame
+        imgs = np.stack(
+            [cv2.cvtColor(cap.read()[-1],
+             cv2.COLOR_BGR2GRAY) for _ in range(end_frame - start_frame)]
+        )
+        return imgs
+    
+    def saveFrames(self, vid, dst):
+        pass
+
+    def saveWindows(self):
+        pass
+
+    def imgNormalization(self, imgs_array):
+        """normalizes images assuming the last two dimensions contain the 
+        x/y image intensities
+        """
+        self.normalized_data = window.normalize(imgs_array, "time")
 
     def subwindows(self, window_coordinates):
         """
@@ -58,8 +81,7 @@ class Iwave(object):
         and number of points
         """
         win_x, win_y = sliding_window_idx
-        w = windows.multi_sliding_window_array(self.normalized_data,
-                                               win_x, win_y)
+        w = windows.multi_sliding_window_array(frames, win_x, win_y)
 
         #self.windowed_data = window_data(self.normalized_data, window_coordinates) 
         
@@ -108,9 +130,23 @@ class Iwave(object):
 if __name__ == '__main__':
     ############################################################################
     frames_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/transformed'
+    video_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/vid/Fersina_20230630.avi'
     ############################################################################
     
-    iwave = Iwave(frames_path)
-    iwave.readFrames(normalize=True)
+    # Initialize
+    iwave = Iwave()
+
+    # Use video
+    frames = iwave.framesFromVideo(video_path)
+
+    # or use frames
+    frames = iwave.readFrames(frames_path)
+
+    # Normalize frames
+    frames = iwave.imgNormalization(frames)
+
+    # Extract subwindos
     iwave.subwindows([64, 64])
+
+    print('ok')
     
