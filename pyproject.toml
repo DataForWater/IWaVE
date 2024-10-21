@@ -15,7 +15,8 @@ dependencies = [
     "numba",
     "numexpr",
     "rocket-fft",  # for numba accelerated jittable fast fourier transforms
-    "scipy"
+    "scipy",
+    "tqdm"
 ]
 
 requires-python =">=3.10"
@@ -38,11 +39,16 @@ dynamic = ['version', 'description']
 io = [
 ]
 extra = [
+    "opencv-python",  # for retrieving some frames from sample videos
+    "pooch",  # for retrieval of sample video from DOI
+    "matplotlib",  # plotting
+    "tqdm"
 ]
 test = [
+    "iwave[extra]",
     "pytest",
     "pytest-cov",
-    "pytest-lazy-fixtures"
+    "pytest-lazy-fixtures",
 ]
 # + several subpackages for docs
 docs = [
@@ -59,8 +65,11 @@ slim = ["iwave[io]"]
 [project.urls]
 Source = "https://github.com/DataForWater/IWaVE"
 
-# consideration to make a light command-line interface
-# with input: video, output: velocimetry fields stored in common file template
-# [project.scripts]
-# iwave = "iwave.cli:main"
+[tool.pytest.ini_options]
+addopts = "--ff "
+testpaths = ["tests"]
 
+filterwarnings = [
+    "ignore:This process *:DeprecationWarning:multiprocessing", # related to multi-threading, related to python 3.12 stricter multiprocessing checks.
+    "ignore:invalid value encountered*:RuntimeWarning", # linestrings issue with plotting transects.
+]

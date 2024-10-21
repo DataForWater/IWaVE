@@ -6,3 +6,4 @@ from . import const
 from . import window
 from . import spectral
 from . import dispersion
+from . import sample_data
