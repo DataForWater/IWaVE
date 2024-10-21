@@ -15,7 +15,8 @@ dependencies = [
     "numba",
     "numexpr",
     "rocket-fft",  # for numba accelerated jittable fast fourier transforms
-    "scipy"
+    "scipy",
+    "tqdm"
 ]
 
 requires-python =">=3.10"
