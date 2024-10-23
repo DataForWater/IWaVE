@@ -190,10 +190,11 @@ def spectral_imgs(
     Parameters
     ----------
     imgs : np.ndarray
-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in subwindows of Y * X pixels
+        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in
+        subwindows of Y * X pixels
     engine : str, optional
-        "numpy" or "numba", compute method to use, typically numba (default) is a lot faster. Numpy function is easier
-        to read.
+        "numpy" or "numba", compute method to use, typically numba (default) is
+        a lot faster. Numpy function is easier to read.
     kwargs : dict with additional keyword arguments for processing
 
     Returns
@@ -223,14 +224,15 @@ def sliding_window_spectrum(
     Parameters
     ----------
     imgs : np.ndarray
-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in subwindows of Y * X pixels
+        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in 
+        subwindows of Y * X pixels
     win_t : int
         number of frames per segment
     overlap : int
         overlap (frames)
     engine : str, optional
-        "numpy" or "numba", compute method to use, typically numba (default) is a lot faster. Numpy function is easier
-        to read.
+        "numpy" or "numba", compute method to use, typically numba (default) 
+        is a lot faster. Numpy function is easier to read.
     kwargs : dict with additional keyword arguments for processing
 
     Returns

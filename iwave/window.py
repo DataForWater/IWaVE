@@ -44,6 +44,7 @@ def sliding_window_idx(
     win_y = win_y[np.newaxis, :, :] + yi
     return win_x, win_y
 
+
 def sliding_window_array(
     image: np.ndarray,
     win_x: np.ndarray,

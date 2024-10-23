@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import window
+import spectral
 
 class Iwave(object):
     def __init__(self):
@@ -46,6 +47,16 @@ class Iwave(object):
         print("Done")
 
     def frames_from_video(self, vid, start_frame=0, end_frame=4):
+        """Extract frames from video
+
+        Args:
+            vid (str): path to video
+            start_frame (int, optional): first frame. Defaults to 0.
+            end_frame (int, optional): last frame. Defaults to 4.
+
+        Returns:
+            _type_: _description_
+        """
         cap = cv2.VideoCapture(vid)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
@@ -66,15 +77,14 @@ class Iwave(object):
         """normalizes images assuming the last two dimensions contain the 
         x/y image intensities
         """
-        self.normalized_data = window.normalize(imgs_array, "time")
+        return window.normalize(imgs_array, "time")
 
     def subwindows(self, window_coordinates):
         """
         this function should read a set of data with 
         dimensions [t, y, x] and extract nw windows, returning an np.ndarray
         with dims [w, t, y, x]
-        this is probably done already in window.py, but I am not sure which
-        functions do what.
+
         inputs can be a set of (y, x) indices or window centre coordinates (yc, xc)
         and (Ly, Lx) dimensions eventually these could be automatically 
         assigned along a transect based on starting point, end point, 
@@ -85,15 +95,19 @@ class Iwave(object):
 
         #self.windowed_data = window_data(self.normalized_data, window_coordinates) 
         
-    def data_segmentation(self):
+    def data_segmentation(self, windows, segment_duration, overlap, engine):
         """
         data segmentation is currently included in the spectrum calculation
         using spectra.sliding_window_spectrum
         data segmentation and calculation of the average spectrum
         """
         
-        measured_spectrum = spectral.sliding_window_spectrum(windowed_data,
-                                            segment_duration, overlap, engine)
+        return spectral.sliding_window_spectrum(windowds, segment_duration,
+                                                overlap, engine)
+
+    def subwindow_spectra(self, imgs: np.ndarray, win_t: int, overlap: int, engine):
+
+        return spectral.sliding_window_spectrum(frames, win_t, overlap, engine)
 
     def wavenumber(self):
         # calculation of the wavenumber arrays
@@ -137,16 +151,16 @@ if __name__ == '__main__':
     iwave = Iwave()
 
     # Use video
-    frames = iwave.frames_from_video(video_path)
+    frames = iwave.frames_from_video(video_path, start_frame=0, end_frame=4)
 
     # or use frames
-    frames = iwave.read_frames(frames_path)
+    #frames = iwave.read_frames(frames_path)
 
     # Normalize frames
     frames = iwave.img_normalization(frames)
 
-    # Extract subwindos
-    iwave.subwindows([64, 64])
+    # 3D Spectrum of windows
+    iwave.subwindow_spectra(frames, 32, 16, "numpy")
 
     print('ok')
     
