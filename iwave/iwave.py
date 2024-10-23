@@ -16,7 +16,7 @@ class Iwave(object):
         #self.video_path = video_path
         pass
 
-    def readFrames(self, frames_path):
+    def read_frames(self, frames_path):
         """Reads saved images 
 
         Args:
@@ -45,7 +45,7 @@ class Iwave(object):
           
         print("Done")
 
-    def framesFromVideo(self, vid, start_frame=0, end_frame=4):
+    def frames_from_video(self, vid, start_frame=0, end_frame=4):
         cap = cv2.VideoCapture(vid)
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
@@ -56,13 +56,13 @@ class Iwave(object):
         )
         return imgs
     
-    def saveFrames(self, vid, dst):
+    def save_frames(self, vid, dst):
         pass
 
-    def saveWindows(self):
+    def save_windows(self):
         pass
 
-    def imgNormalization(self, imgs_array):
+    def img_normalization(self, imgs_array):
         """normalizes images assuming the last two dimensions contain the 
         x/y image intensities
         """
@@ -137,13 +137,13 @@ if __name__ == '__main__':
     iwave = Iwave()
 
     # Use video
-    frames = iwave.framesFromVideo(video_path)
+    frames = iwave.frames_from_video(video_path)
 
     # or use frames
-    frames = iwave.readFrames(frames_path)
+    frames = iwave.read_frames(frames_path)
 
     # Normalize frames
-    frames = iwave.imgNormalization(frames)
+    frames = iwave.img_normalization(frames)
 
     # Extract subwindos
     iwave.subwindows([64, 64])
