@@ -11,6 +11,9 @@ import matplotlib.pyplot as plt
 
 import window
 import spectral
+import plots
+import optimise
+
 
 class Iwave(object):
     def __init__(self):
@@ -120,18 +123,8 @@ class Iwave(object):
             optimised_parameters = optimise.optimise_velocity_depth(measured_spectrum, bounds, velocity_indx, img_size, resolution, fps)
 
     def plot(self):
-        figures = plot_results(optimised_parameter, kt, ky, kx)
-        """
-        for iw = selected_windows:
-            kt_gw, kt_turb = dispersion(ky, kx, optimised_velocity[iw], depth[iw], vel_indx)
-            plot(kx, kt, measured_spectrum[iw, ky==0, :, :]) # plot x-t spectrum cross-section
-            hold on; plot(kx, kt_gw[ky==0, :]) # plot gravity waves theoretical relation based on optimised parameters
-            hold on; plot(kx, kt_turb[ky==0, :]) # plot turbulent waves theoretical relation based on optimised parameters
+        pass
 
-            plot(kx, kt, measured_spectrum[iw, :, kx==0, :]) # plot y-t spectrum cross-section
-            hold on; plot(kx, kt_gw[:, kx==0]) # plot gravity waves theoretical relation based on optimised parameters
-            hold on; plot(kx, kt_turb[:, kx==0]) # plot turbulent waves theoretical relation based on optimised parameters
-        """
 
     def export_opt_param(self):
         pass

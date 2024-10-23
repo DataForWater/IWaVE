@@ -44,6 +44,21 @@ def img_windows_norm(img_windows):
 
     return img_windows
 
+def plots():
+    plot_results(optimised_parameter, kt, ky, kx)
+    """
+    for iw = selected_windows:
+        kt_gw, kt_turb = dispersion(ky, kx, optimised_velocity[iw], depth[iw], vel_indx)
+        plot(kx, kt, measured_spectrum[iw, ky==0, :, :]) # plot x-t spectrum cross-section
+        hold on; plot(kx, kt_gw[ky==0, :]) # plot gravity waves theoretical relation based on optimised parameters
+        hold on; plot(kx, kt_turb[ky==0, :]) # plot turbulent waves theoretical relation based on optimised parameters
+
+        plot(kx, kt, measured_spectrum[iw, :, kx==0, :]) # plot y-t spectrum cross-section
+        hold on; plot(kx, kt_gw[:, kx==0]) # plot gravity waves theoretical relation based on optimised parameters
+        hold on; plot(kx, kt_turb[:, kx==0]) # plot turbulent waves theoretical relation based on optimised parameters
+        """
+
+"""
 ###################################################################
 #fn_windows = '/home/sp/git_d4w/IWaVE/examples/sheaf/windows.bin'
 fn_windows = '/home/sp/pCloudDrive/Docs/d4w/iwave/windows_0000_0200.bin'
@@ -53,3 +68,4 @@ with open(fn_windows, "rb") as f:
     windows = np.load(f)
 
 plot_spectrum(windows)
+"""
