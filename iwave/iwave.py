@@ -79,21 +79,12 @@ class Iwave(object):
         """
         return window.normalize(imgs_array, "time")
 
-    def subwindows(self, window_coordinates):
-        """
-        this function should read a set of data with 
-        dimensions [t, y, x] and extract nw windows, returning an np.ndarray
-        with dims [w, t, y, x]
+    def subwindows(self, images, win_size, overlap):
 
-        inputs can be a set of (y, x) indices or window centre coordinates (yc, xc)
-        and (Ly, Lx) dimensions eventually these could be automatically 
-        assigned along a transect based on starting point, end point, 
-        and number of points
-        """
-        win_x, win_y = sliding_window_idx
-        w = windows.multi_sliding_window_array(frames, win_x, win_y)
+        win_x, win_y = window.sliding_window_idx(images[0,:,:], win_size, overlap)
+        sub_win = window.multi_sliding_window_array(images, win_x, win_y)
 
-        #self.windowed_data = window_data(self.normalized_data, window_coordinates) 
+        return sub_win
         
     def data_segmentation(self, windows, segment_duration, overlap, engine):
         """
@@ -106,8 +97,13 @@ class Iwave(object):
                                                 overlap, engine)
 
     def subwindow_spectra(self, imgs: np.ndarray, win_t: int, overlap: int, engine):
-
+        
         return spectral.sliding_window_spectrum(frames, win_t, overlap, engine)
+
+    def get_spectra(self, imgs, engine):
+    
+        return spectral.spectral_imgs(imgs, engine)
+
 
     def wavenumber(self):
         # calculation of the wavenumber arrays
@@ -137,8 +133,8 @@ class Iwave(object):
             hold on; plot(kx, kt_turb[:, kx==0]) # plot turbulent waves theoretical relation based on optimised parameters
         """
 
-
-    #output_data = export(optimised_parameters)
+    def export_opt_param(self):
+        pass
 
 
 if __name__ == '__main__':
@@ -159,8 +155,11 @@ if __name__ == '__main__':
     # Normalize frames
     frames = iwave.img_normalization(frames)
 
-    # 3D Spectrum of windows
-    iwave.subwindow_spectra(frames, 32, 16, "numpy")
+    # Subwidnows
+    subwins = iwave.subwindows(frames, [64, 64], [32, 32])
 
+    # 3D Spectrum 
+    iwave.get_spectra(subwins, engine="numpy")
+    
     print('ok')
     

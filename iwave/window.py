@@ -185,9 +185,9 @@ def get_rect_coordinates(
     center_on_field: bool = False,
 ):
     """
-    create meshgrid coordinates (x, y) of velocimetry results. Overlap can be provided
-    in case each interrogation window is to overlap with the neighbouring
-    interrogation window.
+    create meshgrid coordinates (x, y) of velocimetry results. Overlap can be
+    provided in case each interrogation window is to overlap with the 
+    neighbouring interrogation window.
 
     Parameters
     ----------

@@ -30,8 +30,11 @@ def plot_spectrum(windows: np.ndarray):
 
     plt.show()
 
-    print("ok")
+    plt.imshow(np.log(spectrum[:, :, 32]))
+    plt.colorbar()
+    plt.show()
 
+    print(spectrum.shape)
 
 def img_windows_norm(img_windows):
     img_windows = img_windows - img_windows.mean(axis=0)
@@ -42,7 +45,8 @@ def img_windows_norm(img_windows):
     return img_windows
 
 ###################################################################
-fn_windows = '/home/sp/git_d4w/IWaVE/examples/sheaf/windows.bin'
+#fn_windows = '/home/sp/git_d4w/IWaVE/examples/sheaf/windows.bin'
+fn_windows = '/home/sp/pCloudDrive/Docs/d4w/iwave/windows_0000_0200.bin'
 ###################################################################
 
 with open(fn_windows, "rb") as f:
