@@ -1,13 +1,9 @@
-""" test fixtures """
-from random import sample
+"""Test fixtures."""
 
-from PIL import Image
-import glob
 import numpy as np
-import os
 import pytest
 
-from iwave import sample_data
+from iwave import sample_data, io
 
 
 @pytest.fixture
@@ -19,9 +15,7 @@ def fn_video():
 def imgs(fn_video):
     """ 4 selected frames from sample dataset, read with reader helper function.
     Result is [4 x n x m ] np.ndarray """
-    return sample_data.get_frames(fn_video)
-    # return np.stack([np.array(Image.open(fn)) for fn in fns_img])
-    # concatenate
+    return io.get_video(fn_video)
 
 
 # @pytest.fixture

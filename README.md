@@ -59,10 +59,11 @@ The main functionality is disclosed via an API class IWaVE.
 To create an IWaVE instance, you typically start with some settings for deriving analysis windows and 
 
 ```python
-from iwave import IWaVE
+from iwave import Iwave
 
 # Initialize IWaVE object
-iw = IWaVE(
+iw = Iwave(
+    resolution=0.02,
     window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
     overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
     time_size=100,  # amount of frames in time used for one spectral analysis
@@ -93,9 +94,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches
 
-from iwave import IWaVE, sample_data
+from iwave import Iwave, sample_data
 
-iw = IWaVE(
+iw = Iwave(
     resolution=0.02,  # resolution of videos you will analyze in meters. 
     window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
     overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
@@ -122,10 +123,10 @@ print(f"Shape of the available images is {iw.windows.shape}")
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
 
 # plot the first image with a patch at the first window and centers of rest in the first axes instance
-first_window = patches.Rectangle((0, 0), 128, 128, linewidth=1, edgecolor='r', facecolor='none')
+first_window = patches.Rectangle((0, 0), 128, 128, linewidth=1, edgecolor='r', facecolor='none', label="first window")
 xi, yi = np.meshgrid(iw.x, iw.y)
 axs[0].imshow(iw.imgs[0], cmap="Greys_r")
-axs[0].add_patch(first_window, label="first window")
+axs[0].add_patch(first_window)
 axs[0].plot(xi.flatten(), yi.flatten(), "o", label="centers")
 axs[0].legend()
 # plot the first window of the first image in the second axes instance
@@ -152,11 +153,11 @@ You then MUST provide frames-per-second explicitly yourself.
 ### Estimating x and y-directional velocity
 
 ```python
-from iwave import IWaVE, sample_data
+from iwave import Iwave, sample_data
 import matplotlib.pyplot as plt
 from matplotlib import patches
 
-iw = IWaVE(
+iw = Iwave(
     # repeat from example above...
 )
 

@@ -26,12 +26,13 @@ def sliding_window_idx(
         y-indices of interrogation windows (w)
     """
 
-    xi, yi = get_rect_coordinates(
+    x, y = get_rect_coordinates(
         image.shape,
         window_size,
         overlap,
         center_on_field=False
     )
+    xi, yi = np.meshgrid(x, y)
     xi = (xi - window_size[1] // 2).astype(int)
     yi = (yi - window_size[0] // 2).astype(int)
     xi, yi = np.reshape(xi, (-1, 1, 1)), np.reshape(yi, (-1, 1, 1))
@@ -219,8 +220,7 @@ def get_rect_coordinates(
         center_on_field=center_on_field
     )
 
-    xi, yi = np.meshgrid(x, y)
-    return xi, yi
+    return x, y
 
 def normalize(
     imgs: np.ndarray,

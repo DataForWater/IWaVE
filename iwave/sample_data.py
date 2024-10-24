@@ -1,7 +1,7 @@
 """Retrieval of sample dataset."""
 import os.path
 import numpy as np
-from iwave import window
+from iwave import window, io
 
 
 def get_sheaf_dataset():
@@ -26,26 +26,10 @@ def get_sheaf_dataset():
             filename: None
         },
     )
-
     # Fetch the dataset
     file_path = registry.fetch(filename, progressbar=True)
     print(f"Sheaf dataset is available in {file_path}")
     return file_path
-
-def get_frames(fn, start_frame=0, end_frame=4):
-    """Subdivide Sheaf dataset in windows."""
-    try:
-        import cv2
-    except:
-        raise ImportError("This function needs cv2. Install iwave with pip install iwave[extra]")
-    cap = cv2.VideoCapture(fn)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    # retrieve images from start to end frame
-    imgs = np.stack(
-        [cv2.cvtColor(cap.read()[-1], cv2.COLOR_BGR2GRAY) for _ in range(end_frame - start_frame)]
-    )
-    return imgs
 
 
 def get_sheaf_windows(start_frame=0, end_frame=200, window_size=(64, 64), overlap=(32, 32), max_windows=4):
@@ -54,7 +38,7 @@ def get_sheaf_windows(start_frame=0, end_frame=200, window_size=(64, 64), overla
         os.path.split(src_path)[0], "windows_{:04d}_{:04d}.bin".format(start_frame, end_frame)
     )
     if not os.path.exists(dst_path):
-        imgs = get_frames(src_path, start_frame=start_frame, end_frame=end_frame)
+        imgs = io.get_video(src_path, start_frame=start_frame, end_frame=end_frame)
     # get the x and y coordinates per window
         win_x, win_y = window.sliding_window_idx(imgs[0], window_size=window_size, overlap=overlap)
         # apply the coordinates on all images
