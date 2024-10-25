@@ -129,8 +129,10 @@ axs[0].imshow(iw.imgs[0], cmap="Greys_r")
 axs[0].add_patch(first_window)
 axs[0].plot(xi.flatten(), yi.flatten(), "o", label="centers")
 axs[0].legend()
+axs[0].set_title("First frame overview")
 # plot the first window of the first image in the second axes instance
 axs[1].imshow(iw.windows[0][0], cmap="Greys_r")
+axs[1].set_title("First frame zoom first window")
 plt.show()
 ```
 You can now see that the IWaVE object shows:

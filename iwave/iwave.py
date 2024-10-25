@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 import cv2
+import matplotlib.axes
 import numpy as np
-import matplotlib.pyplot as plt
 
-from typing import Optional, Tuple, List
-from iwave import window, spectral, optimise, io
+from typing import Optional, Tuple, Literal
+from iwave import window, spectral, io
 
 repr_template = """
 Resolution [m]: {}
@@ -21,18 +21,35 @@ class Iwave(object):
     def __init__(
         self,
         resolution: float,
-        window_size: Tuple[int, int] = (128, 128),  # size of interrogation windows over which velocities are estimated
-        overlap: Tuple[int, int] = (0, 0),  # overlap in space (y, x) used to select windows from images or frames
-        time_size: int = 128,  # amount of frames in time used for one spectral analysis
-        time_overlap: int = 0,  # amount of overlap in frames, used to establish time slices. Selecting half of
+        window_size: Tuple[int, int] = (128, 128),
+        overlap: Tuple[int, int] = (0, 0),
+        time_size: int = 128,
+        time_overlap: int = 0,
         imgs: Optional[np.ndarray] = None
     ):
+        """Initialize an Iwave instance.
+
+        Parameters
+        ----------
+        resolution : float
+            Physical resolution of the images that will be provided.
+        window_size : Tuple[int, int], optional
+            Size (pixels y, pixels x) of interrogation windows over which velocities are estimated.
+        overlap : Tuple[int, int], optional
+            Overlap in space (y, x) used to select windows from images or frames.
+        time_size : int, optional
+            Amount of frames in time used for one spectral analysis. Must be <= amount of frames available.
+        time_overlap : int, optional
+            Amount of overlap in frames, used to establish time slices.
+        imgs : Optional[np.ndarray], optional
+            Array of images used for analysis. If not provided, defaults to None.
+        """
         self.resolution = 0.02
         self.window_size = window_size
         self.overlap = overlap
         self.time_size = time_size
         self.time_overlap = time_overlap
-        if imgs:
+        if imgs is not None:
             self.imgs = imgs
         else:
             self.imgs = None
@@ -56,10 +73,12 @@ class Iwave(object):
 
     @property
     def imgs(self):
+        """Return image set."""
         return self._imgs
 
     @imgs.setter
     def imgs(self, images):
+        """Set images and derived properties subwindows, x and y axes, wave number axes and derived spectra."""
         if images is not None:
             if images.ndim != 3:
                 raise ValueError(f"Provided image array must have 3 dimensions. Provided dimensions are {images.ndim}: {images.shape}")
@@ -69,6 +88,18 @@ class Iwave(object):
             # subwindow images and get axes. This always necessary, so in-scope methods only.
             self._get_subwindow(images)
             self._get_x_y_axes(images)
+            self._get_wave_numbers()
+            self._get_spectra()
+
+    @property
+    def spectrum(self):
+        """Return images represented in subwindows."""
+        return self._spectrum
+
+    @spectrum.setter
+    def spectrum(self, _spectrum):
+        self._spectrum = _spectrum
+
 
     @property
     def windows(self):
@@ -81,6 +112,7 @@ class Iwave(object):
 
     @property
     def x(self):
+        """Return x-axis of velocimetry field."""
         return self._x
 
     @x.setter
@@ -89,14 +121,24 @@ class Iwave(object):
 
     @property
     def y(self):
+        """Return y-axis of velocimetry field."""
         return self._x
 
     @y.setter
     def y(self, _y):
         self._y = _y
 
+    @property
+    def spectrum_dims(self):
+        """Return expected dimensions of the spectrum derived from image windows."""
+        return (self.time_size, *self.window_size)
+
+    def _get_spectra(self):
+        """Generate and set spectra of all extracted windows."""
+        self.spectrum = spectral.sliding_window_spectrum(self.windows, self.time_size, self.time_overlap, engine="numba")
+
     def _get_subwindow(self, images: np.ndarray):
-        """Create windows following provided parameters."""
+        """Create and set windows following provided parameters."""
         # get the x and y coordinates per window
         win_x, win_y = window.sliding_window_idx(
             images[0],
@@ -111,7 +153,16 @@ class Iwave(object):
             swap_time_dim=True
         )
 
+    def _get_wave_numbers(self):
+        """Prepare and set wave number axes."""
+        self.kt, self.ky, self.kx = spectral.wave_numbers(
+            self.spectrum_dims,
+            self.resolution, self.fps
+        )
+
+
     def _get_x_y_axes(self, images: np.ndarray):
+        """Prepare and set x and y axes of velocity grid."""
         x, y = window.get_rect_coordinates(
             dim_sizes=images.shape[-2:],
             window_sizes=self.window_size,
@@ -119,6 +170,35 @@ class Iwave(object):
         )
         self.x = x
         self.y = y
+
+
+    def plot_spectrum(
+        self,
+        window_idx: int,
+        dim: Literal["x", "y", "time"],
+        slice: int,
+        ax: Optional[matplotlib.axes.Axes] = None,
+        **kwargs
+    ):
+        """Plot 2D slice of spectrum of selected subwindow.
+
+        Parameters
+        ----------
+        window_idx : int
+            Index of the spectrum window to plot.
+        dim : {"x", "y", "time"}
+            Dimension along which to plot the spectrum.
+        slice : int
+            Index of the slice to plot in the specified dimension.
+        ax : matplotlib.axes.Axes, optional
+            Matplotlib Axes object to plot on. New axes will be generated if not provided.
+        kwargs
+            Additional keyword arguments to pass to the plotting function pcolormesh.
+            See :py:func:`matplotlib.pyplot.pcolormesh` for options.
+        """
+        spectrum_sel = self.spectrum[window_idx]
+        p = io.plot_spectrum(spectrum_sel, self.kt, self.ky, self.kx, dim, slice, ax=ax, **kwargs)
+        return p
 
 
     def read_imgs(self, path: str, fps: float, wildcard: str = None):
@@ -133,6 +213,7 @@ class Iwave(object):
         wildcard : str, optional
             The pattern to match filenames. Defaults to None, meaning all files in the directory will be read.
         """
+        self.fps = fps
         self.imgs = io.get_imgs(path=path, wildcard=wildcard)
 
     def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4):
@@ -151,14 +232,16 @@ class Iwave(object):
         numpy.ndarray
             An array of grayscale images from the video between the specified frames.
         """
-        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame)
-        # get the frame rate from the video
-
+        # set the FPS
         cap = cv2.VideoCapture(file)
         self.fps = cap.get(cv2.CAP_PROP_FPS)
 
         cap.release()
         del cap
+        # Retrieve images
+        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame)
+        # get the frame rate from the video
+
 
     def save_frames(self, dst: str):
         raise NotImplementedError
@@ -178,6 +261,7 @@ class Iwave(object):
         depth=1.,
     ):
         raise NotImplementedError
+
 
     # def data_segmentation(self, windows, segment_duration, overlap, engine):
     #     """
