@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 import cv2
 import matplotlib.axes
+import matplotlib.pyplot as plt
 import numpy as np
 
 from typing import Optional, Tuple, Literal
-from iwave import window, spectral, io
+from iwave import window, spectral, io, optimise
+
 
 repr_template = """
 Resolution [m]: {}
@@ -16,6 +18,11 @@ Number of images: {}
 Frames per second: {}
 """.format
 
+OPTIM_KWARGS = {
+    "popsize": 10,
+    "maxiter": 10000,
+    "workers": 1
+}
 
 class Iwave(object):
     def __init__(
@@ -25,7 +32,10 @@ class Iwave(object):
         overlap: Tuple[int, int] = (0, 0),
         time_size: int = 128,
         time_overlap: int = 0,
-        imgs: Optional[np.ndarray] = None
+        fps: Optional[float] = None,
+        imgs: Optional[np.ndarray] = None,
+        norm: Optional[Literal["time", "xy"]] = None,
+        smax: Optional[float] = 4.0
     ):
         """Initialize an Iwave instance.
 
@@ -39,21 +49,31 @@ class Iwave(object):
             Overlap in space (y, x) used to select windows from images or frames.
         time_size : int, optional
             Amount of frames in time used for one spectral analysis. Must be <= amount of frames available.
+        fps : float, optional
+            Frames per second, can be set at the start, otherwise inherited from read video, or imposed with image set.
         time_overlap : int, optional
             Amount of overlap in frames, used to establish time slices.
         imgs : Optional[np.ndarray], optional
             Array of images used for analysis. If not provided, defaults to None.
+        norm : Literal["time", "xy"]
+            Normalization to apply over subwindowed images, either over time ("time") or space ("xy").
+        smax : float, optional
+            Maximum velocity expected in the scene. Defaults to 4 m/s
         """
         self.resolution = 0.02
         self.window_size = window_size
         self.overlap = overlap
         self.time_size = time_size
         self.time_overlap = time_overlap
+        self.norm = norm
+        self.smax = smax
+        self.fps = fps
         if imgs is not None:
             self.imgs = imgs
         else:
             self.imgs = None
-        self.fps = None
+        self.u = None
+        self.v = None
 
     def __repr__(self):
         if self.imgs is not None:
@@ -89,7 +109,7 @@ class Iwave(object):
             self._get_subwindow(images)
             self._get_x_y_axes(images)
             self._get_wave_numbers()
-            self._get_spectra()
+            self._get_spectrum()
 
     @property
     def spectrum(self):
@@ -122,7 +142,7 @@ class Iwave(object):
     @property
     def y(self):
         """Return y-axis of velocimetry field."""
-        return self._x
+        return self._y
 
     @y.setter
     def y(self, _y):
@@ -133,9 +153,20 @@ class Iwave(object):
         """Return expected dimensions of the spectrum derived from image windows."""
         return (self.time_size, *self.window_size)
 
-    def _get_spectra(self):
+    def _get_spectrum(self):
         """Generate and set spectra of all extracted windows."""
-        self.spectrum = spectral.sliding_window_spectrum(self.windows, self.time_size, self.time_overlap, engine="numba")
+        spectrum = spectral.sliding_window_spectrum(self.windows, self.time_size, self.time_overlap, engine="numba")
+        # preprocess
+        self.spectrum = spectrum
+        # TODO: check preprocessing method. Negative velocities seem excluded now. commented for now.
+        # self.spectrum = optimise.spectrum_preprocessing(
+        #     spectrum,
+        #     self.kt,
+        #     self.ky,
+        #     self.kx,
+        #     self.smax,
+        #     spectrum_threshold=0.
+        # )
 
     def _get_subwindow(self, images: np.ndarray):
         """Create and set windows following provided parameters."""
@@ -146,12 +177,18 @@ class Iwave(object):
             overlap=self.overlap,
         )
         # apply the coordinates on all images
-        self.windows = window.multi_sliding_window_array(
+        windows = window.multi_sliding_window_array(
             images,
             win_x,
             win_y,
             swap_time_dim=True
         )
+        if self.norm == "xy":
+            self.windows = window.normalize(windows, mode="time")
+        elif self.norm == "time":
+            self.windows = window.normalize(windows, mode="xy")
+        else:
+            self.windows = windows
 
     def _get_wave_numbers(self):
         """Prepare and set wave number axes."""
@@ -176,7 +213,8 @@ class Iwave(object):
         self,
         window_idx: int,
         dim: Literal["x", "y", "time"],
-        slice: int,
+        slice: Optional[int] = None,
+        log: bool = True,
         ax: Optional[matplotlib.axes.Axes] = None,
         **kwargs
     ):
@@ -188,8 +226,10 @@ class Iwave(object):
             Index of the spectrum window to plot.
         dim : {"x", "y", "time"}
             Dimension along which to plot the spectrum.
-        slice : int
-            Index of the slice to plot in the specified dimension.
+        slice : int, optional
+            Index of the slice to plot in the specified dimension. If not provided, the middle index is used.
+        log : bool, optional
+            If True (default), spectrum is plotted on log scale.
         ax : matplotlib.axes.Axes, optional
             Matplotlib Axes object to plot on. New axes will be generated if not provided.
         kwargs
@@ -197,7 +237,8 @@ class Iwave(object):
             See :py:func:`matplotlib.pyplot.pcolormesh` for options.
         """
         spectrum_sel = self.spectrum[window_idx]
-        p = io.plot_spectrum(spectrum_sel, self.kt, self.ky, self.kx, dim, slice, ax=ax, **kwargs)
+
+        p = io.plot_spectrum(spectrum_sel, self.kt, self.ky, self.kx, dim, slice, ax=ax, log=log, **kwargs)
         return p
 
 
@@ -226,7 +267,6 @@ class Iwave(object):
             The starting frame number from which to begin reading the video.
         end_frame : int, optional
             The ending frame number until which to read the video.
-
         Returns
         -------
         numpy.ndarray
@@ -249,59 +289,37 @@ class Iwave(object):
     def save_windows(self):
         raise NotImplementedError
 
-    def img_normalization(self, imgs_array):
-        """normalizes images assuming the last two dimensions contain the 
-        x/y image intensities
-        """
-        return window.normalize(imgs_array, "time")
 
     def velocimetry(
         self,
         alpha=0.85,
         depth=1.,
     ):
-        raise NotImplementedError
+        # set search bounds to -/+ maximym velocity for both directions
+        bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
+        # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
+        img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
+        optimal = optimise.optimise_velocity(
+            self.spectrum,
+            bounds,
+            depth,
+            alpha,
+            img_size,
+            self.resolution,
+            self.fps,
+            gauss_width=1,  # TODO: figure out defaults
+            gravity_waves_switch=True,  # TODO: figure out defaults
+            turbulence_switch=True,  # TODO: figure out defaults
+            **OPTIM_KWARGS
+        )
+        self.u = optimal[:, 0].reshape(len(self.y), len(self.x))
+        self.v = optimal[:, 1].reshape(len(self.y), len(self.x))
 
-
-    # def data_segmentation(self, windows, segment_duration, overlap, engine):
-    #     """
-    #     data segmentation is currently included in the spectrum calculation
-    #     using spectra.sliding_window_spectrum
-    #     data segmentation and calculation of the average spectrum
-    #     """
-    #
-    #     return spectral.sliding_window_spectrum(windowds, segment_duration,
-    #                                             overlap, engine)
-    #
-    # def subwindow_spectra(self, imgs: np.ndarray, win_t: int, overlap: int, engine):
-    #
-    #     return spectral.sliding_window_spectrum(frames, win_t, overlap, engine)
-    #
-    # def get_spectra(self, imgs, engine):
-    #
-    #     return spectral.spectral_imgs(imgs, engine)
-    #
-    #
-    # def wavenumber(self):
-    #     # calculation of the wavenumber arrays
-    #     kt, ky, kx = wave_number_dims((segment_duration, windowed_data.shape[2],
-    #                                    windowed_data.shape[3]), resolution, fps)
-    #
-    # def spectrum_preprocessing(self):
-    #     preprocessed_spectrum = optimise.spectrum_preprocessing(measured_spectrum,
-    #                         kt, ky, kx, velocity_threshold, spectrum_threshold)
-    #
-    #     if depthisknown:
-    #         optimised_parameters = optimise.optimise_velocity(measured_spectrum, bounds, depth, velocity_indx, img_size, resolution, fps)
-    #     else:
-    #         optimised_parameters = optimise.optimise_velocity_depth(measured_spectrum, bounds, velocity_indx, img_size, resolution, fps)
-    #
-    # def plot(self):
-    #     pass
-    #
-    #
-    # def export_opt_param(self):
-    #     pass
+    def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
+        if ax is None:
+            ax = plt.axes()
+        p = plt.quiver(self.x, self.y, self.u, self.v, **kwargs)
+        return p
 
 
 if __name__ == '__main__':

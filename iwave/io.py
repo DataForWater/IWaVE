@@ -1,6 +1,8 @@
 """File I/O functions for IWaVE."""
 
 import glob
+
+import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -73,8 +75,9 @@ def plot_spectrum(
     ky: np.ndarray,
     kx: np.ndarray,
     dim: Literal["x", "y", "time"],
-    slice: int,
-    ax=None,
+    slice: Optional[int] = None,
+    log: bool = True,
+    ax: Optional[matplotlib.axes.Axes] = None,
     **kwargs
 ):
     """Plot 2D slice of spectrum of a window.
@@ -91,8 +94,10 @@ def plot_spectrum(
         Array of wave numbers corresponding to the third (y) dimension.
     dim : Literal["x", "y", "time"]
         Dimension along which to slice the spectrum for plotting ("x", "y", or "time").
-    slice : int
-        Index along the specified dimension to slice the spectrum.
+    slice : int, optional
+        Index along the specified dimension to slice the spectrum. If not provided the middle index is used.
+    log : bool, optional
+        If True (default), spectrum is plotted on log scale.
     ax : matplotlib.axes.Axes, optional
         Matplotlib Axes object to plot on. If None, a new Axes object is created.
     kwargs : dict
@@ -112,23 +117,34 @@ def plot_spectrum(
             xvals = kt
             yvals = ky
             slice_vals = kx
-            imvals = np.log(spectrum[:, :, slice])
+            if slice is None:
+                # define middle of dimension
+                slice = spectrum.shape[-1] // 2
+            imvals = spectrum[:, :, slice]
         case "y":
             xlabel = "kt"
             ylabel = "kx"
             xvals = kt
             yvals = kx
             slice_vals = ky
-            imvals = np.log(spectrum[:, slice, :])
+            if slice is None:
+                # define middle of dimension
+                slice = spectrum.shape[-2] // 2
+            imvals = spectrum[:, slice, :]
         case "time":
             xlabel = "ky"
             ylabel = "kx"
             xvals = ky
             yvals = kx
             slice_vals = kt
-            imvals = np.log(spectrum[slice, :])
+            if slice is None:
+                # define middle of dimension
+                slice = spectrum.shape[-3] // 2
+            imvals = spectrum[slice, :]
         case _:
             raise ValueError(f"Invalid dimension: {dim}")
+    if log:
+        imvals = np.log(imvals)
     p = ax.pcolormesh(yvals, xvals, imvals, **kwargs)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
