@@ -2,15 +2,20 @@
 Image Wave Velocimetry Estimation
 
 This library performs simultaneous analysis of 2D velocimetry and stream depth 
-through 2D Fourier transform methods. Unlike existing velocimetry approaches such as Particle Image Velocimetry or
+through 2D Fourier transform methods, with a physics-based approach. 
+Unlike existing velocimetry approaches such as Particle Image Velocimetry or
 Space-Time Image Velocimetry, the uniqueness of this approach lies in the following:
 * velocities that are advective of nature, can be distinguished from other wave forms such as wind waves. 
-  This makes the approach particularly useful in estuaries or river stretches affected strongly by wind.
+  This makes the approach particularly useful in estuaries or river stretches affected strongly by wind,
+  or in shallow streams in the presence of standing waves.
+* The velocity is estimated based on the physical behavior of the water surface, taking into account the
+  speed of propagation of waves and ripples relative to the main flow. This makes the approach more robust
+  than traditional methods when there are no visible tracers.
 * If the depth is not known, it can be estimated along with the optimization of x and y-directional velocity.
+  Depth estimations are reliable only in fast and shallow flows, where wave dynamics are significantly
+  affected by the finite depth.
 
-The method is less suited to relatively shallow and small water bodies.
-
-The code is meant to offer ab Application Programming Interface for use within more high level applications that 
+The code is meant to offer an Application Programming Interface for use within more high level applications that 
 utilize the method in conjunction with more high level functionalities such as Graphical User Interfaces, dashboards,
 or automization routines.
 
