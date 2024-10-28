@@ -218,14 +218,13 @@ def spectrum_preprocessing(
     # set the first slice (frequency=0) to 0
     preprocessed_spectrum[:,0,:,:] = 0
 
-    # calculate the threshold frequency based on threshold velocity
-    kt_gw, kt_turb = dispersion.dispersion(ky, kx, [velocity_threshold, velocity_threshold], 100, 1) # calculate frequency from velocity
+    kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
 
     # set all frequencies higher than the threshold frequency to 0
     kt_reshaped = kt[:, np.newaxis, np.newaxis] # reshape kt to be broadcastable
-    kt_turb_bc = np.broadcast_to(kt_turb, (kt.shape[0], kt_turb.shape[1], kt_turb.shape[2])) # broadcast kt_turb to match the dimensions of kt
-    kt_bc = np.broadcast_to(kt_reshaped, kt_turb_bc.shape) # broadcast kt to match the dimensions of kt_turb
-    mask = np.where(kt_bc <= kt_turb_bc, 1, 0) # create mask
+    kt_threshold_bc = np.broadcast_to(kt_threshold, (kt.shape[0], kt_threshold.shape[1], kt_threshold.shape[2])) # broadcast kt_threshold to match the dimensions of kt
+    kt_bc = np.broadcast_to(kt_reshaped, kt_threshold_bc.shape) # broadcast kt to match the dimensions of kt_threshold
+    mask = np.where(kt_bc <= kt_threshold_bc, 1, 0) # create mask
     mask = np.expand_dims(mask, axis=0)
 
     preprocessed_spectrum = preprocessed_spectrum *mask # apply mask
@@ -236,6 +235,45 @@ def spectrum_preprocessing(
     # normalisation
     preprocessed_spectrum = preprocessed_spectrum / np.sum(measured_spectrum, axis=(1, 2, 3), keepdims = True)
     return preprocessed_spectrum
+
+def dispersion_threshold(
+    ky, 
+    kx, 
+    velocity_threshold
+) -> np.ndarray:
+    
+    """
+    Calculate the frequency corresponding to the threshold velocity
+
+    Parameters
+    ----------
+    ky: np.ndarray
+        wavenumber array along the direction y
+
+    kx: np.ndarray
+        wavenumber array along the direction x
+
+    velocity_threshold : float
+        threshold_velocity (m/s)
+
+    Returns
+    -------
+    kt_threshold : np.ndarray
+        1 x N_y x N_x: threshold frequency
+
+    """
+
+    # create 2D wavenumber grid
+    ky, kx = np.meshgrid(ky, kx)
+
+    # transpose to 1 x N_y x N_x
+    ky = np.expand_dims(ky, axis=0)
+    kx = np.expand_dims(kx, axis=0)
+
+    # wavenumber modulus
+    k_mod = np.sqrt(ky ** 2 + kx ** 2)  
+    
+    return k_mod*velocity_threshold
 
 
 

@@ -112,8 +112,8 @@ def plot_spectrum(
         ax = plt.axes()
     match dim:
         case "x":
-            xlabel = "kt"
-            ylabel = "ky"
+            xlabel = "ky"
+            ylabel = "kt"
             xvals = kt
             yvals = ky
             slice_vals = kx
@@ -122,8 +122,8 @@ def plot_spectrum(
                 slice = spectrum.shape[-1] // 2
             imvals = spectrum[:, :, slice]
         case "y":
-            xlabel = "kt"
-            ylabel = "kx"
+            xlabel = "kx"
+            ylabel = "kt"
             xvals = kt
             yvals = kx
             slice_vals = ky

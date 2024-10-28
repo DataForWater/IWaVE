@@ -158,15 +158,13 @@ class Iwave(object):
         spectrum = spectral.sliding_window_spectrum(self.windows, self.time_size, self.time_overlap, engine="numba")
         # preprocess
         self.spectrum = spectrum
-        # TODO: check preprocessing method. Negative velocities seem excluded now. commented for now.
-        # self.spectrum = optimise.spectrum_preprocessing(
-        #     spectrum,
-        #     self.kt,
-        #     self.ky,
-        #     self.kx,
-        #     self.smax,
-        #     spectrum_threshold=0.
-        # )
+        self.spectrum = optimise.spectrum_preprocessing(
+            spectrum,
+            self.kt,
+            self.ky,
+            self.kx,
+            self.smax
+        )
 
     def _get_subwindow(self, images: np.ndarray):
         """Create and set windows following provided parameters."""
