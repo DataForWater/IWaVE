@@ -174,7 +174,7 @@ def spectrum_preprocessing(
         ky: np.ndarray,
         kx: np.ndarray,
         velocity_threshold: float,
-        spectrum_threshold: float=1
+        spectrum_threshold: float=2
 ) -> np.ndarray:
     """
     pre-processing of the measured spectrum to improve convergence of the optimisation

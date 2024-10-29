@@ -124,6 +124,9 @@ print(f"Shape of the available images is {iw.imgs.shape}")
 # show the shape of the manipulated windows
 print(f"Shape of the available images is {iw.windows.shape}")
 
+# Get the spectra of all windows and filter spectra with a spectral threshold of 2.0
+iw.get_spectra(threshold=2.0)
+
 # create a new figure with two subplots in one row
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
 
@@ -168,21 +171,18 @@ iw = Iwave(
     # repeat from example above...
 )
 
-optimize_kwargs = {
-    #  Here you can define parameters for optimization with scipy.optimize.differential_evolution
-}
 iw.velocimetry(
-  alpha=0.85,
-  **optimize_kwargs
-  # surface to depth average velocity factor
+  alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+  depth=0.3  # depth in [m] has to be known or estimated
 )
 
 ax = plt.axes()
 ax.imshow(iw.imgs[0], cmap="Greys_r")
 
 # add velocity vectors
-iw.plot_u_v(ax=ax)
+iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
 ```
+
 This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background.
 ## For developers
 

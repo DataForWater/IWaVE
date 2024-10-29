@@ -60,7 +60,7 @@ class Iwave(object):
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
         """
-        self.resolution = 0.02
+        self.resolution = resolution
         self.window_size = window_size
         self.overlap = overlap
         self.time_size = time_size
@@ -108,8 +108,6 @@ class Iwave(object):
             # subwindow images and get axes. This always necessary, so in-scope methods only.
             self._get_subwindow(images)
             self._get_x_y_axes(images)
-            self._get_wave_numbers()
-            self._get_spectrum()
 
     @property
     def spectrum(self):
@@ -153,19 +151,6 @@ class Iwave(object):
         """Return expected dimensions of the spectrum derived from image windows."""
         return (self.time_size, *self.window_size)
 
-    def _get_spectrum(self):
-        """Generate and set spectra of all extracted windows."""
-        spectrum = spectral.sliding_window_spectrum(self.windows, self.time_size, self.time_overlap, engine="numba")
-        # preprocess
-        self.spectrum = spectrum
-        self.spectrum = optimise.spectrum_preprocessing(
-            spectrum,
-            self.kt,
-            self.ky,
-            self.kx,
-            self.smax
-        )
-
     def _get_subwindow(self, images: np.ndarray):
         """Create and set windows following provided parameters."""
         # get the x and y coordinates per window
@@ -206,6 +191,25 @@ class Iwave(object):
         self.x = x
         self.y = y
 
+    def get_spectra(self, threshold: float = 1.):
+        """Generate and set spectra of all extracted windows."""
+        spectrum = spectral.sliding_window_spectrum(
+            self.windows,
+            self.time_size,
+            self.time_overlap,
+            engine="numba"
+        )
+        # set the wave numbers
+        self._get_wave_numbers()
+        # preprocess
+        self.spectrum = optimise.spectrum_preprocessing(
+            spectrum,
+            self.kt,
+            self.ky,
+            self.kx,
+            self.smax,
+            spectrum_threshold=threshold
+        )
 
     def plot_spectrum(
         self,
@@ -235,10 +239,8 @@ class Iwave(object):
             See :py:func:`matplotlib.pyplot.pcolormesh` for options.
         """
         spectrum_sel = self.spectrum[window_idx]
-
         p = io.plot_spectrum(spectrum_sel, self.kt, self.ky, self.kx, dim, slice, ax=ax, log=log, **kwargs)
         return p
-
 
     def read_imgs(self, path: str, fps: float, wildcard: str = None):
         """Read frames stored as images on disk from path and wildcard.
