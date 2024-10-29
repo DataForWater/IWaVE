@@ -207,7 +207,7 @@ class Iwave(object):
             self.kt,
             self.ky,
             self.kx,
-            self.smax,
+            self.smax*3,
             spectrum_threshold=threshold
         )
 
