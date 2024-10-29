@@ -276,7 +276,6 @@ def dispersion_threshold(
     return k_mod*velocity_threshold
 
 
-
 def cost_function_velocity_wrapper(
     x: Tuple[float, float],
     *args

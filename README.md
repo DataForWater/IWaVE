@@ -182,7 +182,6 @@ ax.imshow(iw.imgs[0], cmap="Greys_r")
 # add velocity vectors
 iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
 ```
-
 This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background.
 ## For developers
 
