@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+"""IWaVE main api."""
+
 import cv2
 import matplotlib.axes
 import matplotlib.pyplot as plt
