@@ -24,16 +24,15 @@ def sliding_window_idx(
         x-indices of interrogation windows (w)
     win_y : np.ndarray (w * y * x)
         y-indices of interrogation windows (w)
-
-
     """
 
-    xi, yi = get_rect_coordinates(
+    x, y = get_rect_coordinates(
         image.shape,
         window_size,
         overlap,
         center_on_field=False
     )
+    xi, yi = np.meshgrid(x, y)
     xi = (xi - window_size[1] // 2).astype(int)
     yi = (yi - window_size[0] // 2).astype(int)
     xi, yi = np.reshape(xi, (-1, 1, 1)), np.reshape(yi, (-1, 1, 1))
@@ -45,6 +44,7 @@ def sliding_window_idx(
     win_x = win_x[np.newaxis, :, :] + xi
     win_y = win_y[np.newaxis, :, :] + yi
     return win_x, win_y
+
 
 def sliding_window_array(
     image: np.ndarray,
@@ -186,9 +186,9 @@ def get_rect_coordinates(
     center_on_field: bool = False,
 ):
     """
-    create meshgrid coordinates (x, y) of velocimetry results. Overlap can be provided
-    in case each interrogation window is to overlap with the neighbouring
-    interrogation window.
+    create meshgrid coordinates (x, y) of velocimetry results. Overlap can be
+    provided in case each interrogation window is to overlap with the 
+    neighbouring interrogation window.
 
     Parameters
     ----------
@@ -220,15 +220,15 @@ def get_rect_coordinates(
         center_on_field=center_on_field
     )
 
-    xi, yi = np.meshgrid(x, y)
-    return xi, yi
+    return x, y
 
 def normalize(
     imgs: np.ndarray,
     mode: Literal["xy", "time"] = "time"
 ):
     """
-    normalizes images assuming the last two dimensions contain the x/y image intensities
+    normalizes images assuming the last two dimensions contain the x/y image
+    intensities
 
     Parameters
     ----------
@@ -238,7 +238,8 @@ def normalize(
     -------
 
     imgs_norm : np.ndarray (n x Y x X) or (n x m x Y x X)
-        output normalized images, organized in at least one stack, similar to imgs
+        output normalized images, organized in at least one stack, 
+        similar to imgs
     """
     # compute means and stds
     if mode == "xy":

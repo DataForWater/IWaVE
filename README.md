@@ -2,15 +2,20 @@
 Image Wave Velocimetry Estimation
 
 This library performs simultaneous analysis of 2D velocimetry and stream depth 
-through 2D Fourier transform methods. Unlike existing velocimetry approaches such as Particle Image Velocimetry or
+through 2D Fourier transform methods, with a physics-based approach. 
+Unlike existing velocimetry approaches such as Particle Image Velocimetry or
 Space-Time Image Velocimetry, the uniqueness of this approach lies in the following:
 * velocities that are advective of nature, can be distinguished from other wave forms such as wind waves. 
-  This makes the approach particularly useful in estuaries or river stretches affected strongly by wind.
+  This makes the approach particularly useful in estuaries or river stretches affected strongly by wind,
+  or in shallow streams in the presence of standing waves.
+* The velocity is estimated based on the physical behavior of the water surface, taking into account the
+  speed of propagation of waves and ripples relative to the main flow. This makes the approach more robust
+  than traditional methods when there are no visible tracers.
 * If the depth is not known, it can be estimated along with the optimization of x and y-directional velocity.
+  Depth estimations are reliable only in fast and shallow flows, where wave dynamics are significantly
+  affected by the finite depth.
 
-The method is less suited to relatively shallow and small water bodies.
-
-The code is meant to offer ab Application Programming Interface for use within more high level applications that 
+The code is meant to offer an Application Programming Interface for use within more high level applications that 
 utilize the method in conjunction with more high level functionalities such as Graphical User Interfaces, dashboards,
 or automization routines.
 
@@ -59,10 +64,11 @@ The main functionality is disclosed via an API class IWaVE.
 To create an IWaVE instance, you typically start with some settings for deriving analysis windows and 
 
 ```python
-from iwave import IWaVE
+from iwave import Iwave
 
 # Initialize IWaVE object
-iw = IWaVE(
+iw = Iwave(
+    resolution=0.02,
     window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
     overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
     time_size=100,  # amount of frames in time used for one spectral analysis
@@ -93,9 +99,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches
 
-from iwave import IWaVE, sample_data
+from iwave import Iwave, sample_data
 
-iw = IWaVE(
+iw = Iwave(
     resolution=0.02,  # resolution of videos you will analyze in meters. 
     window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
     overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
@@ -118,18 +124,23 @@ print(f"Shape of the available images is {iw.imgs.shape}")
 # show the shape of the manipulated windows
 print(f"Shape of the available images is {iw.windows.shape}")
 
+# Get the spectra of all windows and filter spectra with a spectral threshold of 2.0
+iw.get_spectra(threshold=2.0)
+
 # create a new figure with two subplots in one row
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
 
 # plot the first image with a patch at the first window and centers of rest in the first axes instance
-first_window = patches.Rectangle((0, 0), 128, 128, linewidth=1, edgecolor='r', facecolor='none')
+first_window = patches.Rectangle((0, 0), 128, 128, linewidth=1, edgecolor='r', facecolor='none', label="first window")
 xi, yi = np.meshgrid(iw.x, iw.y)
 axs[0].imshow(iw.imgs[0], cmap="Greys_r")
-axs[0].add_patch(first_window, label="first window")
+axs[0].add_patch(first_window)
 axs[0].plot(xi.flatten(), yi.flatten(), "o", label="centers")
 axs[0].legend()
+axs[0].set_title("First frame overview")
 # plot the first window of the first image in the second axes instance
 axs[1].imshow(iw.windows[0][0], cmap="Greys_r")
+axs[1].set_title("First frame zoom first window")
 plt.show()
 ```
 You can now see that the IWaVE object shows:
@@ -152,28 +163,24 @@ You then MUST provide frames-per-second explicitly yourself.
 ### Estimating x and y-directional velocity
 
 ```python
-from iwave import IWaVE, sample_data
+from iwave import Iwave, sample_data
 import matplotlib.pyplot as plt
 from matplotlib import patches
 
-iw = IWaVE(
+iw = Iwave(
     # repeat from example above...
 )
 
-optimize_kwargs = {
-    #  Here you can define parameters for optimization with scipy.optimize.differential_evolution
-}
 iw.velocimetry(
-  alpha=0.85,
-  **optimize_kwargs
-  # surface to depth average velocity factor
+  alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+  depth=0.3  # depth in [m] has to be known or estimated
 )
 
 ax = plt.axes()
 ax.imshow(iw.imgs[0], cmap="Greys_r")
 
 # add velocity vectors
-iw.plot_u_v(ax=ax)
+iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
 ```
 This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background.
 ## For developers

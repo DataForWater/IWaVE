@@ -40,15 +40,16 @@ def test_get_axis_coords(imgs):
 
 
 def test_get_rect_coordinates(imgs):
-    xi, yi = window.get_rect_coordinates(
+    x, y = window.get_rect_coordinates(
         dim_sizes=imgs.shape[-2:],
         window_sizes=(64, 64),
         overlap=(32, 32),
     )
     # test first block of coords
-    assert(xi.shape==(23, 23))
-    assert(np.allclose(xi[0:2, 0:2], np.array([[32., 64], [32., 64.]])))
-    assert(np.allclose(yi[0:2, 0:2], np.array([[32., 32.], [64., 64.]])))
+    assert len(x) == 23
+    assert len(y) == 23
+    assert np.allclose(x[0:2], np.array([32., 64.]))
+    assert np.allclose(y[0:2], np.array([32., 64.]))
 
 
 def test_sliding_window_array(imgs):

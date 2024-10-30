@@ -24,4 +24,9 @@ jobs:
           pip install .[test]
       - name: Test
         run: python -m pytest --verbose --cov=iwave --cov-report xml
-      - uses: codecov/codecov-action@v1
+# UNCOMMENT ONCE TOKEN IS ADDED TO SECRETS
+#      - name: Upload coverage to Codecov
+#        uses: codecov/codecov-action@v4
+#        env:
+#          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
