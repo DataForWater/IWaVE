@@ -161,19 +161,17 @@ class Iwave(object):
             window_size=self.window_size,
             overlap=self.overlap,
         )
+        if self.norm == "xy":
+            images = window.normalize(images, mode="xy")
+        elif self.norm == "time":
+            images = window.normalize(images, mode="time")
         # apply the coordinates on all images
-        windows = window.multi_sliding_window_array(
+        self.windows = window.multi_sliding_window_array(
             images,
             win_x,
             win_y,
             swap_time_dim=True
         )
-        if self.norm == "xy":
-            self.windows = window.normalize(windows, mode="xy")
-        elif self.norm == "time":
-            self.windows = window.normalize(windows, mode="time")
-        else:
-            self.windows = windows
 
     def _get_wave_numbers(self):
         """Prepare and set wave number axes."""

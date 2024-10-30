@@ -266,4 +266,3 @@ def normalize(
     imgs_norm = np.nan_to_num(imgs_norm, nan=0.0)
     return imgs_norm
 
-
