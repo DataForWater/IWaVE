@@ -202,7 +202,9 @@ class Iwave(object):
         )
         # set the wave numbers
         self._get_wave_numbers()
+        
         # preprocess
+        self.spectrum = spectrum
         self.spectrum = optimise.spectrum_preprocessing(
             spectrum,
             self.kt,

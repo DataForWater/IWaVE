@@ -262,6 +262,8 @@ def normalize(
         )
     else:
         raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
-    return (imgs - imgs_mean) / imgs_std
+    imgs_norm = (imgs - imgs_mean) / imgs_std
+    imgs_norm = np.nan_to_num(imgs_norm, nan=0.0)
+    return imgs_norm
 
 
