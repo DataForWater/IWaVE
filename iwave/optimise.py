@@ -219,7 +219,7 @@ def spectrum_preprocessing(
     preprocessed_spectrum[:,0,:,:] = 0
 
     kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
-
+    
     # set all frequencies higher than the threshold frequency to 0
     kt_reshaped = kt[:, np.newaxis, np.newaxis] # reshape kt to be broadcastable
     kt_threshold_bc = np.broadcast_to(kt_threshold, (kt.shape[0], kt_threshold.shape[1], kt_threshold.shape[2])) # broadcast kt_threshold to match the dimensions of kt
@@ -264,7 +264,7 @@ def dispersion_threshold(
     """
 
     # create 2D wavenumber grid
-    ky, kx = np.meshgrid(ky, kx)
+    kx, ky = np.meshgrid(kx, ky)
 
     # transpose to 1 x N_y x N_x
     ky = np.expand_dims(ky, axis=0)

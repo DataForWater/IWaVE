@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from typing import Optional, Tuple, Literal
-from iwave import window, spectral, io, optimise
+from iwave import window, spectral, io, optimise, dispersion
 
 
 repr_template = """
@@ -155,6 +155,7 @@ class Iwave(object):
     def _get_subwindow(self, images: np.ndarray):
         """Create and set windows following provided parameters."""
         # get the x and y coordinates per window
+        # TODO: define windows based on window size and number of windows per dimension instead of overlap
         win_x, win_y = window.sliding_window_idx(
             images[0],
             window_size=self.window_size,
@@ -244,6 +245,38 @@ class Iwave(object):
         spectrum_sel = self.spectrum[window_idx]
         p = io.plot_spectrum(spectrum_sel, self.kt, self.ky, self.kx, dim, slice, ax=ax, log=log, **kwargs)
         return p
+    
+    def plot_spectrum_fitted(
+        self,
+        window_idx: int,
+        dim: Literal["x", "y", "time"],
+        slice: Optional[int] = None,
+        log: bool = True,
+        ax: Optional[matplotlib.axes.Axes] = None,
+        **kwargs
+        ):
+        """Plot 2D slice of spectrum of selected subwindow.
+
+        Parameters
+        ----------
+        window_idx : int
+            Index of the spectrum window to plot.
+        dim : {"x", "y", "time"}
+            Dimension along which to plot the spectrum.
+        slice : int, optional
+            Index of the slice to plot in the specified dimension. If not provided, the middle index is used.
+        log : bool, optional
+            If True (default), spectrum is plotted on log scale.
+        ax : matplotlib.axes.Axes, optional
+            Matplotlib Axes object to plot on. New axes will be generated if not provided.
+        kwargs
+            Additional keyword arguments to pass to the plotting function pcolormesh.
+            See :py:func:`matplotlib.pyplot.pcolormesh` for options.
+        """
+        spectrum_sel = self.spectrum[window_idx]
+        kt_waves_theory, kt_advected_theory = dispersion.dispersion(self.ky, self.kx, [self.v, self.u], depth=1, vel_indx=0.85)
+        p = io.plot_spectrum_fitted(spectrum_sel, kt_waves_theory, kt_advected_theory, self.kt, self.ky, self.kx, dim, slice, ax=ax, log=log, **kwargs)
+        return p
 
     def read_imgs(self, path: str, fps: float, wildcard: str = None):
         """Read frames stored as images on disk from path and wildcard.
@@ -315,8 +348,8 @@ class Iwave(object):
             turbulence_switch=True,  # TODO: figure out defaults
             **OPTIM_KWARGS
         )
-        self.u = optimal[:, 0].reshape(len(self.y), len(self.x))
-        self.v = optimal[:, 1].reshape(len(self.y), len(self.x))
+        self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
+        self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
 
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
