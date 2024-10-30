@@ -2,9 +2,10 @@ name: Upload IWAvE to Test-PyPi
 
 on:
   release:
-    types:
-      - published:
-
+    types: [published]
+  # allows running the workflow manually
+  workflow_dispatch:
+  
 jobs:
   build-artifacts:
     runs-on: ubuntu-latest
