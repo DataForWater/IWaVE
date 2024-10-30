@@ -211,8 +211,12 @@ def spectrum_preprocessing(
     # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
     preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
+    avg_spec = np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
+    print(f"size of measured spectrum = {measured_spectrum.shape}")
+    print(f"size of preprocessed spectrum = {preprocessed_spectrum.shape}")
+    print(f"size of averaged spectrum = {avg_spec.shape}")
     # apply threshold
-    threshold = spectrum_threshold 
+    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis = 1, keepdims = True)
     preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
 
     # set the first slice (frequency=0) to 0
