@@ -35,7 +35,7 @@ class Iwave(object):
         time_overlap: int = 0,
         fps: Optional[float] = None,
         imgs: Optional[np.ndarray] = None,
-        norm: Optional[Literal["time", "xy"]] = None,
+        norm: Optional[Literal["time", "xy"]] = "time",
         smax: Optional[float] = 4.0
     ):
         """Initialize an Iwave instance.
@@ -168,9 +168,9 @@ class Iwave(object):
             swap_time_dim=True
         )
         if self.norm == "xy":
-            self.windows = window.normalize(windows, mode="time")
-        elif self.norm == "time":
             self.windows = window.normalize(windows, mode="xy")
+        elif self.norm == "time":
+            self.windows = window.normalize(windows, mode="time")
         else:
             self.windows = windows
 
