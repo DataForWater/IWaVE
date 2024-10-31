@@ -24,7 +24,7 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
     cost = optimise.nsp_inv(synthetic_spectrum,synthetic_spectrum)
-    expected_cost = 1 / np.sum(synthetic_spectrum ** 2)
+    expected_cost = np.sum(synthetic_spectrum) / np.sum(synthetic_spectrum**2)
     #test if the auto-correlation matches the theoretical expectation based on a synthetic spectrum
     assert np.allclose(cost, expected_cost)
 
