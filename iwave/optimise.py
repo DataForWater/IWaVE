@@ -5,7 +5,7 @@ from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from typing import Tuple
 
-from iwave import dispersion, spectral
+from iwave import dispersion
 
 def cost_function_velocity(
     velocity: Tuple[float, float],
@@ -162,7 +162,8 @@ def nsp_inv(
         cost function to be minimised
 
     """
-    spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    # spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    spectra_correlation = measured_spectrum * synthetic_spectrum /np.sum(synthetic_spectrum) # calculate correlation
     cost = 1 / np.sum(spectra_correlation) # calculate cost function
 
     return cost
@@ -174,7 +175,7 @@ def spectrum_preprocessing(
         ky: np.ndarray,
         kx: np.ndarray,
         velocity_threshold: float,
-        spectrum_threshold: float=2
+        spectrum_threshold: float=1
 ) -> np.ndarray:
     """
     pre-processing of the measured spectrum to improve convergence of the optimisation
@@ -211,10 +212,6 @@ def spectrum_preprocessing(
     # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
     preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
-    avg_spec = np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
-    print(f"size of measured spectrum = {measured_spectrum.shape}")
-    print(f"size of preprocessed spectrum = {preprocessed_spectrum.shape}")
-    print(f"size of averaged spectrum = {avg_spec.shape}")
     # apply threshold
     threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis = 1, keepdims = True)
     preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
