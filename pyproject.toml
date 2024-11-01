@@ -14,6 +14,7 @@ dependencies = [
     "numpy",
     "numba",
     "numexpr",
+    "opencv-python",  # for retrieving some frames from sample videos
     "rocket-fft",  # for numba accelerated jittable fast fourier transforms
     "scipy",
     "tqdm"
@@ -39,7 +40,6 @@ dynamic = ['version', 'description']
 io = [
 ]
 extra = [
-    "opencv-python",  # for retrieving some frames from sample videos
     "pooch",  # for retrieval of sample video from DOI
     "matplotlib",  # plotting
     "tqdm"
