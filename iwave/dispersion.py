@@ -112,7 +112,7 @@ def dispersion(
     """
 
     # create 2D wavenumber grid
-    ky, kx = np.meshgrid(ky, kx)
+    kx, ky = np.meshgrid(kx, ky)
 
     # transpose to 1 x N_y x N_x
     ky = np.expand_dims(ky, axis=0)

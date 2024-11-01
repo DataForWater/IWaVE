@@ -68,11 +68,11 @@ from iwave import Iwave
 
 # Initialize IWaVE object
 iw = Iwave(
-    resolution=0.02,
+    resolution=0.01,
     window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
     overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
-    time_size=100,  # amount of frames in time used for one spectral analysis
-    time_overlap=50,  # amount of overlap in frames, used to establish time slices. Selecting half of 
+    time_size=250,  # amount of frames in time used for one spectral analysis
+    time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of 
         # time_size implies that you use a 50% overlap in time between frame sets.
    
 )
@@ -102,17 +102,17 @@ from matplotlib import patches
 from iwave import Iwave, sample_data
 
 iw = Iwave(
-    resolution=0.02,  # resolution of videos you will analyze in meters. 
+    resolution=0.01,  # resolution of videos you will analyze in meters. 
     window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
     overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
-    time_size=100,  # amount of frames used for one spectral analysis
-    time_overlap=50,  # amount of overlap in frames, used to establish time slices. Selecting half of 
+    time_size=250,  # amount of frames used for one spectral analysis
+    time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of 
         # time_size implies that you use a 50% overlap in time between frame sets.
 )
 
 # retrieve a sample video from zenodo. This is built-in sample functionality...
 fn_video = sample_data.get_sheaf_dataset()
-iw.read_video(fn_video, start_frame=0, end_frame=300)
+iw.read_video(fn_video, start_frame=0, end_frame=500)
 
 # NOTE: you can also read a list of ordered images with the frames per second set, using iw.read_imgs([...], fps=...)
 
@@ -125,7 +125,7 @@ print(f"Shape of the available images is {iw.imgs.shape}")
 print(f"Shape of the available images is {iw.windows.shape}")
 
 # Get the spectra of all windows and filter spectra with a spectral threshold of 2.0
-iw.get_spectra(threshold=2.0)
+iw.get_spectra(threshold=1.0)
 
 # create a new figure with two subplots in one row
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
@@ -181,6 +181,16 @@ ax.imshow(iw.imgs[0], cmap="Greys_r")
 
 # add velocity vectors
 iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
+
+# plot the measured spectra and fitted dispersion relation (modify window_idx to visualize different windows)
+fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 7))
+p1 = iw.plot_spectrum_fitted(window_idx=4, dim="x", ax=axs[0])
+axs[0].set_xlim([-100, 100])
+plt.colorbar(p1, ax=axs[0])
+p2 = iw.plot_spectrum_fitted(window_idx=4, dim="y", ax=axs[1])
+axs[1].set_xlim([-100, 100])
+plt.colorbar(p2, ax=axs[1])
+plt.show()
 ```
 This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background.
 ## For developers

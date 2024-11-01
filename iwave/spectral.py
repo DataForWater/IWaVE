@@ -247,11 +247,11 @@ def sliding_window_spectrum(
         raise ValueError("win_t and overlap should not be equal.")
     
     # number of segments
-    num_segments = imgs.shape[2] // (win_t - overlap)
-
+    num_segments = imgs.shape[1] // (win_t - overlap)
+    
     # sum of individual segments
-    spectrum_sum = sum(spectral_imgs(imgs[:, segment_t0:segment_t0 + win_t, :, :], engine, **kwargs)
-                       for segment_t0 in range(0, imgs.shape[2], win_t - overlap))
+    spectrum_sum = sum(spectral_imgs(imgs[:, segment_t0:(segment_t0 + win_t), :, :], engine, **kwargs)
+                       for segment_t0 in range(0, imgs.shape[1] - win_t + 1, win_t - overlap))
     
     # renormalisation
     spectra = spectrum_sum / num_segments

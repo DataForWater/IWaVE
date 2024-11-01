@@ -5,7 +5,7 @@ from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from typing import Tuple
 
-from iwave import dispersion, spectral
+from iwave import dispersion
 
 def cost_function_velocity(
     velocity: Tuple[float, float],
@@ -162,7 +162,8 @@ def nsp_inv(
         cost function to be minimised
 
     """
-    spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    # spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    spectra_correlation = measured_spectrum * synthetic_spectrum /np.sum(synthetic_spectrum) # calculate correlation
     cost = 1 / np.sum(spectra_correlation) # calculate cost function
 
     return cost
@@ -174,7 +175,7 @@ def spectrum_preprocessing(
         ky: np.ndarray,
         kx: np.ndarray,
         velocity_threshold: float,
-        spectrum_threshold: float=2
+        spectrum_threshold: float=1
 ) -> np.ndarray:
     """
     pre-processing of the measured spectrum to improve convergence of the optimisation
@@ -212,14 +213,14 @@ def spectrum_preprocessing(
     preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
     # apply threshold
-    threshold = spectrum_threshold 
+    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis = 1, keepdims = True)
     preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
 
     # set the first slice (frequency=0) to 0
     preprocessed_spectrum[:,0,:,:] = 0
 
     kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
-
+    
     # set all frequencies higher than the threshold frequency to 0
     kt_reshaped = kt[:, np.newaxis, np.newaxis] # reshape kt to be broadcastable
     kt_threshold_bc = np.broadcast_to(kt_threshold, (kt.shape[0], kt_threshold.shape[1], kt_threshold.shape[2])) # broadcast kt_threshold to match the dimensions of kt
@@ -264,7 +265,7 @@ def dispersion_threshold(
     """
 
     # create 2D wavenumber grid
-    ky, kx = np.meshgrid(ky, kx)
+    kx, ky = np.meshgrid(kx, ky)
 
     # transpose to 1 x N_y x N_x
     ky = np.expand_dims(ky, axis=0)
