@@ -34,10 +34,13 @@ The API of the code can:
 * Slice these into "interrogation window" for which x- and y-directional velocities must be estimated
 * Analyze advective velocities per interrogation window using the spectral analysis.
 
+> [!NOTE]
+> The methods behind IWaVE can in principle also resolve the depth of the stream at each window area of interest. 
+> This method however, is not yet stable enough for us to release. We will work on this in the coming period. 
 
 ## Installation
 
-To install IWaVE, setup a python (virtual) environment and follow the instructions 
+To install IWaVE, set up a python (virtual) environment and follow the instructions 
 below:
 
 For a direct installation of the latest release, please activate your environment if 
@@ -124,7 +127,7 @@ print(f"Shape of the available images is {iw.imgs.shape}")
 # show the shape of the manipulated windows
 print(f"Shape of the available images is {iw.windows.shape}")
 
-# Get the spectra of all windows and filter spectra with a spectral threshold of 2.0
+# Get the spectra of all windows and filter spectra with a spectral threshold of 1.0
 iw.get_spectra(threshold=1.0)
 
 # create a new figure with two subplots in one row

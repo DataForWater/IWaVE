@@ -273,8 +273,26 @@ class Iwave(object):
             See :py:func:`matplotlib.pyplot.pcolormesh` for options.
         """
         spectrum_sel = self.spectrum[window_idx]
-        kt_waves_theory, kt_advected_theory = dispersion.dispersion(self.ky, self.kx, [self.v[window_idx], self.u[window_idx]], depth=1, vel_indx=0.85)
-        p = io.plot_spectrum_fitted(spectrum_sel, kt_waves_theory, kt_advected_theory, self.kt, self.ky, self.kx, dim, slice, ax=ax, log=log, **kwargs)
+        kt_waves_theory, kt_advected_theory = dispersion.dispersion(
+            self.ky,
+            self.kx,
+            (self.v.flatten()[window_idx], self.u.flatten()[window_idx]),
+            depth=1,
+            vel_indx=0.85
+        )
+        p = io.plot_spectrum_fitted(
+            spectrum_sel,
+            kt_waves_theory,
+            kt_advected_theory,
+            self.kt,
+            self.ky,
+            self.kx,
+            dim,
+            slice,
+            ax=ax,
+            log=log,
+            **kwargs
+        )
         return p
 
     def read_imgs(self, path: str, fps: float, wildcard: str = None):
