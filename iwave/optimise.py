@@ -404,6 +404,7 @@ def cost_function_velocity_depth_wrapper(
     x: Tuple[float, float, float],
     *args
 ) -> float:
+    # TODO: can this use cost_function_velocity?
     return cost_function_velocity_depth(x, *args)
 
 
