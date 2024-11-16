@@ -222,8 +222,6 @@ def plot_spectrum_fitted(
                 # define middle of dimension
                 slice = spectrum.shape[-2] // 2
             imvals = spectrum[:, slice, :]
-            print(f"kt_waves dim = {kt_waves_theory.shape}")
-            print(f"kt_adv dim = {kt_advected_theory.shape}")
             linevals_waves = np.squeeze(kt_waves_theory[0,slice,:])
             linevals_advected = np.squeeze(kt_advected_theory[0,slice,:])
         case "time":
