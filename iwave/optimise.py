@@ -16,6 +16,7 @@ def cost_function_velocity(
     res: float,
     fps: float,
     gauss_width: float,
+    regularisation_param: float,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
 ) -> float:
@@ -49,6 +50,10 @@ def cost_function_velocity(
     
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
+        
+    regularisation_param: float
+        regularisation factor. A larger value will reduce the risk of outliers, but may cause a small underestimation of the velocity.
+        setting regularisation_param = 0 will disable the regularisation.
 
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
@@ -72,6 +77,11 @@ def cost_function_velocity(
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
+    
+    # regularisation: add a penalisation proportional to the non-dimensionalised velocity modulus
+    # TODO: at the moment the reference velocity is based on data resolution. This may be replaced with the average of velocity 
+    # bounds, or with smax.
+    cost_function = cost_function*(1 + regularisation_param*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 def cost_function_velocity_depth(
@@ -82,6 +92,7 @@ def cost_function_velocity_depth(
     res: float,
     fps: float,
     gauss_width: float,
+    regularisation_param: float,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
 ) -> float: 
@@ -113,6 +124,10 @@ def cost_function_velocity_depth(
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
 
+    regularisation_param: float
+        regularisation factor. A larger value will reduce the risk of outliers, but may cause a small underestimation of the velocity.
+        setting regularisation_param = 0 will disable the regularisation.
+
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
@@ -138,6 +153,9 @@ def cost_function_velocity_depth(
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
+    
+    # regularisation: add a penalisation proportional to the non-dimensionalised velocity modulus
+    cost_function = cost_function*(1 + regularisation_param*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 
@@ -293,6 +311,7 @@ def optimize_single_spectrum_velocity(
     res: float, 
     fps: float,
     gauss_width: float,
+    regularisation_param: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
     kwargs: dict
@@ -300,7 +319,7 @@ def optimize_single_spectrum_velocity(
     opt = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=bnds,
-        args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
+        args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, gauss_width, regularisation_param, gravity_waves_switch, turbulence_switch),
         **kwargs
     )
     return float(opt.x[0]), float(opt.x[1]), float(opt.fun)
@@ -317,6 +336,7 @@ def optimise_velocity(
     res: float, 
     fps: float,
     gauss_width: float=1,
+    regularisation_param: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     **kwargs
@@ -352,6 +372,10 @@ def optimise_velocity(
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
 
+    regularisation_param: float
+        regularisation factor. A larger value will reduce the risk of outliers, but may cause a small underestimation of the velocity.
+        setting regularisation_param = 0 will disable the regularisation.
+
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
@@ -379,7 +403,7 @@ def optimise_velocity(
     """
 
     args_list = [
-        (measured_spectrum, bnds, depth, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch, kwargs)
+        (measured_spectrum, bnds, depth, vel_indx, window_dims, res, fps, gauss_width, regularisation_param, gravity_waves_switch, turbulence_switch, kwargs)
         for measured_spectrum in measured_spectra
     ]
 
@@ -415,6 +439,7 @@ def optimize_single_spectrum_velocity_depth(
     res: float, 
     fps: float,
     gauss_width: float,
+    regularisation_param: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
     kwargs: dict
@@ -423,7 +448,7 @@ def optimize_single_spectrum_velocity_depth(
     opt = optimize.differential_evolution(
         cost_function_velocity_depth_wrapper,
         bounds=bnds,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
+        args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, regularisation_param, gravity_waves_switch, turbulence_switch),
         **kwargs
     )
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
@@ -442,6 +467,7 @@ def optimise_velocity_depth(
     res: float, 
     fps: float,
     gauss_width: float=1,
+    regularisation_param: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     **kwargs
@@ -474,6 +500,10 @@ def optimise_velocity_depth(
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
 
+    regularisation_param: float
+        regularisation factor. A larger value will reduce the risk of outliers, but may cause a small underestimation of the velocity.
+        setting regularisation_param = 0 will disable the regularisation.
+
     gravity_waves_switch : bool=True
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
@@ -504,7 +534,7 @@ def optimise_velocity_depth(
     """
     
     args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch, kwargs)
+        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, gauss_width, regularisation_param, gravity_waves_switch, turbulence_switch, kwargs)
         for measured_spectrum in measured_spectra
     ]
 
