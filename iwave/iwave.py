@@ -75,6 +75,7 @@ class Iwave(object):
             self.imgs = None
         self.u = None
         self.v = None
+        self.quality = None
 
     def __repr__(self):
         if self.imgs is not None:
@@ -367,6 +368,8 @@ class Iwave(object):
         )
         self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
         self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+        quality_parameter = 10-np.log10(optimal[:, 2])
+        self.quality = quality_parameter.reshape(len(self.y), len(self.x))
 
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
