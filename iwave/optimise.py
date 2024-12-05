@@ -252,7 +252,9 @@ def spectrum_preprocessing(
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
 
     # normalisation
-    preprocessed_spectrum = preprocessed_spectrum / np.sum(measured_spectrum, axis=(1, 2, 3), keepdims = True)
+    spectrum_sum = np.sum(measured_spectrum, axis=(1, 2, 3), keepdims = True)
+    if not np.isnan(spectrum_sum)
+        preprocessed_spectrum = preprocessed_spectrum / spectrum_sum
     return preprocessed_spectrum
 
 def dispersion_threshold(
