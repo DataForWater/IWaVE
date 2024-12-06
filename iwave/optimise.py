@@ -251,10 +251,10 @@ def spectrum_preprocessing(
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
 
-    # normalisation
-    spectrum_sum = np.sum(measured_spectrum, axis=(1, 2, 3), keepdims = True)
-    if not np.isnan(spectrum_sum)
-        preprocessed_spectrum = preprocessed_spectrum / spectrum_sum
+    # normalisation. The where condition deals with the possibility of preprocessed_spectrum being everywhere = 0, e.g., 
+    # due to the window covering entirely a blank region of an image following rectification.
+    spectrum_sum = np.sum(preprocessed_spectrum, axis=(1, 2, 3), keepdims=True)
+    preprocessed_spectrum = np.where(np.isnan(spectrum_sum), preprocessed_spectrum, preprocessed_spectrum / spectrum_sum)
     return preprocessed_spectrum
 
 def dispersion_threshold(
