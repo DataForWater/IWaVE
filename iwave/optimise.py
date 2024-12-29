@@ -162,10 +162,9 @@ def nsp_inv(
         cost function to be minimised
 
     """
-    # spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    spectra_correlation = measured_spectrum * synthetic_spectrum /np.sum(synthetic_spectrum) # calculate correlation
-    cost = 1 / np.sum(spectra_correlation) # calculate cost function
-
+    spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    cost = np.sum(synthetic_spectrum) * np.sum(measured_spectrum) / np.sum(spectra_correlation) # calculate cost function
+    
     return cost
 
 

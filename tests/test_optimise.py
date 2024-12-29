@@ -24,7 +24,7 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
     cost = optimise.nsp_inv(synthetic_spectrum,synthetic_spectrum)
-    expected_cost = np.sum(synthetic_spectrum) / np.sum(synthetic_spectrum**2)
+    expected_cost = np.sum(synthetic_spectrum)**2 / np.sum(synthetic_spectrum**2)
     #test if the auto-correlation matches the theoretical expectation based on a synthetic spectrum
     assert np.allclose(cost, expected_cost)
 
@@ -153,7 +153,7 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     assert cost_13 > cost_11
 
 
-@pytest.mark.skip(reason="Optimization with depth is not yet stable")
+# @pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     """Check hypothetical case optimization with depth for one single window."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
