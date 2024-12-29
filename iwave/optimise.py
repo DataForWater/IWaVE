@@ -7,7 +7,7 @@ from typing import Tuple
 
 from iwave import dispersion
 
-def cost_function_velocity_depth(
+def cost_function_velocity(
     x: Tuple[float, float, float],
     measured_spectrum: np.ndarray,
     vel_indx: float,
@@ -209,14 +209,14 @@ def dispersion_threshold(
     return k_mod*velocity_threshold
 
 
-def cost_function_velocity_depth_wrapper(
+def cost_function_velocity_wrapper(
     x: Tuple[float, float, float],
     *args
 ) -> float:
-    return cost_function_velocity_depth(x, *args)
+    return cost_function_velocity(x, *args)
 
 
-def optimize_single_spectrum_velocity_depth(
+def optimize_single_spectrum_velocity(
     measured_spectrum: np.ndarray,
     bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
     vel_indx: float,
@@ -230,7 +230,7 @@ def optimize_single_spectrum_velocity_depth(
 ) -> Tuple[float, float, float, float]:
     bnds[2] = np.log(bnds[2]) # transform the boundaries for the depth parameter to improve convergence
     opt = optimize.differential_evolution(
-        cost_function_velocity_depth_wrapper,
+        cost_function_velocity_wrapper,
         bounds=bnds,
         args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch),
         **kwargs
@@ -239,11 +239,11 @@ def optimize_single_spectrum_velocity_depth(
     return float(opt.x[0]), float(opt.x[1]), float(opt.x[2]), float(opt.fun)
 
 
-def optimize_single_spectrum_velocity_depth_unpack(args):
-    return optimize_single_spectrum_velocity_depth(*args)
+def optimize_single_spectrum_velocity_unpack(args):
+    return optimize_single_spectrum_velocity(*args)
 
 
-def optimise_velocity_depth(
+def optimise_velocity(
     measured_spectra: np.ndarray,
     bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
     vel_indx: float,
@@ -320,7 +320,7 @@ def optimise_velocity_depth(
     with ProcessPoolExecutor() as executor:
         results = list(
             tqdm(
-                executor.map(optimize_single_spectrum_velocity_depth_unpack, args_list),
+                executor.map(optimize_single_spectrum_velocity_unpack, args_list),
                 total=len(args_list),
                 desc="Optimizing windows"
             )

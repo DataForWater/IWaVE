@@ -363,7 +363,7 @@ class Iwave(object):
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-        optimal = optimise.optimise_velocity_depth(
+        optimal = optimise.optimise_velocity(
             self.spectrum,
             bounds,
             alpha,
