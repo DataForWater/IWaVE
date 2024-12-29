@@ -36,7 +36,10 @@ class Iwave(object):
         fps: Optional[float] = None,
         imgs: Optional[np.ndarray] = None,
         norm: Optional[Literal["time", "xy"]] = "time",
-        smax: Optional[float] = 4.0
+        smax: Optional[float] = 4.0,
+        penalty_weight: Optional[float]=1,
+        gravity_waves_switch: Optional[bool]=True,
+        turbulence_switch: Optional[bool]=True,
     ):
         """Initialize an Iwave instance.
 
@@ -60,6 +63,19 @@ class Iwave(object):
             Normalization to apply over subwindowed images, either over time ("time") or space ("xy").
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
+        penalty_weight : float, optional
+            Parameter to reduce the risk of outliers by penalising solutions with high velocity modulus.
+            Inactive if set to 0. Defaults to 1. 
+            Outliers can be frequent if smax > 2 * flow velocity. Increase penalty_weight only if reducing smax 
+            is not possible, since setting penalty_weight > 0 may introduce a bias.
+        gravity_waves_switch: bool, optional
+            If True, gravity waves are modelled. If False, gravity waves are NOT modelled. Default True. 
+            Setting gravity_waves_swtich = False may improve performance if floating tracers dominate the scene and waves are minimal.
+        turbulence_switch: bool=True
+            If True, turbulence-generated patterns and/or floating particles are modelled. If False, 
+            turbulence-generated patterns and/or floating particles are NOT modelled. Default True.
+            Setting turbulence_switch = False may improve performance if water waves dominate the scene, or if tracers
+            dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
         """
         self.resolution = resolution
         self.window_size = window_size
@@ -69,6 +85,9 @@ class Iwave(object):
         self.norm = norm
         self.smax = smax
         self.fps = fps
+        self.penalty_weight = penalty_weight
+        self.gravity_waves_switch = gravity_waves_switch
+        self.turbulence_switch = turbulence_switch
         if imgs is not None:
             self.imgs = imgs
         else:
@@ -360,10 +379,10 @@ class Iwave(object):
             img_size,
             self.resolution,
             self.fps,
+            self.penalty_weight,  
+            self.gravity_waves_switch, 
+            self.turbulence_switch, 
             gauss_width=1,  # TODO: figure out defaults
-            penalty_weight=1,  # TODO: figure out defaults
-            gravity_waves_switch=True,  # TODO: figure out defaults
-            turbulence_switch=True,  # TODO: figure out defaults
             **OPTIM_KWARGS
         )
         self.u = optimal[:, 1].reshape(len(self.y), len(self.x))

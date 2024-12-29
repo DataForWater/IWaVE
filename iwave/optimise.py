@@ -15,10 +15,10 @@ def cost_function_velocity(
     window_dims: Tuple[int, int, int],
     res: float,
     fps: float,
+    penalty_weight: float,
+    gravity_waves_switch: bool,
+    turbulence_switch: bool,
     gauss_width: float,
-    penalty_weight: float=1,
-    gravity_waves_switch: bool=True,
-    turbulence_switch: bool=True,
 ) -> float:
     """
     Creates a synthetic spectrum based on guessed parameters, 
@@ -48,16 +48,13 @@ def cost_function_velocity(
     fps: float
         image acquisition rate (fps)
     
-    gauss_width: float
-        width of the synthetic spectrum smoothing kernel
-        
-    penalty_weight: float
+    penalty_weight: float=1
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
         solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
         underestimate the velocity. Setting penalty_weight = 0 will eliminate the bias, but may produce more outliers.
-        If the velocity magnitude can be predicted reasonably, setting smax < 2x the typical velocity and setting 
+        If the velocity magnitude can be predicted reasonably, setting smax < 2 * the typical velocity and setting 
         penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch: bool=True
@@ -68,6 +65,9 @@ def cost_function_velocity(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
 
+    gauss_width: float
+        width of the synthetic spectrum smoothing kernel
+        
     Returns
     -------
     cost_function : float
@@ -96,10 +96,10 @@ def cost_function_velocity_depth(
     window_dims: Tuple[int, int, int],
     res: float,
     fps: float,
+    penalty_weight: float,
+    gravity_waves_switch: bool,
+    turbulence_switch: bool,
     gauss_width: float,
-    penalty_weight: float=1,
-    gravity_waves_switch: bool=True,
-    turbulence_switch: bool=True,
 ) -> float: 
     """
     Creates a synthetic spectrum based on guessed parameters, 
@@ -126,16 +126,13 @@ def cost_function_velocity_depth(
     fps: float
         image acquisition rate (fps)
     
-    gauss_width: float
-        width of the synthetic spectrum smoothing kernel
-
-    penalty_weight: float
+    penalty_weight: float=1
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
         solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
         underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
-        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2x the 
+        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2 * the 
         typical velocity and setting penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch: bool=True
@@ -145,6 +142,9 @@ def cost_function_velocity_depth(
     turbulence_switch: bool=True
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
+
+    gauss_width: float
+        width of the synthetic spectrum smoothing kernel
 
     Returns
     -------
@@ -322,16 +322,16 @@ def optimize_single_spectrum_velocity(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    gauss_width: float,
     penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
+    gauss_width: float,
     kwargs: dict
 ) -> Tuple[float, float, float]:
     opt = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=bnds,
-        args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch),
+        args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
         **kwargs
     )
     return float(opt.x[0]), float(opt.x[1]), float(opt.fun)
@@ -347,10 +347,10 @@ def optimise_velocity(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    gauss_width: float=1,
     penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
+    gauss_width: float=1,
     **kwargs
 ) -> np.ndarray:
     """
@@ -380,17 +380,13 @@ def optimise_velocity(
     fps: float
         image acquisition rate (fps)
     
-    gauss_width: float=1
-        width of the synthetic spectrum smoothing kernel.
-        gauss_width > 1 could be useful with very noisy spectra.
-
-    penalty_weight: float
+    penalty_weight: float=1
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
         solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
         underestimate the velocity. Setting penalty_weight = 0 will eliminate the bias, but may produce more outliers.
-        If the velocity magnitude can be predicted reasonably, setting smax < 2x the typical velocity and setting 
+        If the velocity magnitude can be predicted reasonably, setting smax < 2 * the typical velocity and setting 
         penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch: bool=True
@@ -400,6 +396,10 @@ def optimise_velocity(
     turbulence_switch: bool=True
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
+
+    gauss_width: float=1
+        width of the synthetic spectrum smoothing kernel.
+        gauss_width > 1 could be useful with very noisy spectra.
 
     **kwargs : dict
         keyword arguments to pass to `scipy.optimize.differential_evolution, see also
@@ -420,7 +420,7 @@ def optimise_velocity(
     """
 
     args_list = [
-        (measured_spectrum, bnds, depth, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch, kwargs)
+        (measured_spectrum, bnds, depth, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, kwargs)
         for measured_spectrum in measured_spectra
     ]
 
@@ -455,17 +455,17 @@ def optimize_single_spectrum_velocity_depth(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    gauss_width: float,
     penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
+    gauss_width: float,
     kwargs: dict
 ) -> Tuple[float, float, float, float]:
     bnds[2] = np.log(bnds[2]) # transform the boundaries for the depth parameter to improve convergence
     opt = optimize.differential_evolution(
         cost_function_velocity_depth_wrapper,
         bounds=bnds,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch),
+        args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
         **kwargs
     )
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
@@ -483,10 +483,10 @@ def optimise_velocity_depth(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    gauss_width: float=1,
     penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
+    gauss_width: float=1,
     **kwargs
 ) -> np.ndarray:
     """
@@ -513,17 +513,13 @@ def optimise_velocity_depth(
     fps : float
         image acquisition rate (fps)
     
-    gauss_width : float=1
-        width of the synthetic spectrum smoothing kernel.
-        gauss_width > 1 could be useful with very noisy spectra.
-
-    penalty_weight: float
+    penalty_weight: float=1
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
         solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
         underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
-        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2x the 
+        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2 * the 
         typical velocity and setting penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch : bool=True
@@ -533,6 +529,10 @@ def optimise_velocity_depth(
     turbulence_switch : bool=True
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
+
+    gauss_width : float=1
+        width of the synthetic spectrum smoothing kernel.
+        gauss_width > 1 could be useful with very noisy spectra.
 
     **kwargs : dict
         keyword arguments to pass to `scipy.optimize.differential_evolution, see also
@@ -556,7 +556,7 @@ def optimise_velocity_depth(
     """
     
     args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch, kwargs)
+        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, kwargs)
         for measured_spectrum in measured_spectra
     ]
 
