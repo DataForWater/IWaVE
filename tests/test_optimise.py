@@ -82,14 +82,13 @@ def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
         gravity_waves_switch=True,
         turbulence_switch=True
     )
-    bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max)]
+    bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth, depth)]
     t1 = time.time()
 
     synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
-    optimal = optimise.optimise_velocity(
+    optimal = optimise.optimise_velocity_depth(
         synthetic_spectrum,
         bounds,
-        depth,
         velocity_indx,
         img_size,
         res,

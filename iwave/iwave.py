@@ -357,13 +357,15 @@ class Iwave(object):
         depth=1.,
     ):
         # set search bounds to -/+ maximym velocity for both directions
-        bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
+        if depth==0:
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+        else:
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-        optimal = optimise.optimise_velocity(
+        optimal = optimise.optimise_velocity_depth(
             self.spectrum,
             bounds,
-            depth,
             alpha,
             img_size,
             self.resolution,
@@ -375,6 +377,7 @@ class Iwave(object):
         )
         self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
         self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+        self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
 
     
     def bathyvelocimetry(
