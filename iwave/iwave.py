@@ -361,7 +361,7 @@ class Iwave(object):
             self.resolution,
             self.fps,
             gauss_width=1,  # TODO: figure out defaults
-            stiffness=1,  # TODO: figure out defaults
+            penalty_weight=1,  # TODO: figure out defaults
             gravity_waves_switch=True,  # TODO: figure out defaults
             turbulence_switch=True,  # TODO: figure out defaults
             **OPTIM_KWARGS

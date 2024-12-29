@@ -16,7 +16,7 @@ def cost_function_velocity(
     res: float,
     fps: float,
     gauss_width: float,
-    stiffness: float=1,
+    penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
 ) -> float:
@@ -51,14 +51,14 @@ def cost_function_velocity(
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
         
-    stiffness: float
+    penalty_weight: float
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The stiffness parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting stiffness > 0 will produce more stable results, but may slightly
-        underestimate the velocity. Setting stiffness = 0 will eliminate the bias, but may produce more outliers.
+        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
+        underestimate the velocity. Setting penalty_weight = 0 will eliminate the bias, but may produce more outliers.
         If the velocity magnitude can be predicted reasonably, setting smax < 2x the typical velocity and setting 
-        stiffness = 0 will provide the most accurate results.
+        penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
@@ -86,7 +86,7 @@ def cost_function_velocity(
     # add a penalisation proportional to the non-dimensionalised velocity modulus
     # TODO: at the moment the reference velocity is based on data resolution. This may be replaced with the average of velocity 
     # bounds, or with smax.
-    cost_function = cost_function*(1 + 0.1*stiffness*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + 0.1*penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 def cost_function_velocity_depth(
@@ -97,7 +97,7 @@ def cost_function_velocity_depth(
     res: float,
     fps: float,
     gauss_width: float,
-    stiffness: float=1,
+    penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
 ) -> float: 
@@ -129,14 +129,14 @@ def cost_function_velocity_depth(
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
 
-    stiffness: float
+    penalty_weight: float
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The stiffness parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting stiffness > 0 will produce more stable results, but may slightly
-        underestimate the velocity and overestimate the depth. Setting stiffness = 0 will eliminate the bias, 
+        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
+        underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
         but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2x the 
-        typical velocity and setting stiffness = 0 will provide the most accurate results.
+        typical velocity and setting penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
@@ -165,7 +165,7 @@ def cost_function_velocity_depth(
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 0.1*stiffness*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + 0.1*penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 
@@ -323,7 +323,7 @@ def optimize_single_spectrum_velocity(
     res: float, 
     fps: float,
     gauss_width: float,
-    stiffness: float,
+    penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
     kwargs: dict
@@ -331,7 +331,7 @@ def optimize_single_spectrum_velocity(
     opt = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=bnds,
-        args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, gauss_width, stiffness, gravity_waves_switch, turbulence_switch),
+        args=(measured_spectrum, depth, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch),
         **kwargs
     )
     return float(opt.x[0]), float(opt.x[1]), float(opt.fun)
@@ -348,7 +348,7 @@ def optimise_velocity(
     res: float, 
     fps: float,
     gauss_width: float=1,
-    stiffness: float=1,
+    penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     **kwargs
@@ -384,14 +384,14 @@ def optimise_velocity(
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
 
-    stiffness: float
+    penalty_weight: float
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The stiffness parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting stiffness > 0 will produce more stable results, but may slightly
-        underestimate the velocity. Setting stiffness = 0 will eliminate the bias, but may produce more outliers.
+        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
+        underestimate the velocity. Setting penalty_weight = 0 will eliminate the bias, but may produce more outliers.
         If the velocity magnitude can be predicted reasonably, setting smax < 2x the typical velocity and setting 
-        stiffness = 0 will provide the most accurate results.
+        penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
@@ -420,7 +420,7 @@ def optimise_velocity(
     """
 
     args_list = [
-        (measured_spectrum, bnds, depth, vel_indx, window_dims, res, fps, gauss_width, stiffness, gravity_waves_switch, turbulence_switch, kwargs)
+        (measured_spectrum, bnds, depth, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch, kwargs)
         for measured_spectrum in measured_spectra
     ]
 
@@ -456,7 +456,7 @@ def optimize_single_spectrum_velocity_depth(
     res: float, 
     fps: float,
     gauss_width: float,
-    stiffness: float,
+    penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
     kwargs: dict
@@ -465,7 +465,7 @@ def optimize_single_spectrum_velocity_depth(
     opt = optimize.differential_evolution(
         cost_function_velocity_depth_wrapper,
         bounds=bnds,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, stiffness, gravity_waves_switch, turbulence_switch),
+        args=(measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch),
         **kwargs
     )
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
@@ -484,7 +484,7 @@ def optimise_velocity_depth(
     res: float, 
     fps: float,
     gauss_width: float=1,
-    stiffness: float=1,
+    penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     **kwargs
@@ -517,14 +517,14 @@ def optimise_velocity_depth(
         width of the synthetic spectrum smoothing kernel.
         gauss_width > 1 could be useful with very noisy spectra.
 
-    stiffness: float
+    penalty_weight: float
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2x the actual velocity. The stiffness parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting stiffness > 0 will produce more stable results, but may slightly
-        underestimate the velocity and overestimate the depth. Setting stiffness = 0 will eliminate the bias, 
+        when smax > 2x the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
+        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
+        underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
         but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2x the 
-        typical velocity and setting stiffness = 0 will provide the most accurate results.
+        typical velocity and setting penalty_weight = 0 will provide the most accurate results.
 
     gravity_waves_switch : bool=True
         if True, gravity waves are modelled
@@ -556,7 +556,7 @@ def optimise_velocity_depth(
     """
     
     args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, gauss_width, stiffness, gravity_waves_switch, turbulence_switch, kwargs)
+        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, gauss_width, penalty_weight, gravity_waves_switch, turbulence_switch, kwargs)
         for measured_spectrum in measured_spectra
     ]
 

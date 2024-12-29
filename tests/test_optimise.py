@@ -44,17 +44,17 @@ def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
     )
     cost_11 = optimise.cost_function_velocity(
         velocity_1, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1, stiffness = 1,
+        img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
     cost_12 = optimise.cost_function_velocity(
         velocity_2, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1, stiffness = 1,
+        img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
     cost_13 = optimise.cost_function_velocity(
         velocity_3, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1, stiffness = 1,
+        img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
     #test if the cost function increases when the velocity deviates from optimal
@@ -135,17 +135,17 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     )
     cost_11 = optimise.cost_function_velocity_depth(
         params_1, synthetic_spectrum_1, vel_indx,
-        img_size, res, fps, gauss_width=1, stiffness = 1,
+        img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
     cost_12 = optimise.cost_function_velocity_depth(
         params_2, synthetic_spectrum_1, vel_indx,
-        img_size, res, fps, gauss_width=1, stiffness = 1,
+        img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
     cost_13 = optimise.cost_function_velocity_depth(
         params_3, synthetic_spectrum_1, vel_indx,
-        img_size, res, fps, gauss_width=1, stiffness = 1,
+        img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
     #test if the cost function increases when the depth deviates from optimal
