@@ -354,10 +354,10 @@ class Iwave(object):
     def velocimetry(
         self,
         alpha=0.85,
-        depth=1.,
+        depth=1.,  # If depth = 0, then the water depth is estimated.
     ):
-        # set search bounds to -/+ maximym velocity for both directions
-        if depth==0:
+        # set search bounds to -/+ maximum velocity for both directions
+        if depth==0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
