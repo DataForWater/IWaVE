@@ -380,31 +380,6 @@ class Iwave(object):
         self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
 
     
-    def bathyvelocimetry(
-        self,
-        alpha=0.85,
-    ):
-        # set search bounds to -/+ maximym velocity for both directions
-        bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
-        # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
-        img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-        optimal = optimise.optimise_velocity_depth(
-            self.spectrum,
-            bounds,
-            alpha,
-            img_size,
-            self.resolution,
-            self.fps,
-            gauss_width=1,  # TODO: figure out defaults
-            gravity_waves_switch=True,  # TODO: figure out defaults
-            turbulence_switch=True,  # TODO: figure out defaults
-            **OPTIM_KWARGS
-        )
-        self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
-        self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
-        self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
-
-
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
             ax = plt.axes()

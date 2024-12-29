@@ -27,39 +27,6 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     expected_cost = np.sum(synthetic_spectrum)**2 / np.sum(synthetic_spectrum**2)
     #test if the auto-correlation matches the theoretical expectation based on a synthetic spectrum
     assert np.allclose(cost, expected_cost)
-
-
-def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
-    """Check cost function (without depth) against expected gradients."""
-    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
-    velocity_1 = [1, 0]
-    velocity_2 = [1.01, 0]
-    velocity_3 = [0.99, 0]
-    depth = 1
-    vel_indx=1
-    kt_gw_1, kt_turb_1 = dispersion.dispersion(ky, kx, velocity_1, depth, vel_indx)
-    synthetic_spectrum_1 = dispersion.theoretical_spectrum(
-        kt_gw_1,kt_turb_1, kt, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_11 = optimise.cost_function_velocity(
-        velocity_1, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_12 = optimise.cost_function_velocity(
-        velocity_2, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_13 = optimise.cost_function_velocity(
-        velocity_3, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    #test if the cost function increases when the velocity deviates from optimal
-    assert cost_12 > cost_11
-    assert cost_13 > cost_11
     
 
 def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
