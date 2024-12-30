@@ -12,7 +12,7 @@ def get_sheaf_dataset():
         raise ImportError("This function needs pooch. Install iwave with pip install iwave[extra]")
     # Define the DOI link
     filename = "Fersina_20230630.avi"
-    base_url = "doi:10.5281/zenodo.13935860"
+    base_url = "doi:10.5281/zenodo.13935859"
     url = base_url + "/" + filename
     print(f"Retrieving or providing cached version of dataset from {url}")
     # Create a Pooch registry to manage downloads
@@ -32,7 +32,7 @@ def get_sheaf_dataset():
     return file_path
 
 
-def get_sheaf_windows(start_frame=0, end_frame=200, window_size=(64, 64), overlap=(32, 32), max_windows=4):
+def get_sheaf_windows(start_frame=0, end_frame=500, window_size=(64, 64), overlap=(32, 32), max_windows=4):
     src_path = get_sheaf_dataset()
     dst_path = os.path.join(
         os.path.split(src_path)[0], "windows_{:04d}_{:04d}.bin".format(start_frame, end_frame)
