@@ -86,7 +86,7 @@ def cost_function_velocity(
     # add a penalisation proportional to the non-dimensionalised velocity modulus
     # TODO: at the moment the reference velocity is based on data resolution. This may be replaced with the average of velocity 
     # bounds, or with smax.
-    cost_function = cost_function*(1 + 0.1*penalty_weight*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 def cost_function_velocity_depth(
@@ -165,7 +165,7 @@ def cost_function_velocity_depth(
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 0.1*penalty_weight*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 
