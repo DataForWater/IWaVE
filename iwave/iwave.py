@@ -36,7 +36,9 @@ class Iwave(object):
         fps: Optional[float] = None,
         imgs: Optional[np.ndarray] = None,
         norm: Optional[Literal["time", "xy"]] = "time",
-        smax: Optional[float] = 4.0
+        smax: Optional[float] = 4.0,
+        dmin: Optional[float] = 0.01,
+        dmax: Optional[float] = 3.0
     ):
         """Initialize an Iwave instance.
 
@@ -60,6 +62,10 @@ class Iwave(object):
             Normalization to apply over subwindowed images, either over time ("time") or space ("xy").
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
+        dmin : float, optional
+            Minimum depth expected in the scene. Defaults to 0.01 m
+        dmax : float, optional
+            Maximum depth expected in the scene. Defaults to 3 m
         """
         self.resolution = resolution
         self.window_size = window_size
@@ -68,6 +74,8 @@ class Iwave(object):
         self.time_overlap = time_overlap
         self.norm = norm
         self.smax = smax
+        self.dmin = dmin
+        self.dmax = dmax
         self.fps = fps
         if imgs is not None:
             self.imgs = imgs
@@ -346,16 +354,18 @@ class Iwave(object):
     def velocimetry(
         self,
         alpha=0.85,
-        depth=1.,
+        depth=1.,  # If depth = 0, then the water depth is estimated.
     ):
-        # set search bounds to -/+ maximym velocity for both directions
-        bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
+        # set search bounds to -/+ maximum velocity for both directions
+        if depth==0:  # If depth = 0, then the water depth is estimated.
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+        else:
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
         optimal = optimise.optimise_velocity(
             self.spectrum,
             bounds,
-            depth,
             alpha,
             img_size,
             self.resolution,
@@ -367,7 +377,9 @@ class Iwave(object):
         )
         self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
         self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+        self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
 
+    
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
             ax = plt.axes()

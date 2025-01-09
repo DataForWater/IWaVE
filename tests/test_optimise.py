@@ -24,42 +24,9 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
     cost = optimise.nsp_inv(synthetic_spectrum,synthetic_spectrum)
-    expected_cost = np.sum(synthetic_spectrum) / np.sum(synthetic_spectrum**2)
+    expected_cost = np.sum(synthetic_spectrum)**2 / np.sum(synthetic_spectrum**2)
     #test if the auto-correlation matches the theoretical expectation based on a synthetic spectrum
     assert np.allclose(cost, expected_cost)
-
-
-def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
-    """Check cost function (without depth) against expected gradients."""
-    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
-    velocity_1 = [1, 0]
-    velocity_2 = [1.01, 0]
-    velocity_3 = [0.99, 0]
-    depth = 1
-    vel_indx=1
-    kt_gw_1, kt_turb_1 = dispersion.dispersion(ky, kx, velocity_1, depth, vel_indx)
-    synthetic_spectrum_1 = dispersion.theoretical_spectrum(
-        kt_gw_1,kt_turb_1, kt, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_11 = optimise.cost_function_velocity(
-        velocity_1, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_12 = optimise.cost_function_velocity(
-        velocity_2, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_13 = optimise.cost_function_velocity(
-        velocity_3, synthetic_spectrum_1, depth, vel_indx,
-        img_size, res, fps, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    #test if the cost function increases when the velocity deviates from optimal
-    assert cost_12 > cost_11
-    assert cost_13 > cost_11
     
 
 def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
@@ -82,14 +49,13 @@ def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
         gravity_waves_switch=True,
         turbulence_switch=True
     )
-    bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max)]
+    bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth, depth)]
     t1 = time.time()
 
     synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
     optimal = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
-        depth,
         velocity_indx,
         img_size,
         res,
@@ -112,7 +78,7 @@ def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
     print(f"Original velocity was {velocity}, optimized {optimal}")
 
 
-def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
+def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
     """Check cost function (with depth) against expected gradients."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     depth_1 = 0.30
@@ -133,17 +99,17 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
         gravity_waves_switch=True,
         turbulence_switch=True
     )
-    cost_11 = optimise.cost_function_velocity_depth(
+    cost_11 = optimise.cost_function_velocity(
         params_1, synthetic_spectrum_1, vel_indx,
         img_size, res, fps, gauss_width=1,
         gravity_waves_switch=True, turbulence_switch=True
     )
-    cost_12 = optimise.cost_function_velocity_depth(
+    cost_12 = optimise.cost_function_velocity(
         params_2, synthetic_spectrum_1, vel_indx,
         img_size, res, fps, gauss_width=1,
         gravity_waves_switch=True, turbulence_switch=True
     )
-    cost_13 = optimise.cost_function_velocity_depth(
+    cost_13 = optimise.cost_function_velocity(
         params_3, synthetic_spectrum_1, vel_indx,
         img_size, res, fps, gauss_width=1,
         gravity_waves_switch=True, turbulence_switch=True
@@ -153,7 +119,7 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     assert cost_13 > cost_11
 
 
-@pytest.mark.skip(reason="Optimization with depth is not yet stable")
+# @pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     """Check hypothetical case optimization with depth for one single window."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
@@ -188,7 +154,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     vel_threshold = 5
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]
     t1 = time.time()
-    optimal = optimise.optimise_velocity_depth(
+    optimal = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
         velocity_indx,
