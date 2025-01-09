@@ -190,10 +190,9 @@ def nsp_inv(
         cost function to be minimised
 
     """
-    # spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    spectra_correlation = measured_spectrum * synthetic_spectrum /np.sum(synthetic_spectrum) # calculate correlation
-    cost = 1 / np.sum(spectra_correlation) # calculate cost function
-
+    spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    cost = np.sum(synthetic_spectrum) * np.sum(measured_spectrum) / np.sum(spectra_correlation) # calculate cost function
+    
     return cost
 
 
@@ -308,7 +307,7 @@ def dispersion_threshold(
 
 
 def cost_function_velocity_wrapper(
-    x: Tuple[float, float],
+    x: Tuple[float, float, float],
     *args
 ) -> float:
     return cost_function_velocity(x, *args)
@@ -463,7 +462,7 @@ def optimize_single_spectrum_velocity_depth(
 ) -> Tuple[float, float, float, float]:
     bnds[2] = np.log(bnds[2]) # transform the boundaries for the depth parameter to improve convergence
     opt = optimize.differential_evolution(
-        cost_function_velocity_depth_wrapper,
+        cost_function_velocity_wrapper,
         bounds=bnds,
         args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
         **kwargs
@@ -472,11 +471,11 @@ def optimize_single_spectrum_velocity_depth(
     return float(opt.x[0]), float(opt.x[1]), float(opt.x[2]), float(opt.fun)
 
 
-def optimize_single_spectrum_velocity_depth_unpack(args):
-    return optimize_single_spectrum_velocity_depth(*args)
+def optimize_single_spectrum_velocity_unpack(args):
+    return optimize_single_spectrum_velocity(*args)
 
 
-def optimise_velocity_depth(
+def optimise_velocity(
     measured_spectra: np.ndarray,
     bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
     vel_indx: float,
@@ -563,7 +562,7 @@ def optimise_velocity_depth(
     with ProcessPoolExecutor() as executor:
         results = list(
             tqdm(
-                executor.map(optimize_single_spectrum_velocity_depth_unpack, args_list),
+                executor.map(optimize_single_spectrum_velocity_unpack, args_list),
                 total=len(args_list),
                 desc="Optimizing windows"
             )

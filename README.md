@@ -33,10 +33,10 @@ The API of the code can:
 * ingest a set of frames or frames taken from a video
 * Slice these into "interrogation window" for which x- and y-directional velocities must be estimated
 * Analyze advective velocities per interrogation window using the spectral analysis.
+* Additionally estimate the water depth if unknown.
 
 > [!NOTE]
-> The methods behind IWaVE can in principle also resolve the depth of the stream at each window area of interest. 
-> This method however, is not yet stable enough for us to release. We will work on this in the coming period. 
+> The sensitivity of water surface dynamics to variations in water depth is minimal. Depth estimations have specific requirements (see below) and can be prone to significant errors. Do not rely on depth estimates for any activity that could pose a risk.
 
 ## Installation
 
@@ -91,9 +91,17 @@ loaded any video in memory yet. The inputs have the following meaning:
 * `overlap`: overlaps between the interrogation window. `(64, 64)` here means that an overlap of 50% in both
   directions is applied.
 * `time_size`: a spectral model is fitted over several subsets of frames and then averaged. This reduces noise. You 
-  can define how large slices are. If you for instance read 300 frames, and use a slice_size of 100, 3 subsets of 100 
+  can define how large slices are. If you for instance read 300 frames, and use a time_size of 100, 3 subsets of 100 
   frames are derived, and the spectral model is fitted for all three and then averaged.
 * `time_overlap`: also for the time, overlap can be used, in the same manner as for spatial overlap using `overlap`. 
+
+## Note on uncertainties and resolution
+
+IWaVE employs a spectral approach to compare the observed water surface dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to velocity and water depth (see Dolcetti et al., 2022). 
+* The spectral resolution improves by increasing the window size and/or the time size. Optimal values of `window_size` should be similar to the water depth or larger. `time_size` should be larger than 5 seconds in most applications, ideally around 10 seconds.
+* The spatial and temporal resolution of the videos (e.g., the pixel size and frame rate) are less critical than the spectral resolution for the accuracy of the estimates. Reasonable results can usually be obtained also with a pixel size of ~5 cm and a frame rate of ~10 fps. Consider downsampling the data if memory or computational time are an issue.
+* More averages can significantly improve the convergence of the method. Ideally, one should aim for at least 3 independent slices, regardless of the overlap (e.g., a 30-seconds-long video with a time_size of 10 seconds).
+* Short waves are more sensitive to flow velocity, while long waves are more sensitive to water depth. Therefore, a better spatial resolution (smaller pixel size) can improve velocity estimates, while a better spatial resolution (larger window size) can improve the depth estimates. However, only the waves with a wavelength similar or larger than the water depth feel the presence of the bed and can be used to estimate the water depth. Typically, these long waves form naturally in flows with Froude number in the range 0.4 to 1.0. These long waves (wavelength ~ 2*pi*F**2*depth) must be visible and their wavelength must be smaller than the window size for the depth estimation to be accurate. Otherwise, depth estimates may fail completely due to lack of sensitivity.  
 
 ### Reading in a video
 
@@ -176,7 +184,7 @@ iw = Iwave(
 
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
-  depth=0.3  # depth in [m] has to be known or estimated
+  depth=0.3  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
 )
 
 ax = plt.axes()
@@ -196,6 +204,51 @@ plt.colorbar(p2, ax=axs[1])
 plt.show()
 ```
 This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background.
+
+
+### Estimating water depth as well as x and y-directional velocity
+
+The depth estimation is enabled by setting depth = 0 in iw.velocimetry:
+
+```python
+from iwave import Iwave, sample_data
+import matplotlib.pyplot as plt
+from matplotlib import patches
+
+iw = Iwave(
+    # repeat from example above...
+)
+
+iw.velocimetry(
+  alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+  depth=0  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+)
+
+
+f, axs = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
+# Plot u against y for all x values
+for i in range(iw.u.shape[1]):
+    axs[0].plot(iw.y, iw.u[:, i], "o", label=f'x={iw.x[i]}')
+axs[0].set_title("u vs y")
+axs[0].set_xlabel("y")
+axs[0].set_ylabel("u (m/s)")
+# Plot v against y for all x values
+for i in range(iw.v.shape[1]):
+    axs[1].plot(iw.y, iw.v[:, i], "o", label=f'x={iw.x[i]}')
+axs[1].set_title("v vs y")
+axs[1].set_xlabel("y")
+axs[1].set_ylabel("v (m/s)")
+# Plot d against y for all x values
+for i in range(iw.d.shape[1]):
+    axs[2].plot(iw.y, iw.d[:, i], "o", label=f'x={iw.x[i]}')
+axs[2].set_title("depth vs y")
+axs[2].set_xlabel("y")
+axs[2].set_ylabel("depth (m)")
+plt.show()
+
+```
+This estimates velocities in x and y-directions (u, v) and water depth (d) per interrogation window and plots the results.
+
 ## For developers
 
 To install IWaVE from the source code as developer (i.e. you wish to provide 

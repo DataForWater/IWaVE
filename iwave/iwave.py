@@ -84,6 +84,8 @@ class Iwave(object):
         self.time_overlap = time_overlap
         self.norm = norm
         self.smax = smax
+        self.dmin = dmin
+        self.dmax = dmax
         self.fps = fps
         self.penalty_weight = penalty_weight
         self.gravity_waves_switch = gravity_waves_switch
@@ -365,16 +367,18 @@ class Iwave(object):
     def velocimetry(
         self,
         alpha=0.85,
-        depth=1.,
+        depth=1.,  # If depth = 0, then the water depth is estimated.
     ):
-        # set search bounds to -/+ maximym velocity for both directions
-        bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
+        # set search bounds to -/+ maximum velocity for both directions
+        if depth==0:  # If depth = 0, then the water depth is estimated.
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+        else:
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
         optimal = optimise.optimise_velocity(
             self.spectrum,
             bounds,
-            depth,
             alpha,
             img_size,
             self.resolution,
@@ -387,7 +391,9 @@ class Iwave(object):
         )
         self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
         self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+        self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
 
+    
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
             ax = plt.axes()
