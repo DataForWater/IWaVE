@@ -475,7 +475,7 @@ def optimize_single_spectrum_velocity_unpack(args):
     return optimize_single_spectrum_velocity(*args)
 
 
-def optimise_velocity(
+def optimise_velocity_depth(
     measured_spectra: np.ndarray,
     bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
     vel_indx: float,
