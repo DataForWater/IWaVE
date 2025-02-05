@@ -37,6 +37,8 @@ class Iwave(object):
         imgs: Optional[np.ndarray] = None,
         norm: Optional[Literal["time", "xy"]] = "time",
         smax: Optional[float] = 4.0,
+        dmin: Optional[float] = 0.01,
+        dmax: Optional[float] = 3.0,
         penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
@@ -63,6 +65,10 @@ class Iwave(object):
             Normalization to apply over subwindowed images, either over time ("time") or space ("xy").
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
+        dmin : float, optional
+            Minimum depth expected in the scene. Defaults to 0.01 m
+        dmax : float, optional
+            Maximum depth expected in the scene. Defaults to 3 m
         penalty_weight : float, optional
             Parameter to reduce the risk of outliers by penalising solutions with high velocity modulus.
             Inactive if set to 0. Defaults to 1. 

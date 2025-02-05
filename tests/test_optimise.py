@@ -29,93 +29,6 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     assert np.allclose(cost, expected_cost)
 
     
-def test_cost_function_velocity(img_size=(256, 64, 64), res=0.02, fps=25):
-    """Check cost function (without depth) against expected gradients."""
-    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
-    velocity_1 = [1, 0]
-    velocity_2 = [1.01, 0]
-    velocity_3 = [0.99, 0]
-    depth = 1
-    vel_indx=1
-    kt_gw_1, kt_turb_1 = dispersion.dispersion(ky, kx, velocity_1, depth, vel_indx)
-    synthetic_spectrum_1 = dispersion.theoretical_spectrum(
-        kt_gw_1,kt_turb_1, kt, gauss_width=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_11 = optimise.cost_function_velocity(
-        velocity=velocity_1, measured_spectrum=synthetic_spectrum_1,
-        depth=depth, vel_indx=vel_indx, window_dims=img_size,
-        res=res, fps=fps, penalty_weight=1, gravity_waves_switch=True,
-        turbulence_switch=True, gauss_width=1
-    )
-    cost_12 = optimise.cost_function_velocity(
-        velocity=velocity_2, measured_spectrum=synthetic_spectrum_1,
-        depth=depth, vel_indx=vel_indx, window_dims=img_size,
-        res=res, fps=fps, gauss_width=1, penalty_weight=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    cost_13 = optimise.cost_function_velocity(
-        velocity=velocity_3, measured_spectrum=synthetic_spectrum_1,
-        depth=depth, vel_indx=vel_indx, window_dims=img_size,
-        res=res, fps=fps, gauss_width=1, penalty_weight=1,
-        gravity_waves_switch=True, turbulence_switch=True
-    )
-    #test if the cost function increases when the velocity deviates from optimal
-    assert cost_12 > cost_11
-    assert cost_13 > cost_11
-    
-
-def test_optimise_velocity(img_size=(64, 32, 32), res=0.02, fps=25):
-    """Check hypothetical case optimization without depth (only u, v) for one single window."""
-    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
-    velocity = [1, 0]
-    depth = 0.3
-    velocity_indx = 1
-    vel_y_min = 0
-    vel_y_max = 2
-    vel_x_min = -0.5
-    vel_x_max = 0.5
-    vel_threshold = 5
-    kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity, depth, velocity_indx)
-    synthetic_spectrum = dispersion.theoretical_spectrum(
-        kt_gw,
-        kt_turb,
-        kt,
-        gauss_width=1,
-        gravity_waves_switch=True,
-        turbulence_switch=True
-    )
-    bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth, depth)]
-    t1 = time.time()
-
-    synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
-    optimal = optimise.optimise_velocity(
-        measured_spectra=synthetic_spectrum,
-        bnds=bounds,
-        depth=depth,
-        vel_indx=velocity_indx,
-        window_dims=img_size,
-        res=res,
-        fps=fps,
-        penalty_weight=1,
-        gravity_waves_switch=True,
-        turbulence_switch=True,
-        gauss_width=1,
-        popsize=10,
-        maxiter=10000,
-        workers=1
-    )
-    t2 = time.time()
-    print(f"Took {t2 - t1} seconds")
-    vel_y_optimal = optimal[:,0]
-    vel_x_optimal = optimal[:,1]
-    assert vel_x_max >= vel_x_min
-    assert vel_y_max >= vel_y_min
-    assert np.all(np.abs(vel_y_optimal - velocity[0]) < 0.01)
-    assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
-    print(f"Original velocity was {velocity}, optimized {optimal}")
-
-
 def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     """Check cost function (with depth) against expected gradients."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
@@ -156,7 +69,7 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     assert cost_12 > cost_11
     assert cost_13 > cost_11
 
-@pytest.mark.skip(reason="Optimization with depth is not yet stable")
+# @pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     """Check hypothetical case optimization with depth for one single window."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
@@ -191,7 +104,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     vel_threshold = 5
     bounds = [(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]
     t1 = time.time()
-    optimal = optimise.optimise_velocity_depth(
+    optimal = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
         velocity_indx,
@@ -199,7 +112,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         res,
         fps,
         gauss_width=1,
-        penalty_weight=1,
+        penalty_weight=0,
         gravity_waves_switch=True,
         turbulence_switch=True,
         popsize=10,
