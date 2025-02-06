@@ -109,16 +109,8 @@ def nsp_inv(
         cost function to be minimised
 
     """
-    measured_spectrum = measured_spectrum/np.sqrt(np.sum(measured_spectrum**2))
-    synthetic_spectrum = synthetic_spectrum/np.sqrt(np.sum(synthetic_spectrum**2))
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    # cost_old = np.sum(synthetic_spectrum) * np.sum(measured_spectrum) / np.sum(spectra_correlation) # calculate cost function
-    cost = np.sqrt(np.sum(synthetic_spectrum**2) * np.sum(measured_spectrum**2)) / np.sum(spectra_correlation) # calculate cost function
-    meas_sum = np.sum(measured_spectrum**2)
-    meas_max = np.max(measured_spectrum)
-    synth_sum = np.sum(synthetic_spectrum**2)
-    synth_max = np.max(synthetic_spectrum)
-    stopper = 0
+    cost = np.sum(synthetic_spectrum) * np.sum(measured_spectrum) / np.sum(spectra_correlation) # calculate cost function
     return cost
 
 
@@ -246,7 +238,6 @@ def optimize_single_spectrum_velocity(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    dof: float,
     penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
@@ -263,17 +254,7 @@ def optimize_single_spectrum_velocity(
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
     params_sens = 1/np.abs(opt.jac) # estimate the sensitivity through the "jacobian"
     params_sens[2] = params_sens[2]/opt.x[2] # corrects the sensitivity calculation for log-transformed depth variable
-    ppf_tail = 0.05 # for 95% confidence intervals
-    upper_bound = chi2.ppf(1-ppf_tail/2, dof)/dof
-    lower_bound = chi2.ppf(ppf_tail/2, dof)/dof
-    # uncertainty = params_sens*opt.fun*(upper_bound-1)
-    uncertainty = params_sens*np.max(measured_spectrum)*np.log(upper_bound)*opt.x/100 # this is an empirical formula
-    #uncertainty = params_sens*opt.fun
-    quality = 10 - np.log10(opt.fun)
-    amp = opt.fun
-    stopper = 0
-    # can use the spectrum floor as a measure of the cost function variance?
-    return float(opt.x[0]), float(opt.x[1]), float(opt.x[2]), float(uncertainty[0]), float(uncertainty[1]), float(uncertainty[2]), float(quality), float(opt.fun)
+    return float(opt.x[0]), float(opt.x[1]), float(opt.x[2])
 
 def optimize_single_spectrum_velocity_unpack(args):
     return optimize_single_spectrum_velocity(*args)
@@ -285,13 +266,12 @@ def optimise_velocity(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    dof: float,
     penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     gauss_width: float=1,
     **kwargs
-) -> Tuple[np.ndarray, np.ndarray, float, float]:
+) -> np.ndarray:
     """
     Runs the optimisation to calculate the optimal velocity components
 
@@ -362,7 +342,7 @@ def optimise_velocity(
     """
 
     args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, dof, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, kwargs)
+        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, kwargs)
         for measured_spectrum in measured_spectra
     ]
 
@@ -380,20 +360,6 @@ def optimise_velocity(
         for result in results
     ])
     
-    uncertainty = np.array([
-        [float(result[3]), float(result[4]), float(result[5])] 
-        for result in results
-    ])
-    
-    quality = np.array([
-        [float(result[6])] 
-        for result in results
-    ])
-    
-    cost_function = np.array([
-        [float(result[7])] 
-        for result in results
-    ])
 
-    return optimised_params, uncertainty, quality, cost_function
+    return optimised_params
 

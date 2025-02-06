@@ -230,8 +230,6 @@ class Iwave(object):
         )
         # set the wave numbers
         self._get_wave_numbers()
-        # calculate degrees of freedom
-        self.dof = spectral.dof(self.windows.shape[1], self.time_size, self.time_overlap)
         
         # preprocess
         self.spectrum = optimise.spectrum_preprocessing(
@@ -391,21 +389,15 @@ class Iwave(object):
             img_size,
             self.resolution,
             self.fps,
-            self.dof,
             self.penalty_weight,  
             self.gravity_waves_switch, 
             self.turbulence_switch, 
             gauss_width=1,  # TODO: figure out defaults
             **OPTIM_KWARGS
         )
-        self.u = optimal[0][:, 1].reshape(len(self.y), len(self.x))
-        self.v = optimal[0][:, 0].reshape(len(self.y), len(self.x))
-        self.d = optimal[0][:, 2].reshape(len(self.y), len(self.x))
-        self.u_unc = optimal[1][:, 1].reshape(len(self.y), len(self.x))
-        self.v_unc = optimal[1][:, 0].reshape(len(self.y), len(self.x))
-        self.d_unc = optimal[1][:, 2].reshape(len(self.y), len(self.x))
-        self.quality = optimal[2][:, 0].reshape(len(self.y), len(self.x))
-        self.cost_function = optimal[3][:, 0].reshape(len(self.y), len(self.x))
+        self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
+        self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+        self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
 
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):

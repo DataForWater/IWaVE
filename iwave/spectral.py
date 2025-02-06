@@ -257,39 +257,3 @@ def sliding_window_spectrum(
     spectra = spectrum_sum / num_segments
     return spectra
 
-
-
-
-def dof(
-    frames: int,
-    time_size: int,
-    time_overlap: int
-) -> float:
-    """
-    Calculates the degrees of freedom to compute spectra uncertainty
-
-    Parameters
-    ----------
-    frames : int
-        number of frames
-    time_size : int
-        number of frames per segment
-    time_overlap : int
-        overlap (frames)
-
-    Returns
-    -------
-    dof : float
-        degrees of freedom
-
-    """
-    
-    # Check for division by zero
-    if time_overlap == 0:
-        imgs_number = frames/time_size
-        dof = 2*imgs_number
-    else:
-        imgs_number = (frames-time_size)/time_overlap+1
-        # dof = 2*imgs_number/(1 + 2*(1- time_overlap/time_size))
-        dof = 2*imgs_number/(1 + time_overlap/time_size)
-    return dof
