@@ -19,11 +19,27 @@ Number of images: {}
 Frames per second: {}
 """.format
 
-OPTIM_KWARGS = {
-    "popsize": 10,
-    "maxiter": 10000,
-    "workers": 1
+# optim kwargs for differential evolution algorithm
+OPTIM_KWARGS_SADE = {
+    "strategy" : 'best1bin', 
+    "popsize": 8,
+    "maxiter": int(1e05),
+    "workers": 1,
+    "init" : 'sobol',
+    "atol" : 1e-12
 }
+
+# optim kwargs for nonlinear least-squares algorithm
+OPTIM_KWARGS_NLLSQ = {
+    "method": 'trf',
+    "jac" : '3-point',
+    "max_nfev": 1000000,
+    "ftol" : 1e-12,
+    "xtol" : 1e-12,
+    "gtol" : 1e-12,
+    "loss" : 'linear',
+}
+
 
 class Iwave(object):
     def __init__(
@@ -84,7 +100,11 @@ class Iwave(object):
             dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
         """
         self.resolution = resolution
-        self.window_size = window_size
+        # ensures that window dimensions are even. this is to facilitate dimension reduction of the spectra.
+        # this is currently working only for a downsampling rate of 2
+        # TODO: generalise to any downsampling value
+        self.window_size = tuple((dim if dim % 2 == 0 else dim + 1) for dim in window_size) 
+        # self.window_size = window_size
         self.overlap = overlap
         self.time_size = time_size
         self.time_overlap = time_overlap
@@ -374,30 +394,92 @@ class Iwave(object):
         self,
         alpha=0.85,
         depth=1.,  # If depth = 0, then the water depth is estimated.
+        optstrategy= 'robust',  # optimisation strategy. 'robust' implements a differential evolution algorithm 
+                                # to maximise the correlation between measured and theoretical spectrum.
+                                # 'fast' implements a nonlinear weighted least-squares algorithm to fit the 
+                                # theoretical dispersion relation, where the weights correspond to the amplitude of the spectrum
+        twosteps = False    # If True, the calculations are initially performed on a spectrum with reduced dimensions, 
+                            # and subsequently refined during a second step using the whole spectrum. This will reduce 
+                            # computational time for large problems, but may reduce accuracy.
     ):
         # set search bounds to -/+ maximum velocity for both directions
         if depth==0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
+        # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
+        bounds_list = [bounds for _ in self.spectrum]
+        
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-        optimal = optimise.optimise_velocity(
-            self.spectrum,
-            bounds,
-            alpha,
-            img_size,
-            self.resolution,
-            self.fps,
-            self.penalty_weight,  
-            self.gravity_waves_switch, 
-            self.turbulence_switch, 
-            gauss_width=1,  # TODO: figure out defaults
-            **OPTIM_KWARGS
-        )
-        self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
-        self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
-        self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
+        
+        if optstrategy == 'robust':
+            opt_kwargs = OPTIM_KWARGS_SADE
+        if optstrategy == 'fast':
+            opt_kwargs = OPTIM_KWARGS_NLLSQ
+            
+        if twosteps == True:
+            bounds_firststep = bounds_list
+            if depth==0: # for the first step, neglect water depth effects by assuming a large depth
+                for i in range(len(bounds_list)):
+                    bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
+            optimal = optimise.optimise_velocity(
+                self.spectrum,
+                bounds_firststep,
+                alpha,
+                img_size,
+                self.resolution,
+                self.fps,
+                self.penalty_weight,  
+                self.gravity_waves_switch, 
+                self.turbulence_switch, 
+                optstrategy,
+                downsample = 2, # for the first step, reduce the data size by 2
+                gauss_width=1,  # TODO: figure out defaults
+                **opt_kwargs
+            )
+            # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
+            for i in range(len(bounds_list)):
+                bounds_list[i] = [(optimal[i, 0]-0.1*np.abs(optimal[i,0]), optimal[i, 0]+0.1*np.abs(optimal[i,0])), 
+                       (optimal[i, 1]-0.1*np.abs(optimal[i,1]), optimal[i, 1]+0.1*np.abs(optimal[i,1])), 
+                        (bounds[2][0], bounds[2][1])]
+            optimal = optimise.optimise_velocity(
+                self.spectrum,
+                bounds_list,
+                alpha,
+                img_size,
+                self.resolution,
+                self.fps,
+                self.penalty_weight,  
+                self.gravity_waves_switch, 
+                self.turbulence_switch, 
+                optstrategy,
+                downsample = 1, # for the second step, use the original data size
+                gauss_width=1,  # TODO: figure out defaults
+                **opt_kwargs
+            )
+            self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
+            self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+            self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
+        else:
+            optimal = optimise.optimise_velocity(
+                self.spectrum,
+                bounds_list,
+                alpha,
+                img_size,
+                self.resolution,
+                self.fps,
+                self.penalty_weight,  
+                self.gravity_waves_switch, 
+                self.turbulence_switch, 
+                optstrategy,
+                downsample = 1,
+                gauss_width=1,  # TODO: figure out defaults
+                **opt_kwargs
+            )
+            self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
+            self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
+            self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
 
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):

@@ -73,6 +73,70 @@ def intensity(
 
     return th_spectrum
 
+
+def freq_distance(
+    velocity: Tuple[float, float],
+    depth: float,
+    vel_indx: float,
+    window_dims: Tuple[int, int, int],
+    res: float,
+    fps: float,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True
+) -> np.ndarray: 
+    """
+    Calculate the distance from the theoretical dispersion relation
+
+    Parameters
+    ----------
+    velocity : [float, float]
+        velocity_y x velocity_x
+        tentative surface velocity components along y and x (m/s)
+
+    depth : float
+        tentative water depth (m)
+
+    vel_indx : float
+        surface velocity to depth-averaged-velocity index (-)
+
+    window_dims: [int, int, int]
+        [dim_t, dim_y, dim_x] window dimensions
+
+    res: float
+        image resolution (m/pxl)
+
+    fps: float
+        image acquisition rate (fps)
+
+    gravity_waves_switch: bool=True
+        if True, gravity waves are modelled
+        if False, gravity waves are NOT modelled
+
+    turbulence_switch: bool=True
+        if True, turbulence-generated patterns and/or floating particles are modelled
+        if False, turbulence-generated patterns and/or floating particles are NOT modelled
+
+    Returns
+    -------
+    freq_distance : np.ndarray
+        array of distances from the theoretical dispersion relations of gravity waves and turbulence-generated waves
+
+    """
+
+    # calculate the wavenumber/frequency arrays
+    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
+
+    # calculate theoretical dispersion relation of gravity waves and turbulence-forced waves
+    kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)
+
+    # calculate the residuals
+    res_frequency = res_frequency_calculator(
+        kt_gw, kt_turb, kt, gravity_waves_switch, turbulence_switch
+    )
+
+    return res_frequency
+
+
 def dispersion(
         ky: np.ndarray, 
         kx: np.ndarray, 
@@ -333,6 +397,80 @@ def theoretical_spectrum(
 
     return th_spectrum
 
+
+def res_frequency_calculator(
+    kt_gw: np.ndarray,
+    kt_turb: np.ndarray,
+    kt: np.ndarray,
+    gravity_waves_switch: bool=True,
+    turbulence_switch: bool=True
+) -> np.ndarray:
+    """
+    Assemble theoretical 3D spectrum with Gaussian width.
+
+    Parameters
+    ----------
+    kt_gw: np.ndarray
+        1 x N_y x N_x
+        frequency of gravity-capillary waves (rad/s)
+
+    kt_turb: np.ndarray
+        1 x N_y x N_x
+        frequency of turbulence-generated waves and/or floating particles (rad/s)
+
+    kt : np.ndarray
+        frequency array (rad/s)
+
+    gravity_waves_switch: bool=True
+        if True, gravity waves are modelled
+        if False, gravity waves are NOT modelled
+
+    turbulence_switch: bool=True
+        if True, turbulence-generated patterns and/or floating particles are modelled
+        if False, turbulence-generated patterns and/or floating particles are NOT modelled
+
+    Returns
+    -------
+    res_frequency : np.ndarray
+        residual distances from the theoretical dispersion relations of gravity waves and turbulent patterns
+
+    """
+
+    # build 3D kt_gw matrix with dimensions N_t x N_y x N_x
+    kt_gw = np.tile(kt_gw, (len(kt), 1, 1))
+    
+    # build 3D kt_turb matrix with dimensions N_t x N_y x N_x
+    kt_turb = np.tile(kt_turb, (len(kt), 1, 1))  
+    
+    # identify low-frequency threshold for turbulence-generated waves
+    kt_min = kt_turb*3/2 - kt_gw/2
+    
+    # identify threshold to separate gravity waves from turbulence-generated waves
+    kt_mean = kt_turb/2 + kt_gw/2
+
+    # build 3D kt matrix with dimensions N_t x N_y x N_x
+    kt = np.expand_dims(kt, axis=(1, 2))
+    kt = np.tile(kt, (1, kt_gw.shape[-2], kt_gw.shape[-1]))
+
+    # build 3D spectrum of gravity waves
+    th_spectrum_gw = sqdiff_calc(kt_gw, kt, gravity_waves_switch)
+    
+    # build 3D spectrum of turbulence-generated waves and/or floating particles
+    th_spectrum_turb = sqdiff_calc(kt_turb, kt, turbulence_switch)
+
+    # switch sign of distances from turbulence-generated waves (this passage may be unnecessary)
+    res_frequency = np.where(kt < kt_mean, -th_spectrum_turb, th_spectrum_gw)
+    
+    # neglect low-frequency patterns below the expected frequency range for turbulence-generated waves
+    res_frequency = np.where((kt < kt_min) , 0, res_frequency)
+    
+    # rescaling. this should be moved to the weight calculation.
+    res_frequency = res_frequency * kt
+
+    return res_frequency
+
+
+
 def gauss_spectrum_calc(
         kt_theory: np.ndarray,
         kt: np.ndarray,
@@ -372,3 +510,101 @@ def gauss_spectrum_calc(
         gauss_spectrum = np.zeros(kt.shape)
 
     return gauss_spectrum
+
+def sqdiff_calc(
+        kt_theory: np.ndarray,
+        kt: np.ndarray,
+        switch: bool = True,
+)-> np.ndarray:
+    """
+    calculates the distance from the theoretical standard deviation
+
+    Parameters
+    ----------
+    kt_theory: np.ndarray
+        1 x N_y x N_x
+        theoretical frequency of (gravity waves/turbulence waves) (rad/s)
+
+    kt : np.ndarray
+        frequency array (rad/s)
+
+    switch: bool=True
+        if False, returns empty spectrum
+
+    Returns
+    -------
+    sqdiff : np.ndarray
+        array of distances from the theoretical dispersion relation
+
+    """
+    # calculates the frequency-wise distance from the theoretical dispersion relation
+    if switch:
+        sqdiff = (kt-kt_theory)
+    else:
+        sqdiff = np.zeros(kt.shape)
+
+    return sqdiff
+
+def spectrum_downsample(
+        measured_spectrum: np.ndarray,
+        res: float,
+        fps: float,
+        window_dims : Tuple[int, int, int],
+        downsample: int,
+) -> np.ndarray:
+    """
+    trims the measured spectrum reducing its dimensions [1] and [2] bny a factor "downsample"
+
+    Parameters
+    ----------
+    measured_spectrum : np.ndarray
+        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
+
+    res: float
+        image resolution (m/pxl)
+
+    fps: float
+        image acquisition rate (fps)
+    
+    window_dims: [int, int, int]
+        [dim_t, dim_y, dim_x] window dimensions
+    
+    downsample: int=1
+        downsampling rate. If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to 'downsample'.
+        Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially.
+
+    Returns
+    -------
+    trimmed_spectrum : np.ndarray
+        trimmed spectrum
+
+    """
+    
+    kt_old, ky_old, kx_old = spectral.wave_numbers(window_dims,res,fps)
+    
+    res = res*downsample
+    fps = fps
+    
+    window_dims = [window_dims[0], np.int64(np.ceil(window_dims[1]/downsample)), np.int64(np.ceil(window_dims[2]/downsample))]
+    kt_new, ky_new, kx_new = spectral.wave_numbers(window_dims,res,fps)
+    
+    # this could probably be simplified, but it is to ensure that the trimmed wavenumber arrays are correctly 
+    # aligned with the untrimmed one, since they will be calculated only based on res and fps in the following
+    kx_indx_first = np.where(np.isclose(kx_old, np.min(kx_new), atol = 1e-06))[0][0]
+    kx_indx_last = np.where(np.isclose(kx_old, np.max(kx_new), atol = 1e-06))[0][0]
+    kx_indx = np.arange(kx_indx_first, kx_indx_last + 1)
+    ky_indx_first = np.where(np.isclose(ky_old, np.min(ky_new), atol = 1e-06))[0][0]
+    ky_indx_last = np.where(np.isclose(ky_old, np.max(ky_new), atol = 1e-06))[0][0]
+    ky_indx = np.arange(ky_indx_first, ky_indx_last + 1)
+    kt_indx_first = np.where(np.isclose(kt_old, np.min(kt_new), atol = 1e-06))[0][0]
+    kt_indx_last = np.where(np.isclose(kt_old, np.max(kt_new), atol = 1e-06))[0][0]
+    kt_indx = np.arange(kt_indx_first, kt_indx_last + 1)
+    
+    if len(kx_indx) != len(kx_new) | len(ky_indx) != len(ky_new) | len(kt_indx) != len(kt_new):
+        raise ValueError("The dimensions of the trimmed array do not match the target after resampling")
+        
+    # trim the spectrum
+    trimmed_spectrum = measured_spectrum[np.ix_(kt_indx,ky_indx,kx_indx)]
+    
+    
+    return trimmed_spectrum, res, fps, window_dims
