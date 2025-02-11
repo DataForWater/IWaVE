@@ -386,6 +386,9 @@ def optimize_single_spectrum_velocity(
             args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
             **kwargs
         )
+        status = opt.success # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
+        message = opt.message # termination message returned by scipy.optimizer.differential_evolution
+        
     elif optstrategy == 'fast':
         init = [np.mean(b) for b in bnds] # initial guess for nonlinear least-squares method
         bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
@@ -403,6 +406,11 @@ def optimize_single_spectrum_velocity(
             args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch),
             **kwargs
         )
+        status = opt.status # status returned by scipy.optimize.least_squares
+        message = opt.message # message returned by scipy.optimize.least_squares
+        uncertainties = uncertainties_nllsq(opt.jac, opt.fun, opt.x) # uncertainty calculated from the jacobian of the nllsq optimiser
+    # define a quality metric by comparing the measured spectrum with an ideal theoretical spectrum
+    quality = quality_calc(opt.x, measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
         
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
     # params_sens = 1/np.abs(opt.jac) # estimate the sensitivity through the "jacobian"
@@ -530,3 +538,118 @@ def optimise_velocity(
 
     return optimised_params
 
+
+def uncertainties_nllsq(
+    jac: np.ndarray, 
+    fun: np.ndarray,
+    x: np.ndarray
+)-> np.ndarray:
+    """
+    Calculates the uncertainty of the velocity and depth calculated with the 'fast' method
+
+    Parameters
+    ----------
+    jac : np.ndarray
+        Modified Jacobian matrix at the solution, in the sense that J^T J is a Gauss-Newton approximation of the Hessian 
+        of the cost function. The type is the same as the one used by the algorithm.
+
+    fun : np.ndarray
+        Vector of residuals at the solution.
+        
+    x : np.ndarray
+        Vector of optimised parameters (vy, vx, d).
+
+    Returns
+    -------
+    uncertainties : np.ndarray
+
+    uncertainties[:,0] : float
+        uncertainty of the y velocity component (m/s)
+
+    uncertainties[:,1] : float
+        uncertainty of the x velocity component (m/s)
+        
+    uncertainties[:,2] : float
+        uncertainty of the water depth (m)
+        
+    """
+    rss = np.sum(fun**2) # sum of squared residuals
+    dof = len(fun) - len(x)
+    cov_matrix = np.linalg.inv(jac.T @ jac) * (rss / dof) # covariance matrix
+    uncertainties = np.sqrt(np.diag(cov_matrix))
+    if len(x)>2:
+        depth = np.exp(x[2])    # guessed depth
+        uncertainties[2] = uncertainties[2]*depth # correct uncertainty estimation from log- to linear coordinates
+    
+    return uncertainties
+
+
+def quality_calc(
+    x,
+    measured_spectrum,
+    vel_indx, 
+    window_dims, 
+    res, 
+    fps, 
+    gauss_width, 
+    gravity_waves_switch, 
+    turbulence_switch
+)-> float:
+    """
+    Calculates a quality metric for the optimisation based on the resemblance between the measured spectrum and the theoretical one.
+    The metric ranges from 0 (worst quality) to 10 (best quality).
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Vector of optimised parameters (vy, vx, d).
+        
+    measured_spectrum : np.ndarray
+        measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
+        dimensions [N_windows, Nt, Ny, Nx]
+
+    vel_indx : float
+        surface velocity to depth-averaged-velocity index (-)
+
+    window_dims: [int, int, int]
+        [dim_t, dim_y, dim_x] window dimensions
+
+    res: float
+        image resolution (m/pxl)
+
+    fps: float
+        image acquisition rate (fps)
+    
+    gauss_width: float=1
+        width of the synthetic spectrum smoothing kernel.
+        gauss_width > 1 could be useful with very noisy spectra.
+
+    gravity_waves_switch: bool=True
+        if True, gravity waves are modelled
+        if False, gravity waves are NOT modelled
+
+    turbulence_switch: bool=True
+        if True, turbulence-generated patterns and/or floating particles are modelled
+        if False, turbulence-generated patterns and/or floating particles are NOT modelled
+        
+    Returns
+    -------
+    quality : float
+        quality metric
+        
+    """
+    depth = np.exp(x[2])    # guessed depth
+    velocity = [x[0], x[1]]    # guessed velocity components
+
+    # calculate the synthetic spectrum based on the guess velocity
+    synthetic_spectrum = dispersion.intensity(
+        velocity, depth, vel_indx,
+        window_dims, res, fps, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
+    cost_measured = nsp_inv(measured_spectrum, synthetic_spectrum)
+    cost_ideal = nsp_inv(synthetic_spectrum, synthetic_spectrum)
+    
+    quality = 10 - 2*np.log10(cost_measured/cost_ideal)
+    
+    return quality
