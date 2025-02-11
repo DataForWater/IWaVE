@@ -593,11 +593,11 @@ def spectrum_downsample(
     kx_indx_first = np.where(np.isclose(kx_old, np.min(kx_new), atol = 1e-06))[0][0]
     kx_indx_last = np.where(np.isclose(kx_old, np.max(kx_new), atol = 1e-06))[0][0]
     kx_indx = np.arange(kx_indx_first, kx_indx_last + 1)
-    ky_indx_first = np.where(np.isclose(ky_old, np.min(ky_new), atol = 1e-06))[0][0]
-    ky_indx_last = np.where(np.isclose(ky_old, np.max(ky_new), atol = 1e-06))[0][0]
+    ky_indx_first = np.where(np.isclose(ky_old, np.min(ky_new), atol = 1e-05))[0][0]
+    ky_indx_last = np.where(np.isclose(ky_old, np.max(ky_new), atol = 1e-05))[0][0]
     ky_indx = np.arange(ky_indx_first, ky_indx_last + 1)
-    kt_indx_first = np.where(np.isclose(kt_old, np.min(kt_new), atol = 1e-06))[0][0]
-    kt_indx_last = np.where(np.isclose(kt_old, np.max(kt_new), atol = 1e-06))[0][0]
+    kt_indx_first = np.where(np.isclose(kt_old, np.min(kt_new), atol = 1e-05))[0][0]
+    kt_indx_last = np.where(np.isclose(kt_old, np.max(kt_new), atol = 1e-05))[0][0]
     kt_indx = np.arange(kt_indx_first, kt_indx_last + 1)
     
     if len(kx_indx) != len(kx_new) | len(ky_indx) != len(ky_new) | len(kt_indx) != len(kt_new):
