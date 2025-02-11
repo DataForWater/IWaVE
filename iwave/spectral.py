@@ -256,3 +256,4 @@ def sliding_window_spectrum(
     # renormalisation
     spectra = spectrum_sum / num_segments
     return spectra
+
