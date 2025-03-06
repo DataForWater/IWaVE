@@ -184,7 +184,10 @@ iw = Iwave(
 
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
-  depth=0.3  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+  depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+  optstrategy='robust', # optimisation strategy. Available options are 'robust' or 'fast'
+  twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
+                 # a reduced-dimension problem and serves as initialisation of the second step. 
 )
 
 ax = plt.axes()
@@ -203,7 +206,15 @@ axs[1].set_xlim([-100, 100])
 plt.colorbar(p2, ax=axs[1])
 plt.show()
 ```
-This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background.
+This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background. If the water depth is not supplied, a water depth = 1 m is assumed. With IWaVE, variations in water depth have a small but sometimes non-negligible impact on the velocity calculations. Therefore, it is recommended to set a representative value for depth, even when this is not known accurately.
+
+### Optimisation algorithm
+
+By default ("optstrategy" = 'robust', "twosteps" = False), the flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (scipy.optimize.differential_evolution) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
+
+Setting "optstrategy" = 'fast', instead, IWaVE will solve a weighted least squares problem: each item of the surface spectrum will be attributed a weight proportional to the spectrum amplitude, and a distance from the theoretical dispersion surface; the sum of the squared weight x distance products will be minimised using a nonlinear least squares algorithm (scipy.optimize.least_squares). This approach is generally less accurate since it is more affected by noise, but it is usually much faster compared to the 'robust' method.
+
+With each optimisation strategy, setting "twosteps" = True (default = False) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by up to 50% for large problems, but it is generally less robust and is more subject to the presence of outliers. The increase in efficiency with the two-steps approach is marginal when using the "fast" strategy.
 
 
 ### Estimating water depth as well as x and y-directional velocity
@@ -222,6 +233,9 @@ iw = Iwave(
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
   depth=0  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+  optstrategy='robust', # optimisation strategy. Available options are 'robust' or 'fast'
+  twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
+                 # a reduced-dimension problem and serves as initialisation of the second step. 
 )
 
 
