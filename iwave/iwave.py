@@ -58,6 +58,7 @@ class Iwave(object):
         penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
+        #output: Optional[Dict] = None
     ):
         """Initialize an Iwave instance.
 
@@ -104,7 +105,6 @@ class Iwave(object):
         # this is currently working only for a downsampling rate of 2
         # TODO: generalise to any downsampling value
         self.window_size = tuple((dim if dim % 2 == 0 else dim + 1) for dim in window_size) 
-        # self.window_size = window_size
         self.overlap = overlap
         self.time_size = time_size
         self.time_overlap = time_overlap
@@ -120,9 +120,23 @@ class Iwave(object):
             self.imgs = imgs
         else:
             self.imgs = None
-        self.u = None
-        self.v = None
-
+        self.output = {
+            "results": {
+                "u": np.array([]), # optimised x velocity component (m/s)
+                "v": np.array([]), # optimised y velocity component (m/s)
+                "d": np.array([]), # optimised water depth (m)
+            },
+            "uncertainties": {
+                "u": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
+                "v": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
+                "d": np.array([]), # uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
+            },
+            "quality": np.array([]), # quality parameters (0 < q < 10), where 10 is highest quality and 0 is lowest quality.
+            "cost": np.array([]), # Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
+            "status": np.array([]), # Boolean flag indicating the optimiser termination condition
+            "message": np.array([]) # termination message returned by the optimiser
+        } 
+                
     def __repr__(self):
         if self.imgs is not None:
             no_imgs = len(self.imgs)
@@ -323,7 +337,7 @@ class Iwave(object):
         kt_waves_theory, kt_advected_theory = dispersion.dispersion(
             self.ky,
             self.kx,
-            (self.v.flatten()[window_idx], self.u.flatten()[window_idx]),
+            (self.results.v.flatten()[window_idx], self.results.u.flatten()[window_idx]),
             depth=1,
             vel_indx=0.85
         )
@@ -423,7 +437,7 @@ class Iwave(object):
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
                     bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
-            optimal = optimise.optimise_velocity(
+            output_firststep = optimise.optimise_velocity(
                 self.spectrum,
                 bounds_firststep,
                 alpha,
@@ -439,18 +453,20 @@ class Iwave(object):
                 **opt_kwargs
             )
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
+            u_firststep=np.array([out["results"][1] for out in output_firststep]).reshape(-1)
+            v_firststep=np.array([out["results"][0] for out in output_firststep]).reshape(-1)
             for i in range(len(bounds_list)):
-                bounds_list[i] = [(optimal[i, 0]-0.1*np.abs(optimal[i,0]), optimal[i, 0]+0.1*np.abs(optimal[i,0])), 
-                       (optimal[i, 1]-0.1*np.abs(optimal[i,1]), optimal[i, 1]+0.1*np.abs(optimal[i,1])), 
+                bounds_list[i] = [(v_firststep[i]-0.1*np.abs(v_firststep[i]), v_firststep[i]+0.1*np.abs(v_firststep[i])), 
+                    (u_firststep[i]-0.1*np.abs(u_firststep[i]), u_firststep[i]+0.1*np.abs(u_firststep[i])), 
                         (bounds[2][0], bounds[2][1])]
-            optimal = optimise.optimise_velocity(
+            output = optimise.optimise_velocity(
                 self.spectrum,
                 bounds_list,
                 alpha,
                 img_size,
                 self.resolution,
                 self.fps,
-                self.penalty_weight,  
+                0,   # set penalty_weight = 0 for the second step
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
                 optstrategy,
@@ -458,11 +474,8 @@ class Iwave(object):
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
-            self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
-            self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
-            self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
         else:
-            optimal = optimise.optimise_velocity(
+            output = optimise.optimise_velocity(
                 self.spectrum,
                 bounds_list,
                 alpha,
@@ -477,15 +490,27 @@ class Iwave(object):
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
-            self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
-            self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
-            self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
-
+        self.assemble_results(output)
+            
+    def assemble_results(self,output):
+        self.output["results"]["u"]=np.array([out["results"][1] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["results"]["v"]=np.array([out["results"][0] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["results"]["d"]=np.array([out["results"][2] for out in output]).reshape(len(self.y), len(self.x))
+        
+        self.output["uncertainties"]["u"] = np.array([out["uncertainties"][1] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["uncertainties"]["v"] = np.array([out["uncertainties"][0] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["uncertainties"]["d"] = np.array([out["uncertainties"][2] for out in output]).reshape(len(self.y), len(self.x))
+        
+        self.output["quality"]=np.array([out["quality"] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["cost"]=np.array([out["cost"] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["status"]=np.array([out["status"] for out in output]).reshape(len(self.y), len(self.x))
+        self.output["message"]=np.array([out["message"] for out in output]).reshape(len(self.y), len(self.x))
+        
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
             ax = plt.axes()
-        p = plt.quiver(self.x, self.y, self.u, self.v, **kwargs)
+        p = plt.quiver(self.x, self.y, self.output["results"]["u"], self.output["results"]["v"], **kwargs)
         return p
 
 

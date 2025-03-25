@@ -41,7 +41,7 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
     return np.stack(
         [cv2.cvtColor(cap.read()[-1], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
     )
-
+    
 
 def get_imgs(path: str, wildcard: Optional[str] = None):
     """Read frames from images.

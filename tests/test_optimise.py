@@ -121,10 +121,10 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         maxiter=1000,
         # updating="deferred"
     )
-    vel_y_optimal = optimal[:,0]
-    vel_x_optimal = optimal[:,1]
-    depth_optimal = optimal[:,2]
-    print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
+    vel_y_optimal = np.array([out["results"][0] for out in optimal])  
+    vel_x_optimal = np.array([out["results"][1] for out in optimal])  
+    depth_optimal = np.array([out["results"][2] for out in optimal])  
+    # print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
     assert vel_x_max >= vel_x_min
@@ -180,9 +180,9 @@ def test_optimise_velocity_depth_fast(img_size=(128, 64, 64), res=0.02, fps=12):
         optstrategy='fast',
         downsample=1,
     )
-    vel_y_optimal = optimal[:,0]
-    vel_x_optimal = optimal[:,1]
-    depth_optimal = optimal[:,2]
+    vel_y_optimal = np.array([out["results"][0] for out in optimal])  
+    vel_x_optimal = np.array([out["results"][1] for out in optimal])  
+    depth_optimal = np.array([out["results"][2] for out in optimal])  
     print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")

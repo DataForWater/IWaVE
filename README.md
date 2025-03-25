@@ -216,6 +216,14 @@ Setting "optstrategy" = 'fast', instead, IWaVE will solve a weighted least squar
 
 With each optimisation strategy, setting "twosteps" = True (default = False) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by up to 50% for large problems, but it is generally less robust and is more subject to the presence of outliers. The increase in efficiency with the two-steps approach is marginal when using the "fast" strategy.
 
+### Uncertainties
+
+Metrics of the optimisation are returned in dictionaries "uncertainties", "quality", and "cost". ["uncertainties"]["u"], ["uncertainties"]["v"], and ["uncertainties"]["v"] are the estimated uncertainties of ["results"]["u"], ["results"]["v["results"]["d"]. These are calculated from the Hessian of the least-squares minimisation problem solved by the "fast" strategy. These uncertainties are only returned if "optstrategy = fast". If optstrategy = "robust", then all uncertainties are returned as nans.
+
+Estimation of the parameter uncertainties with the "robust" strategy is more complicated because of the nature of the optimisation strategy. "quality" is a quality metric that can represent the confidence in the optimised parameters when the "robust" strategy is used. The quality q is obtained from the ratio of the cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, q = 10 - 2*log10(measured_cost/ideal_cost). Therefore, 0 < q < 10, where 0 is the worst quality and 10 is the best quality. "cost" is the measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. Values of q < 0.7 are often indicative of poor fitting between measured and ideal spectra, which may indicate erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high values of q are not sufficient indicators of accurate depth estimation, although low values of q are usually indicative of large uncertainties in both velocity and depth estimations.
+
+The keys "status" and "message" contain additional information returned by the optimisers. "status" returns a parameter indicating the exit condition. This may correspond to "success" of the differential_evolution optimiser when optstrategy = "robust"; or to "status" of the least_squares optimiser when optstrategy = "fast". "message" returns the "message" field with both strategies.
+
 
 ### Estimating water depth as well as x and y-directional velocity
 
@@ -241,20 +249,20 @@ iw.velocimetry(
 
 f, axs = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
 # Plot u against y for all x values
-for i in range(iw.u.shape[1]):
-    axs[0].plot(iw.y, iw.u[:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.output["results"]["u"].shape[1]):
+    axs[0].plot(iw.y, iw.output["results"]["u"][:, i], "o", label=f'x={iw.x[i]}')
 axs[0].set_title("u vs y")
 axs[0].set_xlabel("y")
 axs[0].set_ylabel("u (m/s)")
 # Plot v against y for all x values
-for i in range(iw.v.shape[1]):
-    axs[1].plot(iw.y, iw.v[:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.output["results"]["v"].shape[1]):
+    axs[1].plot(iw.y, iw.output["results"]["v"][:, i], "o", label=f'x={iw.x[i]}')
 axs[1].set_title("v vs y")
 axs[1].set_xlabel("y")
 axs[1].set_ylabel("v (m/s)")
 # Plot d against y for all x values
-for i in range(iw.d.shape[1]):
-    axs[2].plot(iw.y, iw.d[:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.output["results"]["d"].shape[1]):
+    axs[2].plot(iw.y, iw.output["results"]["d"][:, i], "o", label=f'x={iw.x[i]}')
 axs[2].set_title("depth vs y")
 axs[2].set_xlabel("y")
 axs[2].set_ylabel("depth (m)")

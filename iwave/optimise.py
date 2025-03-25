@@ -4,10 +4,11 @@ from scipy.stats import chi2
 
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 from iwave import dispersion
 from iwave import spectral
+
 
 def cost_function_velocity_depth(
     x: Tuple[float, float, float],
@@ -388,6 +389,7 @@ def optimize_single_spectrum_velocity(
         )
         status = opt.success # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
         message = opt.message # termination message returned by scipy.optimizer.differential_evolution
+        uncertainties = np.array([np.nan, np.nan, np.nan])
         
     elif optstrategy == 'fast':
         init = [np.mean(b) for b in bnds] # initial guess for nonlinear least-squares method
@@ -411,11 +413,9 @@ def optimize_single_spectrum_velocity(
         uncertainties = uncertainties_nllsq(opt.jac, opt.fun, opt.x) # uncertainty calculated from the jacobian of the nllsq optimiser
     # define a quality metric by comparing the measured spectrum with an ideal theoretical spectrum
     quality = quality_calc(opt.x, measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
-        
+    cost = np.sum(opt.fun**2)
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
-    # params_sens = 1/np.abs(opt.jac) # estimate the sensitivity through the "jacobian"
-    # params_sens[2] = params_sens[2]/opt.x[2] # corrects the sensitivity calculation for log-transformed depth variable
-    return float(opt.x[0]), float(opt.x[1]), float(opt.x[2])
+    return set_output(results=opt.x, uncertainties=uncertainties, quality = quality, cost = cost, status=status, message=message)
 
 def optimize_single_spectrum_velocity_unpack(args):
     return optimize_single_spectrum_velocity(*args)
@@ -434,7 +434,7 @@ def optimise_velocity(
     downsample : int=1,
     gauss_width: float=1,
     **kwargs
-) -> np.ndarray:
+):
     """
     Runs the optimisation to calculate the optimal velocity components
 
@@ -501,19 +501,41 @@ def optimise_velocity(
 
     Returns
     -------
-    optimal : np.ndarray
-
-    optimal[:,0] : float
+            
+    output["results"] : optimised parameters
+        output.["results"]["v"] : float
         optimised y velocity component (m/s)
-
-    optimal[:,1] : float
+        
+        output.["results"]["u"] : float
         optimised x velocity component (m/s)
         
-    optimal[:,2] : float
-        optimised depth (m)
+        output.["results"]["d"] : float
+        optimised water depth (m)
+
+    output.["uncertainties"] : estimated uncertainties
+        output.["uncertainties"]["v"] : float
+        uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
         
-    optimal[:,3] : float
-        cost_function calculated with optimised velocity components
+        output.["uncertainties"]["u"] : float
+        uncertainty of x velocity component (m/s). This is only returned if optstrategy = 'fast'
+        
+        output.["uncertainties"]["d"] : float
+        uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
+        
+        output["quality"] : float
+        Quality parameters (0 < q < 10), where 10 is highest quality and 0 is lowest quality. 
+        q is defined as q = 10 - 2*log10(cost_measured/cost_ideal)
+        This parameter measures the similarity between the measured spectra and ideal spectra. 
+        While there is no direct link with results uncertainties, higher q indicates better quality data.
+        
+        output["cost"] : float
+        Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
+    
+        output["status"] : Bool
+        Boolean flag indicating the optimiser termination condition
+        
+        output["message"] : str
+        termination message returned by the optimiser
     """
 
     args_list = [
@@ -530,13 +552,7 @@ def optimise_velocity(
             )
         )
 
-    optimised_params = np.array([
-        [float(result[0]), float(result[1]), float(result[2])] 
-        for result in results
-    ])
-    
-
-    return optimised_params
+    return results
 
 
 def uncertainties_nllsq(
@@ -575,7 +591,7 @@ def uncertainties_nllsq(
     """
     rss = np.sum(fun**2) # sum of squared residuals
     dof = len(fun) - len(x)
-    cov_matrix = np.linalg.inv(jac.T @ jac) * (rss / dof) # covariance matrix
+    cov_matrix = np.linalg.pinv(jac.T @ jac) * (rss / dof) # covariance matrix
     uncertainties = np.sqrt(np.diag(cov_matrix))
     if len(x)>2:
         depth = np.exp(x[2])    # guessed depth
@@ -653,3 +669,19 @@ def quality_calc(
     quality = 10 - 2*np.log10(cost_measured/cost_ideal)
     
     return quality
+
+
+
+def set_output(output: Optional[Dict] = None, results: Optional[Dict] = None, uncertainties: Optional[Dict] = None, 
+                   quality: Optional[float] = None, cost: Optional[float] = None, status: Optional[Dict] = None, message: Optional[Dict] = None):
+    if output is None:
+        # start with empty dict
+        output = {}
+    output["results"] = results
+    output["uncertainties"] = uncertainties
+    output["quality"] = quality
+    output["cost"] = cost
+    output["status"] = status
+    output["message"] = message
+    
+    return output
