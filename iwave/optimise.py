@@ -1,4 +1,5 @@
 import numpy as np
+import numexpr as ne
 from scipy import optimize
 from scipy.stats import chi2
 
@@ -125,6 +126,7 @@ def cost_function_velocity_depth_nllsq(
     penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
+    gauss_width: float,
 ) -> float: 
     """
     Calculates the weighted residuals between each value of the measured spectrum and the theoretical spectra
@@ -168,6 +170,9 @@ def cost_function_velocity_depth_nllsq(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
 
+    gauss_width: float
+        width of the synthetic spectrum smoothing kernel
+
     Returns
     -------
     cost_function : float
@@ -179,14 +184,23 @@ def cost_function_velocity_depth_nllsq(
     velocity = [x[0], x[1]]    # guessed velocity components
 
     # calculate the distance of each spectrum point from the theoretical dispersion relation
-    distances = dispersion.freq_distance(
-        velocity, depth, vel_indx,
-        window_dims, res, fps,
-        gravity_waves_switch, turbulence_switch
-    )
+    # distances = dispersion.freq_distance(
+    #     velocity, depth, vel_indx,
+    #     window_dims, res, fps,
+    #     gravity_waves_switch, turbulence_switch
+    # )
     weights = nllsq_weights(measured_spectrum, window_dims, res, fps)
     
-    cost_function = weights*distances
+    synthetic_spectrum = dispersion.intensity(
+        velocity, depth, vel_indx,
+        window_dims, res, fps, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
+    
+    # cost_function = weights*distances
+    # dist=ne.evaluate('1 - exp(-distances**2)')
+    # cost_function = np.log(1+weights)*(1+distances**2)
+    cost_function = weights*(1-synthetic_spectrum) #(1-np.exp(-distances**2))
     cost_function = cost_function.reshape(-1)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
@@ -231,7 +245,8 @@ def nllsq_weights(
     kt = np.expand_dims(kt, axis=(1, 2))
     kt = np.tile(kt, (1, measured_spectrum.shape[-2], measured_spectrum.shape[-1]))
     
-    weights = measured_spectrum**2 * kt  # calculate weights
+    # weights = measured_spectrum**2 * kt  # calculate weights
+    weights = measured_spectrum**2
     
     return weights
 
@@ -405,7 +420,7 @@ def optimize_single_spectrum_velocity(
             cost_function_velocity_wrapper_nllsq,
             x0=init,
             bounds=(b_low, b_high),
-            args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch),
+            args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
             **kwargs
         )
         status = opt.status # status returned by scipy.optimize.least_squares

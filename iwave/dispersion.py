@@ -465,7 +465,7 @@ def res_frequency_calculator(
     res_frequency = np.where((kt < kt_min) , 0, res_frequency)
     
     # rescaling. this should be moved to the weight calculation.
-    res_frequency = res_frequency * kt
+    # res_frequency = res_frequency * kt
 
     return res_frequency
 

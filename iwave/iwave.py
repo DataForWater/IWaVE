@@ -33,10 +33,10 @@ OPTIM_KWARGS_SADE = {
 OPTIM_KWARGS_NLLSQ = {
     "method": 'trf',
     "jac" : '3-point',
-    "max_nfev": 1000000,
-    "ftol" : 1e-12,
-    "xtol" : 1e-12,
-    "gtol" : 1e-12,
+    "max_nfev": int(1e06),
+    "ftol" : 1e-8,
+    "xtol" : 1e-8,
+    "gtol" : 1e-8,
     "loss" : 'linear',
 }
 
@@ -58,7 +58,6 @@ class Iwave(object):
         penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
-        #output: Optional[Dict] = None
     ):
         """Initialize an Iwave instance.
 
@@ -120,22 +119,21 @@ class Iwave(object):
             self.imgs = imgs
         else:
             self.imgs = None
-        self.output = {
-            "results": {
-                "u": np.array([]), # optimised x velocity component (m/s)
-                "v": np.array([]), # optimised y velocity component (m/s)
-                "d": np.array([]), # optimised water depth (m)
-            },
-            "uncertainties": {
-                "u": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
-                "v": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
-                "d": np.array([]), # uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
-            },
-            "quality": np.array([]), # quality parameters (0 < q < 10), where 10 is highest quality and 0 is lowest quality.
-            "cost": np.array([]), # Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
-            "status": np.array([]), # Boolean flag indicating the optimiser termination condition
-            "message": np.array([]) # termination message returned by the optimiser
-        } 
+        self.results = {
+            "u": np.array([]), # optimised x velocity component (m/s)
+            "v": np.array([]), # optimised y velocity component (m/s)
+            "d": np.array([]), # optimised water depth (m)
+        }
+        self.uncertainties = {
+            "u": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
+            "v": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
+            "d": np.array([]), # uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
+        }
+        self.quality = np.array([])
+        self.cost = np.array([])
+        self.status = np.array([])
+        self.message = np.array([])
+        
                 
     def __repr__(self):
         if self.imgs is not None:
@@ -337,7 +335,7 @@ class Iwave(object):
         kt_waves_theory, kt_advected_theory = dispersion.dispersion(
             self.ky,
             self.kx,
-            (self.results.v.flatten()[window_idx], self.results.u.flatten()[window_idx]),
+            (self.results["v"].flatten()[window_idx], self.results["u"].flatten()[window_idx]),
             depth=1,
             vel_indx=0.85
         )
@@ -493,24 +491,24 @@ class Iwave(object):
         self.assemble_results(output)
             
     def assemble_results(self,output):
-        self.output["results"]["u"]=np.array([out["results"][1] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["results"]["v"]=np.array([out["results"][0] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["results"]["d"]=np.array([out["results"][2] for out in output]).reshape(len(self.y), len(self.x))
+        self.results["u"]=np.array([out["results"][1] for out in output]).reshape(len(self.y), len(self.x))
+        self.results["v"]=np.array([out["results"][0] for out in output]).reshape(len(self.y), len(self.x))
+        self.results["d"]=np.array([out["results"][2] for out in output]).reshape(len(self.y), len(self.x))
         
-        self.output["uncertainties"]["u"] = np.array([out["uncertainties"][1] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["uncertainties"]["v"] = np.array([out["uncertainties"][0] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["uncertainties"]["d"] = np.array([out["uncertainties"][2] for out in output]).reshape(len(self.y), len(self.x))
+        self.uncertainties["u"] = np.array([out["uncertainties"][1] for out in output]).reshape(len(self.y), len(self.x))
+        self.uncertainties["v"] = np.array([out["uncertainties"][0] for out in output]).reshape(len(self.y), len(self.x))
+        self.uncertainties["d"] = np.array([out["uncertainties"][2] for out in output]).reshape(len(self.y), len(self.x))
         
-        self.output["quality"]=np.array([out["quality"] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["cost"]=np.array([out["cost"] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["status"]=np.array([out["status"] for out in output]).reshape(len(self.y), len(self.x))
-        self.output["message"]=np.array([out["message"] for out in output]).reshape(len(self.y), len(self.x))
+        self.quality = np.array([out["quality"] for out in output]).reshape(len(self.y), len(self.x))
+        self.cost = np.array([out["cost"] for out in output]).reshape(len(self.y), len(self.x))
+        self.status = np.array([out["status"] for out in output]).reshape(len(self.y), len(self.x))
+        self.message = np.array([out["message"] for out in output]).reshape(len(self.y), len(self.x))
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
         if ax is None:
             ax = plt.axes()
-        p = plt.quiver(self.x, self.y, self.output["results"]["u"], self.output["results"]["v"], **kwargs)
+        p = plt.quiver(self.x, self.y, self.results["u"], self.results["v"], **kwargs)
         return p
 
 

@@ -218,7 +218,7 @@ With each optimisation strategy, setting "twosteps" = True (default = False) wil
 
 ### Uncertainties
 
-Metrics of the optimisation are returned in dictionaries "uncertainties", "quality", and "cost". ["uncertainties"]["u"], ["uncertainties"]["v"], and ["uncertainties"]["v"] are the estimated uncertainties of ["results"]["u"], ["results"]["v["results"]["d"]. These are calculated from the Hessian of the least-squares minimisation problem solved by the "fast" strategy. These uncertainties are only returned if "optstrategy = fast". If optstrategy = "robust", then all uncertainties are returned as nans.
+Metrics of the optimisation are returned in dictionaries "uncertainties", "quality", and "cost". iw.uncertainties["u"], iw.uncertainties["v"], and iw.uncertainties["d"] are the estimated uncertainties of iw.results["u"], iw.results["v], and iw.results["d"]. These are calculated from the Hessian of the least-squares minimisation problem solved by the "fast" strategy. These uncertainties are only returned if "optstrategy = fast". If optstrategy = "robust", then all uncertainties are returned as nans.
 
 Estimation of the parameter uncertainties with the "robust" strategy is more complicated because of the nature of the optimisation strategy. "quality" is a quality metric that can represent the confidence in the optimised parameters when the "robust" strategy is used. The quality q is obtained from the ratio of the cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, q = 10 - 2*log10(measured_cost/ideal_cost). Therefore, 0 < q < 10, where 0 is the worst quality and 10 is the best quality. "cost" is the measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. Values of q < 0.7 are often indicative of poor fitting between measured and ideal spectra, which may indicate erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high values of q are not sufficient indicators of accurate depth estimation, although low values of q are usually indicative of large uncertainties in both velocity and depth estimations.
 
@@ -249,20 +249,20 @@ iw.velocimetry(
 
 f, axs = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
 # Plot u against y for all x values
-for i in range(iw.output["results"]["u"].shape[1]):
-    axs[0].plot(iw.y, iw.output["results"]["u"][:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.results["u"].shape[1]):
+    axs[0].plot(iw.y, iw.results["u"][:, i], "o", label=f'x={iw.x[i]}')
 axs[0].set_title("u vs y")
 axs[0].set_xlabel("y")
 axs[0].set_ylabel("u (m/s)")
 # Plot v against y for all x values
-for i in range(iw.output["results"]["v"].shape[1]):
-    axs[1].plot(iw.y, iw.output["results"]["v"][:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.results["v"].shape[1]):
+    axs[1].plot(iw.y, iw.results["v"][:, i], "o", label=f'x={iw.x[i]}')
 axs[1].set_title("v vs y")
 axs[1].set_xlabel("y")
 axs[1].set_ylabel("v (m/s)")
 # Plot d against y for all x values
-for i in range(iw.output["results"]["d"].shape[1]):
-    axs[2].plot(iw.y, iw.output["results"]["d"][:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.results["d"].shape[1]):
+    axs[2].plot(iw.y, iw.results["d"][:, i], "o", label=f'x={iw.x[i]}')
 axs[2].set_title("depth vs y")
 axs[2].set_xlabel("y")
 axs[2].set_ylabel("depth (m)")
