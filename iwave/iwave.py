@@ -34,9 +34,9 @@ OPTIM_KWARGS_NLLSQ = {
     "method": 'trf',
     "jac" : '3-point',
     "max_nfev": int(1e06),
-    "ftol" : 1e-8,
-    "xtol" : 1e-8,
-    "gtol" : 1e-8,
+    "ftol" : 1e-10,
+    "xtol" : 1e-10,
+    "gtol" : 1e-10,
     "loss" : 'linear',
 }
 
@@ -128,12 +128,13 @@ class Iwave(object):
             "u": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
             "v": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
             "d": np.array([]), # uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
+            "quality": np.array([]), # quality parameter (0 < q < 10), where 10 is highest quality and 0 is lowest quality
+            "cost": np.array([]), # value of the cost function calculated with optimised parameters
         }
-        self.quality = np.array([])
-        self.cost = np.array([])
-        self.status = np.array([])
-        self.message = np.array([])
-        
+        self.info = {
+            "status": np.array([]), # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
+            "message": np.array([]) # termination message returned by the optimiser
+        }
                 
     def __repr__(self):
         if self.imgs is not None:
@@ -499,10 +500,10 @@ class Iwave(object):
         self.uncertainties["v"] = np.array([out["uncertainties"][0] for out in output]).reshape(len(self.y), len(self.x))
         self.uncertainties["d"] = np.array([out["uncertainties"][2] for out in output]).reshape(len(self.y), len(self.x))
         
-        self.quality = np.array([out["quality"] for out in output]).reshape(len(self.y), len(self.x))
-        self.cost = np.array([out["cost"] for out in output]).reshape(len(self.y), len(self.x))
-        self.status = np.array([out["status"] for out in output]).reshape(len(self.y), len(self.x))
-        self.message = np.array([out["message"] for out in output]).reshape(len(self.y), len(self.x))
+        self.uncertainties["quality"] = np.array([out["quality"] for out in output]).reshape(len(self.y), len(self.x))
+        self.uncertainties["cost"] = np.array([out["cost"] for out in output]).reshape(len(self.y), len(self.x))
+        self.info["status"] = np.array([out["status"] for out in output]).reshape(len(self.y), len(self.x))
+        self.info["message"] = np.array([out["message"] for out in output]).reshape(len(self.y), len(self.x))
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
