@@ -84,6 +84,7 @@ def cost_function_velocity_depth(
         window_dims, res, fps, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
+    
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
@@ -184,23 +185,23 @@ def cost_function_velocity_depth_nllsq(
     velocity = [x[0], x[1]]    # guessed velocity components
 
     # calculate the distance of each spectrum point from the theoretical dispersion relation
-    # distances = dispersion.freq_distance(
-    #     velocity, depth, vel_indx,
-    #     window_dims, res, fps,
-    #     gravity_waves_switch, turbulence_switch
-    # )
-    weights = nllsq_weights(measured_spectrum, window_dims, res, fps)
-    
-    synthetic_spectrum = dispersion.intensity(
+    distances = dispersion.freq_distance(
         velocity, depth, vel_indx,
-        window_dims, res, fps, gauss_width,
+        window_dims, res, fps,
         gravity_waves_switch, turbulence_switch
     )
+    weights = nllsq_weights(measured_spectrum, window_dims, res, fps)
+    
+    # synthetic_spectrum = dispersion.intensity(
+    #     velocity, depth, vel_indx,
+    #     window_dims, res, fps, gauss_width,
+    #     gravity_waves_switch, turbulence_switch
+    # )
     
     # cost_function = weights*distances
-    # dist=ne.evaluate('1 - exp(-distances**2)')
+    dist=ne.evaluate('1 - exp(-distances**2)')
     # cost_function = np.log(1+weights)*(1+distances**2)
-    cost_function = weights*(1-synthetic_spectrum) #(1-np.exp(-distances**2))
+    cost_function = weights*(1-dist) #(1-np.exp(-distances**2))
     cost_function = cost_function.reshape(-1)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
