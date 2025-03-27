@@ -33,7 +33,7 @@ OPTIM_KWARGS_SADE = {
 OPTIM_KWARGS_NLLSQ = {
     "method": 'trf',
     "jac" : '3-point',
-    "max_nfev": int(1e06),
+    "max_nfev": int(1e03),
     "ftol" : 1e-10,
     "xtol" : 1e-10,
     "gtol" : 1e-10,

@@ -505,11 +505,11 @@ def gauss_spectrum_calc(
     if switch:
         dkt = kt - kt_theory
         gauss_spectrum = ne.evaluate('exp(-dkt**2 / gauss_width ** 2)')
-        # gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
     else:
         gauss_spectrum = np.zeros(kt.shape)
 
     return gauss_spectrum
+
 
 def sqdiff_calc(
         kt_theory: np.ndarray,

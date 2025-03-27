@@ -113,8 +113,12 @@ def nsp_inv(
         cost function to be minimised
 
     """
+    # spectra_correlation = measured_spectrum *(1-synthetic_spectrum )# calculate correlation
+    # cost = np.sum(spectra_correlation)# /(np.sum(synthetic_spectrum) * np.sum(measured_spectrum)) # calculate cost function
+    
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    cost = np.sum(synthetic_spectrum) * np.sum(measured_spectrum) / np.sum(spectra_correlation) # calculate cost function
+    cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
+    
     return cost
 
 def cost_function_velocity_depth_nllsq(
@@ -191,17 +195,9 @@ def cost_function_velocity_depth_nllsq(
         gravity_waves_switch, turbulence_switch
     )
     weights = nllsq_weights(measured_spectrum, window_dims, res, fps)
-    
-    # synthetic_spectrum = dispersion.intensity(
-    #     velocity, depth, vel_indx,
-    #     window_dims, res, fps, gauss_width,
-    #     gravity_waves_switch, turbulence_switch
-    # )
-    
-    # cost_function = weights*distances
-    dist=ne.evaluate('1 - exp(-distances**2)')
-    # cost_function = np.log(1+weights)*(1+distances**2)
-    cost_function = weights*(1-dist) #(1-np.exp(-distances**2))
+        
+    residual=ne.evaluate('1 - exp(-distances**2 / gauss_width**2)')
+    cost_function = weights*residual 
     cost_function = cost_function.reshape(-1)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
