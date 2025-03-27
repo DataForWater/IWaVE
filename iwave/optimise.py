@@ -71,7 +71,9 @@ def cost_function_velocity_depth(
     Returns
     -------
     cost_function : float
-        cost function to be minimised
+        cost function to be minimised (non-dimensional)
+        the cost function is defined as the inverse of the cross-correlation between the measured spectrum and the
+        synthetic spectrum calculated according to the estimated flow parameters
 
     """
     
@@ -110,7 +112,9 @@ def nsp_inv(
     Returns
     -------
     cost : float
-        cost function to be minimised
+        cost function to be minimised (non-dimensional)
+        the cost function is defined as the inverse of the cross-correlation between the measured spectrum and the
+        synthetic spectrum calculated according to the estimated flow parameters
 
     """
     # spectra_correlation = measured_spectrum *(1-synthetic_spectrum )# calculate correlation
