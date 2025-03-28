@@ -1,5 +1,4 @@
 import numpy as np
-import numexpr as ne
 from scipy import optimize
 from scipy.stats import chi2
 
@@ -191,65 +190,20 @@ def cost_function_velocity_depth_nllsq(
     
     depth = np.exp(x[2])    # guessed depth
     velocity = [x[0], x[1]]    # guessed velocity components
-
-    # calculate the distance of each spectrum point from the theoretical dispersion relation
-    distances = dispersion.freq_distance(
+    
+    synthetic_spectrum = dispersion.intensity(
         velocity, depth, vel_indx,
-        window_dims, res, fps,
+        window_dims, res, fps, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
-    weights = nllsq_weights(measured_spectrum, window_dims, res, fps)
         
-    residual=ne.evaluate('1 - exp(-distances**2 / gauss_width**2)')
-    cost_function = weights*residual 
+    cost_function = measured_spectrum*(1-synthetic_spectrum) / (np.sum(measured_spectrum))
     cost_function = cost_function.reshape(-1)
-    
+        
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 2*penalty_weight*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + 2*1e-03*penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
-
-def nllsq_weights(
-        measured_spectrum: np.ndarray,
-        window_dims: Tuple[int, int, int],
-        res: float,
-        fps: float,
-) -> float:
-    """
-    Calculates the weights as the squared spectrum multiplied by an empirical function of frequency
-
-    Parameters
-    ----------
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
-
-    fps: float
-        image acquisition rate (fps)
-
-    Returns
-    -------
-    weights : np.ndarray
-        array of weights
-
-    """
-    
-    # calculate the wavenumber/frequency arrays
-    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
-
-    # build 3D kt matrix with dimensions N_t x N_y x N_x
-    kt = np.expand_dims(kt, axis=(1, 2))
-    kt = np.tile(kt, (1, measured_spectrum.shape[-2], measured_spectrum.shape[-1]))
-    
-    # weights = measured_spectrum**2 * kt  # calculate weights
-    weights = measured_spectrum**2
-    
-    return weights
 
 
 def spectrum_preprocessing(
@@ -413,10 +367,9 @@ def optimize_single_spectrum_velocity(
         init = [init[0], init[1], np.log(init[2])] # log-transform depth to homogenise convergence
         
         # make boundaries format compliant for nonlinear least-squares method
-        b_low = [b[0] for b in bnds]
-        b_high = [b[1] for b in bnds]
-        if b_low[2]==b_high[2]:
-            b_high[2] = b_low[2]+1e-12 # avoid identical lower and upper boundaries for nonlinear least-squares method
+        b_low = np.array([b[0] for b in bnds])
+        b_high = np.array([b[1] for b in bnds])
+        b_high = np.where(b_low>=b_high,b_low+1e-12,b_high) # avoid identical lower and upper boundaries for nonlinear least-squares method
         opt = optimize.least_squares(
             cost_function_velocity_wrapper_nllsq,
             x0=init,

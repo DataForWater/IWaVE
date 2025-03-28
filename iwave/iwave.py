@@ -34,9 +34,9 @@ OPTIM_KWARGS_NLLSQ = {
     "method": 'trf',
     "jac" : '3-point',
     "max_nfev": int(1e03),
-    "ftol" : 1e-10,
-    "xtol" : 1e-10,
-    "gtol" : 1e-10,
+    "ftol" : 1e-07, 
+    "xtol" : 1e-04, 
+    "gtol" : 1e-07, 
     "loss" : 'linear',
 }
 
