@@ -116,9 +116,6 @@ def nsp_inv(
         synthetic spectrum calculated according to the estimated flow parameters
 
     """
-    # spectra_correlation = measured_spectrum *(1-synthetic_spectrum )# calculate correlation
-    # cost = np.sum(spectra_correlation)# /(np.sum(synthetic_spectrum) * np.sum(measured_spectrum)) # calculate cost function
-    
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
     cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
     
@@ -198,10 +195,14 @@ def cost_function_velocity_depth_nllsq(
     )
         
     cost_function = measured_spectrum*(1-synthetic_spectrum) / (np.sum(measured_spectrum))
+    
+    # spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    # cost_function = synthetic_spectrum * np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
+    
     cost_function = cost_function.reshape(-1)
         
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 2*1e-03*penalty_weight*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + 1e-02*penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 
