@@ -452,6 +452,8 @@ class Iwave(object):
                 **opt_kwargs
             )
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
+            if optstrategy == 'robust':
+                opt_kwargs["popsize"] = 4
             u_firststep=np.array([out["results"][1] for out in output_firststep]).reshape(-1)
             v_firststep=np.array([out["results"][0] for out in output_firststep]).reshape(-1)
             for i in range(len(bounds_list)):
@@ -490,6 +492,38 @@ class Iwave(object):
                 **opt_kwargs
             )
         self.assemble_results(output)
+        
+        # re-run optimiser with least-squares method to estimate uncertainty
+        if optstrategy == 'robust':
+            opt_kwargs = OPTIM_KWARGS_NLLSQ
+            # re-initialise the problem using narrower bounds between 99.99% and 100.01% of the first step solution
+            u_optimal=np.array([out["results"][1] for out in output]).reshape(-1)
+            v_optimal=np.array([out["results"][0] for out in output]).reshape(-1)
+            d_optimal=np.array([out["results"][2] for out in output]).reshape(-1)
+            for i in range(len(bounds_list)):
+                bounds_list[i] = [(v_optimal[i]-1e-06*np.abs(v_optimal[i]), v_optimal[i]+1e-06*np.abs(v_optimal[i])), 
+                    (u_optimal[i]-1e-06*np.abs(u_optimal[i]), u_optimal[i]+1e-06*np.abs(u_optimal[i])), 
+                    (d_optimal[i]-1e-06*np.abs(d_optimal[i]), d_optimal[i]+1e-06*np.abs(d_optimal[i]))]
+                        # (bounds[2][0], bounds[2][1])]
+            output_uncertainty = optimise.optimise_velocity(
+                self.spectrum,
+                bounds_list,
+                alpha,
+                img_size,
+                self.resolution,
+                self.fps,
+                0,   # set penalty_weight = 0 for the final step
+                self.gravity_waves_switch, 
+                self.turbulence_switch, 
+                optstrategy = 'fast',
+                downsample = 1, 
+                gauss_width=1,  
+                **opt_kwargs 
+            )
+            self.uncertainties["u"] = np.array([out["uncertainties"][1] for out in output_uncertainty]).reshape(len(self.y), len(self.x))
+            self.uncertainties["v"] = np.array([out["uncertainties"][0] for out in output_uncertainty]).reshape(len(self.y), len(self.x))
+            self.uncertainties["d"] = np.array([out["uncertainties"][2] for out in output_uncertainty]).reshape(len(self.y), len(self.x))
+        
             
     def assemble_results(self,output):
         self.results["u"]=np.array([out["results"][1] for out in output]).reshape(len(self.y), len(self.x))
