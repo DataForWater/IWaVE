@@ -418,7 +418,7 @@ class Iwave(object):
         # set search bounds to -/+ maximum velocity for both directions
         if depth==0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
-            if twosteps == True:
+            if twosteps == False:
                 self.penalty_weight = 0
                 print(f"Depth estimation with the 1 step approach is inaccurate when penalty_weight is not zero. Now setting penalty_weight = 0. Consider reducing smax if results are incorrect, or use the two-steps approach.")
         else:
