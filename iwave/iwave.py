@@ -418,6 +418,9 @@ class Iwave(object):
         # set search bounds to -/+ maximum velocity for both directions
         if depth==0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+            if twosteps == True:
+                self.penalty_weight = 0
+                print(f"Depth estimation with the 1 step approach is inaccurate when penalty_weight is not zero. Now setting penalty_weight = 0. Consider reducing smax if results are incorrect, or use the two-steps approach.")
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
@@ -432,6 +435,7 @@ class Iwave(object):
             opt_kwargs = OPTIM_KWARGS_NLLSQ
             
         if twosteps == True:
+            print(f"Step 1:")
             bounds_firststep = bounds_list
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
@@ -451,6 +455,7 @@ class Iwave(object):
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
+            print(f"Step 2:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
             if optstrategy == 'robust':
                 opt_kwargs["popsize"] = 4
@@ -495,6 +500,7 @@ class Iwave(object):
         
         # re-run optimiser with least-squares method to estimate uncertainty
         if optstrategy == 'robust':
+            print(f"Calculating uncertainties:")
             opt_kwargs = OPTIM_KWARGS_NLLSQ
             # re-initialise the problem using narrower bounds between 99.99% and 100.01% of the first step solution
             u_optimal=np.array([out["results"][1] for out in output]).reshape(-1)
