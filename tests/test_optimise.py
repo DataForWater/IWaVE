@@ -114,7 +114,6 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         penalty_weight=0,
         gravity_waves_switch=True,
         turbulence_switch=True,
-        optstrategy='robust',
         downsample=1,
         popsize=10,
         workers=1,
@@ -133,62 +132,3 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vel_y_optimal - velocity[0]) < 0.01)
     assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
     assert np.all(np.abs(depth_optimal - depth) < 0.05)
-    
-    
-    
-# def test_optimise_velocity_depth_fast(img_size=(128, 64, 64), res=0.02, fps=12):
-#     """Check hypothetical case optimization with depth for one single window using fast algorithm."""
-#     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
-#     velocity = [1, 0]
-#     depth = 0.2
-#     velocity_indx = 1
-#     kt_gw, kt_turb = dispersion.dispersion(
-#         ky,
-#         kx,
-#         velocity,
-#         depth,
-#         velocity_indx
-#     )
-#     synthetic_spectrum = dispersion.theoretical_spectrum(
-#         kt_gw,
-#         kt_turb,
-#         kt,
-#         gauss_width=1,
-#         gravity_waves_switch=True,
-#         turbulence_switch=True
-#     )
-#     synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
-#     vel_y_min = 0
-#     vel_y_max = 2
-#     vel_x_min = -0.5
-#     vel_x_max = 0.5
-#     depth_min = 0.01
-#     depth_max = 1
-#     bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]]
-#     t1 = time.time()
-#     optimal = optimise.optimise_velocity(
-#         synthetic_spectrum,
-#         bounds,
-#         velocity_indx,
-#         img_size,
-#         res,
-#         fps,
-#         gauss_width=1,
-#         penalty_weight=0,
-#         gravity_waves_switch=True,
-#         turbulence_switch=True,
-#         optstrategy='fast',
-#         downsample=1,
-#     )
-#     vel_y_optimal = np.array([out["results"][0] for out in optimal])  
-#     vel_x_optimal = np.array([out["results"][1] for out in optimal])  
-#     depth_optimal = np.array([out["results"][2] for out in optimal])  
-#     print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
-#     t2 = time.time()
-#     print(f"Took {t2 - t1} seconds")
-#     assert vel_x_max >= vel_x_min
-#     assert vel_y_max >= vel_y_min
-#     assert depth_max >= depth_min
-#     assert np.all(np.abs(vel_y_optimal - velocity[0]) < 0.01)
-#     assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
-#     assert np.all(np.abs(depth_optimal - depth) < 0.05)

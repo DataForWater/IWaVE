@@ -29,23 +29,11 @@ OPTIM_KWARGS_SADE = {
     "atol" : 1e-12
 }
 
-# optim kwargs for nonlinear least-squares algorithm
-OPTIM_KWARGS_NLLSQ = {
-    "method": 'trf',
-    "jac" : '3-point',
-    "max_nfev": int(1e02),
-    "ftol" : 1e-07, 
-    "xtol" : 1e-04, 
-    "gtol" : 1e-07, 
-    "loss" : 'linear',
-}
-
-
 class Iwave(object):
     def __init__(
         self,
         resolution: float,
-        window_size: Tuple[int, int] = (128, 128),
+        window_size: Tuple[int, int] = (64, 64),
         overlap: Tuple[int, int] = (0, 0),
         time_size: int = 128,
         time_overlap: int = 0,
@@ -125,9 +113,6 @@ class Iwave(object):
             "d": np.array([]), # optimised water depth (m)
         }
         self.uncertainties = {
-            "u": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
-            "v": np.array([]), # uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
-            "d": np.array([]), # uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
             "quality": np.array([]), # quality parameter (0 < q < 10), where 10 is highest quality and 0 is lowest quality
             "cost": np.array([]), # value of the cost function calculated with optimised parameters
         }
@@ -407,10 +392,6 @@ class Iwave(object):
         self,
         alpha=0.85,
         depth=1.,  # If depth = 0, then the water depth is estimated.
-        optstrategy= 'robust',  # optimisation strategy. 'robust' implements a differential evolution algorithm 
-                                # to maximise the correlation between measured and theoretical spectrum.
-                                # 'fast' implements a nonlinear weighted least-squares algorithm to fit the 
-                                # theoretical dispersion relation, where the weights correspond to the amplitude of the spectrum
         twosteps = False    # If True, the calculations are initially performed on a spectrum with reduced dimensions, 
                             # and subsequently refined during a second step using the whole spectrum. This will reduce 
                             # computational time for large problems, but may reduce accuracy.
@@ -429,10 +410,7 @@ class Iwave(object):
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
         
-        if optstrategy == 'robust':
-            opt_kwargs = OPTIM_KWARGS_SADE
-        if optstrategy == 'fast':
-            opt_kwargs = OPTIM_KWARGS_NLLSQ
+        opt_kwargs = OPTIM_KWARGS_SADE
             
         if twosteps == True:
             print(f"Step 1:")
@@ -450,15 +428,13 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                optstrategy,
                 downsample = 2, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
             print(f"Step 2:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
-            if optstrategy == 'robust':
-                opt_kwargs["popsize"] = 4
+            opt_kwargs["popsize"] = 4
             u_firststep=np.array([out["results"][1] for out in output_firststep]).reshape(-1)
             v_firststep=np.array([out["results"][0] for out in output_firststep]).reshape(-1)
             for i in range(len(bounds_list)):
@@ -475,7 +451,6 @@ class Iwave(object):
                 0,   # set penalty_weight = 0 for the second step
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                optstrategy,
                 downsample = 1, # for the second step, use the original data size
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
@@ -491,54 +466,16 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                optstrategy,
                 downsample = 1,
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
         self.assemble_results(output)
-        
-        # re-run optimiser with least-squares method to estimate uncertainty
-        if optstrategy == 'robust':
-            print(f"Calculating uncertainties:")
-            opt_kwargs = OPTIM_KWARGS_NLLSQ
-            # re-initialise the problem using narrower bounds between 99.99% and 100.01% of the first step solution
-            u_optimal=np.array([out["results"][1] for out in output]).reshape(-1)
-            v_optimal=np.array([out["results"][0] for out in output]).reshape(-1)
-            d_optimal=np.array([out["results"][2] for out in output]).reshape(-1)
-            for i in range(len(bounds_list)):
-                bounds_list[i] = [(v_optimal[i]-1e-06*np.abs(v_optimal[i]), v_optimal[i]+1e-06*np.abs(v_optimal[i])), 
-                    (u_optimal[i]-1e-06*np.abs(u_optimal[i]), u_optimal[i]+1e-06*np.abs(u_optimal[i])), 
-                    (d_optimal[i]-1e-06*np.abs(d_optimal[i]), d_optimal[i]+1e-06*np.abs(d_optimal[i]))]
-                        # (bounds[2][0], bounds[2][1])]
-            output_uncertainty = optimise.optimise_velocity(
-                self.spectrum,
-                bounds_list,
-                alpha,
-                img_size,
-                self.resolution,
-                self.fps,
-                0,   # set penalty_weight = 0 for the final step
-                self.gravity_waves_switch, 
-                self.turbulence_switch, 
-                optstrategy = 'fast',
-                downsample = 1, 
-                gauss_width=1,  
-                **opt_kwargs 
-            )
-            self.uncertainties["u"] = np.array([out["uncertainties"][1] for out in output_uncertainty]).reshape(len(self.y), len(self.x))
-            self.uncertainties["v"] = np.array([out["uncertainties"][0] for out in output_uncertainty]).reshape(len(self.y), len(self.x))
-            self.uncertainties["d"] = np.array([out["uncertainties"][2] for out in output_uncertainty]).reshape(len(self.y), len(self.x))
-        
-            
+                    
     def assemble_results(self,output):
         self.results["u"]=np.array([out["results"][1] for out in output]).reshape(len(self.y), len(self.x))
         self.results["v"]=np.array([out["results"][0] for out in output]).reshape(len(self.y), len(self.x))
         self.results["d"]=np.array([out["results"][2] for out in output]).reshape(len(self.y), len(self.x))
-        
-        self.uncertainties["u"] = np.array([out["uncertainties"][1] for out in output]).reshape(len(self.y), len(self.x))
-        self.uncertainties["v"] = np.array([out["uncertainties"][0] for out in output]).reshape(len(self.y), len(self.x))
-        self.uncertainties["d"] = np.array([out["uncertainties"][2] for out in output]).reshape(len(self.y), len(self.x))
         
         self.uncertainties["quality"] = np.array([out["quality"] for out in output]).reshape(len(self.y), len(self.x))
         self.uncertainties["cost"] = np.array([out["cost"] for out in output]).reshape(len(self.y), len(self.x))

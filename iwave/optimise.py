@@ -121,91 +121,6 @@ def nsp_inv(
     
     return cost
 
-def cost_function_velocity_depth_nllsq(
-    x: Tuple[float, float, float],
-    measured_spectrum: np.ndarray,
-    vel_indx: float,
-    window_dims: Tuple[int, int, int],
-    res: float,
-    fps: float,
-    penalty_weight: float,
-    gravity_waves_switch: bool,
-    turbulence_switch: bool,
-    gauss_width: float,
-) -> float: 
-    """
-    Calculates the weighted residuals between each value of the measured spectrum and the theoretical spectra
-    and returns them to the optimiser
-
-    Parameters
-    ----------
-    x :  [float, float, float]
-        velocity_y, velocity_x, log-depth
-        tentative surface velocity components along y and x (m/s) and log of depth (m)
-
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
-
-    fps: float
-        image acquisition rate (fps)
-    
-    penalty_weight: float=1
-        Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
-        may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
-        underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
-        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2 * the 
-        typical velocity and setting penalty_weight = 0 will provide the most accurate results.
-
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-
-    gauss_width: float
-        width of the synthetic spectrum smoothing kernel
-
-    Returns
-    -------
-    cost_function : float
-        cost function to be minimised
-
-    """
-    
-    depth = np.exp(x[2])    # guessed depth
-    velocity = [x[0], x[1]]    # guessed velocity components
-    
-    synthetic_spectrum = dispersion.intensity(
-        velocity, depth, vel_indx,
-        window_dims, res, fps, gauss_width,
-        gravity_waves_switch, turbulence_switch
-    )
-        
-    cost_function = measured_spectrum*(1-synthetic_spectrum) / (np.sum(measured_spectrum))
-    
-    # spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    # cost_function = synthetic_spectrum * np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
-    
-    cost_function = cost_function.reshape(-1)
-        
-    # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 1e-03*penalty_weight*np.linalg.norm(velocity)/(res*fps))
-    return cost_function
-
-
 
 def spectrum_preprocessing(
         measured_spectrum: np.ndarray, 
@@ -323,13 +238,6 @@ def cost_function_velocity_wrapper(
 ) -> float:
     return cost_function_velocity_depth(x, *args)
     
-def cost_function_velocity_wrapper_nllsq(
-    x: Tuple[float, float, float],
-    *args
-) -> float:
-    return cost_function_velocity_depth_nllsq(x, *args)
-
-
 
 def optimize_single_spectrum_velocity(
     measured_spectrum: np.ndarray,
@@ -343,49 +251,28 @@ def optimize_single_spectrum_velocity(
     turbulence_switch: bool,
     downsample: int,
     gauss_width: float,
-    optstrategy: str,
     kwargs: dict
 ) -> Tuple[float, float, float, float, float, float, float, float]:
     
     if downsample>1: # reduce dimensions of spectrum (for two-step approach)
         measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
     
-    if optstrategy == 'robust':
-        bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
-        opt = optimize.differential_evolution(
-            cost_function_velocity_wrapper,
-            bounds=bnds,
-            args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
-            **kwargs
-        )
-        status = opt.success # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
-        message = opt.message # termination message returned by scipy.optimizer.differential_evolution
-        uncertainties = np.array([np.nan, np.nan, np.nan])
+    
+    bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
+    opt = optimize.differential_evolution(
+        cost_function_velocity_wrapper,
+        bounds=bnds,
+        args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
+        **kwargs
+    )
+    status = opt.success # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
+    message = opt.message # termination message returned by scipy.optimizer.differential_evolution
         
-    elif optstrategy == 'fast':
-        init = [np.mean(b) for b in bnds] # initial guess for nonlinear least-squares method
-        bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
-        init = [init[0], init[1], np.log(init[2])] # log-transform depth to homogenise convergence
-        
-        # make boundaries format compliant for nonlinear least-squares method
-        b_low = np.array([b[0] for b in bnds])
-        b_high = np.array([b[1] for b in bnds])
-        b_high = np.where(b_low>=b_high,b_low+1e-12,b_high) # avoid identical lower and upper boundaries for nonlinear least-squares method
-        opt = optimize.least_squares(
-            cost_function_velocity_wrapper_nllsq,
-            x0=init,
-            bounds=(b_low, b_high),
-            args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
-            **kwargs
-        )
-        status = opt.status # status returned by scipy.optimize.least_squares
-        message = opt.message # message returned by scipy.optimize.least_squares
-        uncertainties = uncertainties_nllsq(opt.jac, opt.fun, opt.x) # uncertainty calculated from the jacobian of the nllsq optimiser
     # define a quality metric by comparing the measured spectrum with an ideal theoretical spectrum
     quality = quality_calc(opt.x, measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
     cost = np.sum(opt.fun**2)
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
-    return set_output(results=opt.x, uncertainties=uncertainties, quality = quality, cost = cost, status=status, message=message)
+    return set_output(results=opt.x, quality = quality, cost = cost, status=status, message=message)
 
 def optimize_single_spectrum_velocity_unpack(args):
     return optimize_single_spectrum_velocity(*args)
@@ -400,7 +287,6 @@ def optimise_velocity(
     penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
-    optstrategy: str='robust',
     downsample : int=1,
     gauss_width: float=1,
     **kwargs
@@ -450,13 +336,6 @@ def optimise_velocity(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
         
-    optstrategy: str='robust'
-        optimisation strategy.
-        'robust' implements a differential evolution algorithm to maximise the correlation between measured 
-        and theoretical spectrum.
-        'fast' implements a nonlinear weighted least-squares algorithm to fit the theoretical dispersion relation,
-        where the weights correspond to the amplitude of the spectrum
-        
     downsample: int=1
         downsampling rate. If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to 'downsample'.
         Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially.
@@ -483,15 +362,7 @@ def optimise_velocity(
         optimised water depth (m)
 
     output.["uncertainties"] : estimated uncertainties
-        output.["uncertainties"]["v"] : float
-        uncertainty of y velocity component (m/s). This is only returned if optstrategy = 'fast'
-        
-        output.["uncertainties"]["u"] : float
-        uncertainty of x velocity component (m/s). This is only returned if optstrategy = 'fast'
-        
-        output.["uncertainties"]["d"] : float
-        uncertainty of water depth (m). This is only returned if optstrategy = 'fast'
-        
+            
         output["quality"] : float
         Quality parameters (0 < q < 10), where 10 is highest quality and 0 is lowest quality. 
         q is defined as q = 10 - 2*log10(cost_measured/cost_ideal)
@@ -501,6 +372,8 @@ def optimise_velocity(
         output["cost"] : float
         Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
     
+    output.["info"] : additional information about optimisation outcome
+    
         output["status"] : Bool
         Boolean flag indicating the optimiser termination condition
         
@@ -509,7 +382,7 @@ def optimise_velocity(
     """
 
     args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, optstrategy, kwargs)
+        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs)
         for measured_spectrum, bnds in zip(measured_spectra, bnds_list)
     ]
 
@@ -523,52 +396,6 @@ def optimise_velocity(
         )
 
     return results
-
-
-def uncertainties_nllsq(
-    jac: np.ndarray, 
-    fun: np.ndarray,
-    x: np.ndarray
-)-> np.ndarray:
-    """
-    Calculates the uncertainty of the velocity and depth calculated with the 'fast' method
-
-    Parameters
-    ----------
-    jac : np.ndarray
-        Modified Jacobian matrix at the solution, in the sense that J^T J is a Gauss-Newton approximation of the Hessian 
-        of the cost function. The type is the same as the one used by the algorithm.
-
-    fun : np.ndarray
-        Vector of residuals at the solution.
-        
-    x : np.ndarray
-        Vector of optimised parameters (vy, vx, d).
-
-    Returns
-    -------
-    uncertainties : np.ndarray
-
-    uncertainties[:,0] : float
-        uncertainty of the y velocity component (m/s)
-
-    uncertainties[:,1] : float
-        uncertainty of the x velocity component (m/s)
-        
-    uncertainties[:,2] : float
-        uncertainty of the water depth (m)
-        
-    """
-    rss = np.sum(fun**2) # sum of squared residuals
-    dof = len(fun) - len(x)
-    cov_matrix = np.linalg.pinv(jac.T @ jac) * (rss / dof) # covariance matrix
-    uncertainties = np.sqrt(np.diag(cov_matrix))
-    if len(x)>2:
-        depth = np.exp(x[2])    # guessed depth
-        uncertainties[2] = uncertainties[2]*depth # correct uncertainty estimation from log- to linear coordinates
-    
-    return uncertainties
-
 
 def quality_calc(
     x,
@@ -642,13 +469,12 @@ def quality_calc(
 
 
 
-def set_output(output: Optional[Dict] = None, results: Optional[Dict] = None, uncertainties: Optional[Dict] = None, 
+def set_output(output: Optional[Dict] = None, results: Optional[Dict] = None,  
                    quality: Optional[float] = None, cost: Optional[float] = None, status: Optional[Dict] = None, message: Optional[Dict] = None):
     if output is None:
         # start with empty dict
         output = {}
     output["results"] = results
-    output["uncertainties"] = uncertainties
     output["quality"] = quality
     output["cost"] = cost
     output["status"] = status

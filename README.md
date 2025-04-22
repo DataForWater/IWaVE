@@ -185,7 +185,6 @@ iw = Iwave(
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
   depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-  optstrategy='robust', # optimisation strategy. Available options are 'robust' or 'fast'
   twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
                  # a reduced-dimension problem and serves as initialisation of the second step. 
 )
@@ -210,19 +209,15 @@ This estimates velocities in x and y-directions (u, v) per interrogation window 
 
 ### Optimisation algorithm
 
-By default ("optstrategy" = 'robust', "twosteps" = False), the flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (scipy.optimize.differential_evolution) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
+The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (scipy.optimize.differential_evolution) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
 
-Setting "optstrategy" = 'fast', instead, IWaVE will solve a weighted least squares problem: each item of the surface spectrum will be attributed a weight proportional to the spectrum amplitude, and a distance from the theoretical dispersion surface; the sum of the squared weight x distance products will be minimised using a nonlinear least squares algorithm (scipy.optimize.least_squares). This approach is generally less accurate since it is more affected by noise, but it is usually much faster compared to the 'robust' method.
-
-With each optimisation strategy, setting "twosteps" = True (default = False) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by up to 50% for large problems, but it is generally less robust and is more subject to the presence of outliers. The increase in efficiency with the two-steps approach is marginal when using the "fast" strategy.
+Setting "twosteps" = True (default = False) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers. 
 
 ### Uncertainties
 
-Metrics of the optimisation are returned in dictionary "uncertainties". iw.uncertainties["u"], iw.uncertainties["v"], and iw.uncertainties["d"] are the estimated uncertainties of iw.results["u"], iw.results["v], and iw.results["d"]. These are calculated from the Hessian of the least-squares minimisation problem solved by the "fast" strategy. These uncertainties are only returned if "optstrategy = fast". If optstrategy = "robust", then all uncertainties are returned as nans.
+Metrics of the optimisation are returned in dictionary "uncertainties". iw.uncertainties["quality"] is a quality metric that can represent the confidence in the optimised parameters. The quality q is obtained from the ratio of the cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, q = 10 - 2*log10(measured_cost/ideal_cost). Therefore, 0 < q < 10, where 0 is the worst quality and 10 is the best quality. iw.uncertainties["cost"] is the measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. Values of q < 0.7 are often indicative of poor fitting between measured and ideal spectra, which may indicate erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high values of q are not sufficient indicators of accurate depth estimation, although low values of q are usually indicative of large uncertainties in both velocity and depth estimations.
 
-Estimation of the parameter uncertainties with the "robust" strategy is more complicated because of the nature of the optimisation strategy. iw.uncertainties["quality"] is a quality metric that can represent the confidence in the optimised parameters when the "robust" strategy is used. The quality q is obtained from the ratio of the cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, q = 10 - 2*log10(measured_cost/ideal_cost). Therefore, 0 < q < 10, where 0 is the worst quality and 10 is the best quality. iw.uncertainties["cost"] is the measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. Values of q < 0.7 are often indicative of poor fitting between measured and ideal spectra, which may indicate erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high values of q are not sufficient indicators of accurate depth estimation, although low values of q are usually indicative of large uncertainties in both velocity and depth estimations.
-
-The dictionary "info" contain additional information returned by the optimisers. iw.info["status"] returns a parameter indicating the exit condition. This may correspond to "success" of the differential_evolution optimiser when optstrategy = "robust"; or to "status" of the least_squares optimiser when optstrategy = "fast". iw.info["message"] returns the "message" field with both strategies.
+The dictionary "info" contain additional information returned by the optimisers. iw.info["status"] returns a parameter indicating the exit condition. This corresponds to the "success" of the differential_evolution optimiser. iw.info["message"] returns the "message" field.
 
 
 ### Estimating water depth as well as x and y-directional velocity
@@ -241,7 +236,6 @@ iw = Iwave(
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
   depth=0  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-  optstrategy='robust', # optimisation strategy. Available options are 'robust' or 'fast'
   twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
                  # a reduced-dimension problem and serves as initialisation of the second step. 
 )
