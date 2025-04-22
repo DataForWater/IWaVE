@@ -132,3 +132,4 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vel_y_optimal - velocity[0]) < 0.01)
     assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
     assert np.all(np.abs(depth_optimal - depth) < 0.05)
+    
