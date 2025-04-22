@@ -1,4 +1,4 @@
-# IWaVE
+#IWaVE
 Image Wave Velocimetry Estimation
 
 This library performs simultaneous analysis of 2D velocimetry and stream depth 
@@ -293,3 +293,4 @@ You can now run the tests by running:
 ```commandline
 pytest ./tests
 ```
+
