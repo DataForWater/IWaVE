@@ -202,7 +202,7 @@ def cost_function_velocity_depth_nllsq(
     cost_function = cost_function.reshape(-1)
         
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 1e-02*penalty_weight*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + 1e-03*penalty_weight*np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 
