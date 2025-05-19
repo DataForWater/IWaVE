@@ -59,10 +59,10 @@ class Iwave(object):
             Overlap in space (y, x) used to select windows from images or frames.
         time_size : int, optional
             Amount of frames in time used for one spectral analysis. Must be <= amount of frames available.
-        fps : float, optional
-            Frames per second, can be set at the start, otherwise inherited from read video, or imposed with image set.
         time_overlap : int, optional
             Amount of overlap in frames, used to establish time slices.
+        fps : float, optional
+            Frames per second, can be set at the start, otherwise inherited from read video, or imposed with image set.
         imgs : Optional[np.ndarray], optional
             Array of images used for analysis. If not provided, defaults to None.
         norm : Literal["time", "xy"]
@@ -392,12 +392,40 @@ class Iwave(object):
         self,
         alpha=0.85,
         depth=1.,  # If depth = 0, then the water depth is estimated.
-        twosteps = False    # If True, the calculations are initially performed on a spectrum with reduced dimensions, 
+        twosteps = False,
+        **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
                             # and subsequently refined during a second step using the whole spectrum. This will reduce 
                             # computational time for large problems, but may reduce accuracy.
     ):
+        """
+        Estimate and set the velocity components u and v on the instance from the subwindowed spectra.
+
+        The optimisation is performed using the differential evolution algorithm of `scipy.optimize`. You can pass
+        arguments of this function to the optimiser. Default arguments are set as a starting point.
+
+        If you set `twosteps=True`, the optimisation is performed twice, with a reduced spectrum in the first step
+        without optimizing depth, and a refined step with full spectrum and optimizing depth.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            depth-average to surface velocity ratio [-], default 0.85
+        depth : float, optional
+            depth of the water column [m], default 1. If set to 0. it will be estimated.
+        twosteps : bool, optional
+            if set, perform the optimisation twice, with a reduced spectrum in the first step without optimizing depth
+            and full spectrum in the second step with optimizing depth. Default False.
+
+        See also
+        --------
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
+
+        """
+        # ensure defaults are set if nothing is provided
+        if not opt_kwargs:
+            opt_kwargs = OPTIM_KWARGS_SADE
         # set search bounds to -/+ maximum velocity for both directions
-        if depth==0:  # If depth = 0, then the water depth is estimated.
+        if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
             if twosteps == False:
                 self.penalty_weight = 0
@@ -409,9 +437,7 @@ class Iwave(object):
         
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-        
-        opt_kwargs = OPTIM_KWARGS_SADE
-            
+
         if twosteps == True:
             print(f"Step 1:")
             bounds_firststep = bounds_list
