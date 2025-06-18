@@ -460,7 +460,7 @@ class Iwave(object):
             )
             print(f"Step 2:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
-            opt_kwargs["popsize"] = 4
+            opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
             u_firststep=np.array([out["results"][1] for out in output_firststep]).reshape(-1)
             v_firststep=np.array([out["results"][0] for out in output_firststep]).reshape(-1)
             for i in range(len(bounds_list)):
