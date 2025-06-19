@@ -113,7 +113,7 @@ class Iwave(object):
             "d": np.array([]), # optimised water depth (m)
         }
         self.uncertainties = {
-            "quality": np.array([]), # quality parameter (0 < q < 10), where 10 is highest quality and 0 is lowest quality
+            "quality": np.array([]), # quality parameter (0 < q < 1), where 1 is highest quality and 0 is lowest quality
             "cost": np.array([]), # value of the cost function calculated with optimised parameters
         }
         self.info = {

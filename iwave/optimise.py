@@ -364,8 +364,8 @@ def optimise_velocity(
     output.["uncertainties"] : estimated uncertainties
             
         output["quality"] : float
-        Quality parameters (0 < q < 10), where 10 is highest quality and 0 is lowest quality. 
-        q is defined as q = 10 - 2*log10(cost_measured/cost_ideal)
+        Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality. 
+        q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
         This parameter measures the similarity between the measured spectra and ideal spectra. 
         While there is no direct link with results uncertainties, higher q indicates better quality data.
         
@@ -410,7 +410,7 @@ def quality_calc(
 )-> float:
     """
     Calculates a quality metric for the optimisation based on the resemblance between the measured spectrum and the theoretical one.
-    The metric ranges from 0 (worst quality) to 10 (best quality).
+    The metric ranges from 0 (worst quality) to 1 (best quality).
 
     Parameters
     ----------
@@ -454,7 +454,7 @@ def quality_calc(
     depth = np.exp(x[2])    # guessed depth
     velocity = [x[0], x[1]]    # guessed velocity components
 
-    # calculate the synthetic spectrum based on the guess velocity
+    # calculate the synthetic spectrum based on the guessed velocity
     synthetic_spectrum = dispersion.intensity(
         velocity, depth, vel_indx,
         window_dims, res, fps, gauss_width,
@@ -463,7 +463,7 @@ def quality_calc(
     cost_measured = nsp_inv(measured_spectrum, synthetic_spectrum)
     cost_ideal = nsp_inv(synthetic_spectrum, synthetic_spectrum)
     
-    quality = 10 - 2*np.log10(cost_measured/cost_ideal)
+    quality = 1 - 0.2*np.log10(cost_measured/cost_ideal)
     
     return quality
 
