@@ -103,7 +103,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     depth_max = 1
     bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]]
     t1 = time.time()
-    optimal = optimise.optimise_velocity(
+    output, _, _, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
         velocity_indx,
@@ -120,9 +120,9 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         maxiter=1000,
         # updating="deferred"
     )
-    vel_y_optimal = np.array([out["results"][0] for out in optimal])  
-    vel_x_optimal = np.array([out["results"][1] for out in optimal])  
-    depth_optimal = np.array([out["results"][2] for out in optimal])  
+    vel_y_optimal = output[:, 0]
+    vel_x_optimal = output[:, 1]  
+    depth_optimal = output[:, 2] 
     # print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")

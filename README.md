@@ -243,20 +243,20 @@ iw.velocimetry(
 
 f, axs = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
 # Plot u against y for all x values
-for i in range(iw.results["u"].shape[1]):
-    axs[0].plot(iw.y, iw.results["u"][:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.vx.shape[1]):
+    axs[0].plot(iw.y, iw.vx[:, i], "o", label=f'x={iw.x[i]}')
 axs[0].set_title("u vs y")
 axs[0].set_xlabel("y")
 axs[0].set_ylabel("u (m/s)")
 # Plot v against y for all x values
-for i in range(iw.results["v"].shape[1]):
-    axs[1].plot(iw.y, iw.results["v"][:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.vy.shape[1]):
+    axs[1].plot(iw.y, iw.vy[:, i], "o", label=f'x={iw.x[i]}')
 axs[1].set_title("v vs y")
 axs[1].set_xlabel("y")
 axs[1].set_ylabel("v (m/s)")
 # Plot d against y for all x values
-for i in range(iw.results["d"].shape[1]):
-    axs[2].plot(iw.y, iw.results["d"][:, i], "o", label=f'x={iw.x[i]}')
+for i in range(iw.d.shape[1]):
+    axs[2].plot(iw.y, iw.d[:, i], "o", label=f'x={iw.x[i]}')
 axs[2].set_title("depth vs y")
 axs[2].set_xlabel("y")
 axs[2].set_ylabel("depth (m)")
