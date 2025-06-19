@@ -460,42 +460,28 @@ class Iwave(object):
             )
             print(f"Step 2:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
-            opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
             u_firststep=np.array([out["results"][1] for out in output_firststep]).reshape(-1)
             v_firststep=np.array([out["results"][0] for out in output_firststep]).reshape(-1)
             for i in range(len(bounds_list)):
                 bounds_list[i] = [(v_firststep[i]-0.1*np.abs(v_firststep[i]), v_firststep[i]+0.1*np.abs(v_firststep[i])), 
                     (u_firststep[i]-0.1*np.abs(u_firststep[i]), u_firststep[i]+0.1*np.abs(u_firststep[i])), 
                         (bounds[2][0], bounds[2][1])]
-            output = optimise.optimise_velocity(
-                self.spectrum,
-                bounds_list,
-                alpha,
-                img_size,
-                self.resolution,
-                self.fps,
-                0,   # set penalty_weight = 0 for the second step
-                self.gravity_waves_switch, 
-                self.turbulence_switch, 
-                downsample = 1, # for the second step, use the original data size
-                gauss_width=1,  # TODO: figure out defaults
-                **opt_kwargs
-            )
-        else:
-            output = optimise.optimise_velocity(
-                self.spectrum,
-                bounds_list,
-                alpha,
-                img_size,
-                self.resolution,
-                self.fps,
-                self.penalty_weight,  
-                self.gravity_waves_switch, 
-                self.turbulence_switch, 
-                downsample = 1,
-                gauss_width=1,  # TODO: figure out defaults
-                **opt_kwargs
-            )
+            opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
+            self.penalty_weight = 0 # set penalty_weight = 0 for the second step
+        output = optimise.optimise_velocity(
+            self.spectrum,
+            bounds_list,
+            alpha,
+            img_size,
+            self.resolution,
+            self.fps,
+            self.penalty_weight,  
+            self.gravity_waves_switch, 
+            self.turbulence_switch, 
+            downsample = 1,
+            gauss_width=1,  # TODO: figure out defaults
+            **opt_kwargs
+        )
         self.assemble_results(output)
                     
     def assemble_results(self,output):
