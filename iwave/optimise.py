@@ -4,10 +4,10 @@ from scipy.stats import chi2
 
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-from typing import Dict, Optional, Tuple
+from typing import Tuple, List
 
 from iwave import dispersion
-from iwave import spectral
+# from iwave import spectral
 
 
 def cost_function_velocity_depth(
@@ -252,7 +252,11 @@ def optimize_single_spectrum_velocity(
     downsample: int,
     gauss_width: float,
     kwargs: dict
-) -> Tuple[float, float, float, float, float, float, float, float]:
+) -> Tuple[float, float, float, float, float, bool, str]:
+    """
+    Returns:
+        v, u, d, cost, quality, status, message
+    """
     
     if downsample>1: # reduce dimensions of spectrum (for two-step approach)
         measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
@@ -272,7 +276,10 @@ def optimize_single_spectrum_velocity(
     quality = quality_calc(opt.x, measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
     cost = np.sum(opt.fun**2)
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
-    return set_output(results=opt.x, quality = quality, cost = cost, status=status, message=message)
+    
+    vy, vx, d = opt.x
+    return vy, vx, d, cost, quality, status, message  
+    
 
 def optimize_single_spectrum_velocity_unpack(args):
     return optimize_single_spectrum_velocity(*args)
@@ -290,7 +297,7 @@ def optimise_velocity(
     downsample : int=1,
     gauss_width: float=1,
     **kwargs
-):
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[bool], List[str]]:
     """
     Runs the optimisation to calculate the optimal velocity components
 
@@ -350,34 +357,30 @@ def optimise_velocity(
 
     Returns
     -------
-            
-    output["results"] : optimised parameters
-        output.["results"]["v"] : float
+    optimal : np.ndarray
+
+    optimal[:,0] : float
         optimised y velocity component (m/s)
-        
-        output.["results"]["u"] : float
+
+    optimal[:,1] : float
         optimised x velocity component (m/s)
         
-        output.["results"]["d"] : float
-        optimised water depth (m)
-
-    output.["uncertainties"] : estimated uncertainties
-            
-        output["quality"] : float
-        Quality parameters (0 < q < 10), where 10 is highest quality and 0 is lowest quality. 
-        q is defined as q = 10 - 2*log10(cost_measured/cost_ideal)
-        This parameter measures the similarity between the measured spectra and ideal spectra. 
-        While there is no direct link with results uncertainties, higher q indicates better quality data.
-        
-        output["cost"] : float
-        Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
+    optimal[:,2] : float
+        optimised depth (m)
     
-    output.["info"] : additional information about optimisation outcome
+    cost : float
+    Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
     
-        output["status"] : Bool
+    quality : float
+    Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality. 
+    q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
+    This parameter measures the similarity between the measured spectra and ideal spectra. 
+    While there is no direct link with results uncertainties, higher q indicates better quality data.
+    
+    status : Bool
         Boolean flag indicating the optimiser termination condition
         
-        output["message"] : str
+    message : str
         termination message returned by the optimiser
     """
 
@@ -394,8 +397,15 @@ def optimise_velocity(
                 desc="Optimizing windows"
             )
         )
+        
+    optimal = np.array([[res[0], res[1], res[2]] for res in results])  # vy, vx, d
+    cost    = np.array([res[3] for res in results])
+    quality = np.array([res[4] for res in results])
+    status  = [res[5] for res in results]
+    message = [res[6] for res in results]
 
-    return results
+    return optimal, cost, quality, status, message
+
 
 def quality_calc(
     x,
@@ -410,7 +420,7 @@ def quality_calc(
 )-> float:
     """
     Calculates a quality metric for the optimisation based on the resemblance between the measured spectrum and the theoretical one.
-    The metric ranges from 0 (worst quality) to 10 (best quality).
+    The metric ranges from 0 (worst quality) to 1 (best quality).
 
     Parameters
     ----------
@@ -454,7 +464,7 @@ def quality_calc(
     depth = np.exp(x[2])    # guessed depth
     velocity = [x[0], x[1]]    # guessed velocity components
 
-    # calculate the synthetic spectrum based on the guess velocity
+    # calculate the synthetic spectrum based on the guessed velocity
     synthetic_spectrum = dispersion.intensity(
         velocity, depth, vel_indx,
         window_dims, res, fps, gauss_width,
@@ -463,21 +473,8 @@ def quality_calc(
     cost_measured = nsp_inv(measured_spectrum, synthetic_spectrum)
     cost_ideal = nsp_inv(synthetic_spectrum, synthetic_spectrum)
     
-    quality = 10 - 2*np.log10(cost_measured/cost_ideal)
+    quality = 1 - 0.2*np.log10(cost_measured/cost_ideal)
     
     return quality
 
 
-
-def set_output(output: Optional[Dict] = None, results: Optional[Dict] = None,  
-                   quality: Optional[float] = None, cost: Optional[float] = None, status: Optional[Dict] = None, message: Optional[Dict] = None):
-    if output is None:
-        # start with empty dict
-        output = {}
-    output["results"] = results
-    output["quality"] = quality
-    output["cost"] = cost
-    output["status"] = status
-    output["message"] = message
-    
-    return output

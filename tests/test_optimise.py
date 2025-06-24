@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 import time
-from iwave import spectral, dispersion, optimise
+from iwave import spectral, dispersion, optimise, Iwave
 
 
 def test_preprocessing():
@@ -103,7 +103,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     depth_max = 1
     bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]]
     t1 = time.time()
-    optimal = optimise.optimise_velocity(
+    output, _, _, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
         velocity_indx,
@@ -120,9 +120,9 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         maxiter=1000,
         # updating="deferred"
     )
-    vel_y_optimal = np.array([out["results"][0] for out in optimal])  
-    vel_x_optimal = np.array([out["results"][1] for out in optimal])  
-    depth_optimal = np.array([out["results"][2] for out in optimal])  
+    vel_y_optimal = output[:, 0]
+    vel_x_optimal = output[:, 1]  
+    depth_optimal = output[:, 2] 
     # print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
@@ -132,4 +132,72 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vel_y_optimal - velocity[0]) < 0.01)
     assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
     assert np.all(np.abs(depth_optimal - depth) < 0.05)
+    
+    
+def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
+    """Check hypothetical case optimization with depth for one single window, using single and double pass"""    
+    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
+    velocity = [1, 0]
+    depth = 0.2
+    velocity_indx = 1
+    depth_min = 0.01
+    depth_max = 1
+    
+    iw = Iwave(
+        resolution=res,
+        window_size=(img_size[1], img_size[2]),
+        overlap=(0, 0),
+        time_size=128,
+        time_overlap=0,
+        fps=fps,
+        dmin=depth_min,
+        dmax=depth_max,
+        gravity_waves_switch=True,
+        turbulence_switch=True,
+    )
+    
+    kt_gw, kt_turb = dispersion.dispersion(
+        ky,
+        kx,
+        velocity,
+        depth,
+        velocity_indx
+    )
+    synthetic_spectrum = dispersion.theoretical_spectrum(
+        kt_gw,
+        kt_turb,
+        kt,
+        gauss_width=1,
+        gravity_waves_switch=True,
+        turbulence_switch=True
+    )
+    iw.spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
+    
+    iw.velocimetry(
+        alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+        depth=depth,
+        twosteps=False
+    )
+    
+    vy_1step = iw.vy
+    vx_1step = iw.vx 
+    d_1step = iw.d
+       
+    iw.velocimetry(
+        alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+        depth=depth,
+        twosteps=True
+    )
+
+    vy_2steps = iw.vy
+    vx_2steps = iw.vx 
+    d_2steps = iw.d
+       
+    assert np.all(np.abs(vy_1step - velocity[0]) < 0.01)
+    assert np.all(np.abs(vx_1step - velocity[1]) < 0.01)
+    assert np.all(np.abs(d_1step - depth) < 0.05)
+    
+    assert np.all(np.abs(vy_2steps - velocity[0]) < 0.01)
+    assert np.all(np.abs(vx_2steps - velocity[1]) < 0.01)
+    assert np.all(np.abs(d_2steps - depth) < 0.05)
     
