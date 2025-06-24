@@ -42,7 +42,6 @@ jobs:
         with:
           name: releases
           path: dist
-
       - name: Verify the built dist/wheel is valid
         run: |
           python -m pip install dist/iwave*.whl
