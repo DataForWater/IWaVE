@@ -303,11 +303,11 @@ def optimise_velocity(
 
     Parameters
     ----------
-    measured_spectrum : np.ndarray
+    measured_spectra : np.ndarray
         measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
         dimensions [N_windows, Nt, Ny, Nx]
 
-    bnds_list : [(float, float), (float, float), (float, float)]
+    bnds_list: [(float, float), (float, float), (float, float)]
         [(min_vel_y, max_vel_y), (min_vel_x, max_vel_x), (min_depth, max_depth)] velocity (m/s) and depth (m) bounds
         this is supplied as a list with potentially different values for each window
 

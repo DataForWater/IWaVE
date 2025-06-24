@@ -172,7 +172,9 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
         turbulence_switch=True
     )
     iw.spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
-    
+
+    iw.x = np.array([0., 1.])
+    iw.y = np.array([0.])
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
