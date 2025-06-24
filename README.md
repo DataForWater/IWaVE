@@ -95,8 +95,8 @@ loaded any video in memory yet. The inputs have the following meaning:
   frames are derived, and the spectral model is fitted for all three and then averaged.
 * `time_overlap`: also for the time, overlap can be used, in the same manner as for spatial overlap using `overlap`. 
 
-> [!NOTE] Note on uncertainties and resolution
-> IWaVE employs a spectral approach to compare the observed water surface dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to velocity and water depth (see Dolcetti et al., 2022). 
+> [!NOTE]
+> Some important remarks on uncertainties: IWaVE employs a spectral approach to compare the observed water surface dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to velocity and water depth (see Dolcetti et al., 2022). 
 > * The spectral resolution improves by increasing the window size and/or the time size. Optimal values of `window_size` should be similar to the water depth or larger. `time_size` should be larger than 5 seconds in most applications, ideally around 10 seconds.
 > * The spatial and temporal resolution of the videos (e.g., the pixel size and frame rate) are less critical than the spectral resolution for the accuracy of the estimates. Reasonable results can usually be obtained also with a pixel size of ~5 cm and a frame rate of ~10 fps. Consider downsampling the data if memory or computational time are an issue.
 > * More averages can significantly improve the convergence of the method. Ideally, one should aim for at least 3 independent slices, regardless of the overlap (e.g., a 30-seconds-long video with a time_size of 10 seconds).
