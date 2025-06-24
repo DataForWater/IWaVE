@@ -4,10 +4,11 @@ from scipy.stats import chi2
 
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
-from typing import Tuple
+from typing import Tuple, List
 
 from iwave import dispersion
-from iwave import spectral
+# from iwave import spectral
+
 
 def cost_function_velocity_depth(
     x: Tuple[float, float, float],
@@ -69,7 +70,9 @@ def cost_function_velocity_depth(
     Returns
     -------
     cost_function : float
-        cost function to be minimised
+        cost function to be minimised (non-dimensional)
+        the cost function is defined as the inverse of the cross-correlation between the measured spectrum and the
+        synthetic spectrum calculated according to the estimated flow parameters
 
     """
     
@@ -82,6 +85,7 @@ def cost_function_velocity_depth(
         window_dims, res, fps, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
+    
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
@@ -107,132 +111,15 @@ def nsp_inv(
     Returns
     -------
     cost : float
-        cost function to be minimised
+        cost function to be minimised (non-dimensional)
+        the cost function is defined as the inverse of the cross-correlation between the measured spectrum and the
+        synthetic spectrum calculated according to the estimated flow parameters
 
     """
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    cost = np.sum(synthetic_spectrum) * np.sum(measured_spectrum) / np.sum(spectra_correlation) # calculate cost function
+    cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
+    
     return cost
-
-def cost_function_velocity_depth_nllsq(
-    x: Tuple[float, float, float],
-    measured_spectrum: np.ndarray,
-    vel_indx: float,
-    window_dims: Tuple[int, int, int],
-    res: float,
-    fps: float,
-    penalty_weight: float,
-    gravity_waves_switch: bool,
-    turbulence_switch: bool,
-) -> float: 
-    """
-    Calculates the weighted residuals between each value of the measured spectrum and the theoretical spectra
-    and returns them to the optimiser
-
-    Parameters
-    ----------
-    x :  [float, float, float]
-        velocity_y, velocity_x, log-depth
-        tentative surface velocity components along y and x (m/s) and log of depth (m)
-
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
-
-    fps: float
-        image acquisition rate (fps)
-    
-    penalty_weight: float=1
-        Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
-        may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
-        underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
-        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2 * the 
-        typical velocity and setting penalty_weight = 0 will provide the most accurate results.
-
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-
-    Returns
-    -------
-    cost_function : float
-        cost function to be minimised
-
-    """
-    
-    depth = np.exp(x[2])    # guessed depth
-    velocity = [x[0], x[1]]    # guessed velocity components
-
-    # calculate the distance of each spectrum point from the theoretical dispersion relation
-    distances = dispersion.freq_distance(
-        velocity, depth, vel_indx,
-        window_dims, res, fps,
-        gravity_waves_switch, turbulence_switch
-    )
-    weights = nllsq_weights(measured_spectrum, window_dims, res, fps)
-    
-    cost_function = weights*distances
-    cost_function = cost_function.reshape(-1)
-    
-    # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 2*penalty_weight*np.linalg.norm(velocity)/(res*fps))
-    return cost_function
-
-
-def nllsq_weights(
-        measured_spectrum: np.ndarray,
-        window_dims: Tuple[int, int, int],
-        res: float,
-        fps: float,
-) -> float:
-    """
-    Calculates the weights as the squared spectrum multiplied by an empirical function of frequency
-
-    Parameters
-    ----------
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
-
-    fps: float
-        image acquisition rate (fps)
-
-    Returns
-    -------
-    weights : np.ndarray
-        array of weights
-
-    """
-    
-    # calculate the wavenumber/frequency arrays
-    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
-
-    # build 3D kt matrix with dimensions N_t x N_y x N_x
-    kt = np.expand_dims(kt, axis=(1, 2))
-    kt = np.tile(kt, (1, measured_spectrum.shape[-2], measured_spectrum.shape[-1]))
-    
-    weights = measured_spectrum**2 * kt  # calculate weights
-    
-    return weights
 
 
 def spectrum_preprocessing(
@@ -351,13 +238,6 @@ def cost_function_velocity_wrapper(
 ) -> float:
     return cost_function_velocity_depth(x, *args)
     
-def cost_function_velocity_wrapper_nllsq(
-    x: Tuple[float, float, float],
-    *args
-) -> float:
-    return cost_function_velocity_depth_nllsq(x, *args)
-
-
 
 def optimize_single_spectrum_velocity(
     measured_spectrum: np.ndarray,
@@ -371,43 +251,35 @@ def optimize_single_spectrum_velocity(
     turbulence_switch: bool,
     downsample: int,
     gauss_width: float,
-    optstrategy: str,
     kwargs: dict
-) -> Tuple[float, float, float, float, float, float, float, float]:
+) -> Tuple[float, float, float, float, float, bool, str]:
+    """
+    Returns:
+        v, u, d, cost, quality, status, message
+    """
     
     if downsample>1: # reduce dimensions of spectrum (for two-step approach)
         measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
     
-    if optstrategy == 'robust':
-        bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
-        opt = optimize.differential_evolution(
-            cost_function_velocity_wrapper,
-            bounds=bnds,
-            args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
-            **kwargs
-        )
-    elif optstrategy == 'fast':
-        init = [np.mean(b) for b in bnds] # initial guess for nonlinear least-squares method
-        bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
-        init = [init[0], init[1], np.log(init[2])] # log-transform depth to homogenise convergence
+    
+    bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
+    opt = optimize.differential_evolution(
+        cost_function_velocity_wrapper,
+        bounds=bnds,
+        args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
+        **kwargs
+    )
+    status = opt.success # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
+    message = opt.message # termination message returned by scipy.optimizer.differential_evolution
         
-        # make boundaries format compliant for nonlinear least-squares method
-        b_low = [b[0] for b in bnds]
-        b_high = [b[1] for b in bnds]
-        if b_low[2]==b_high[2]:
-            b_high[2] = b_low[2]+1e-12 # avoid identical lower and upper boundaries for nonlinear least-squares method
-        opt = optimize.least_squares(
-            cost_function_velocity_wrapper_nllsq,
-            x0=init,
-            bounds=(b_low, b_high),
-            args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch),
-            **kwargs
-        )
-        
+    # define a quality metric by comparing the measured spectrum with an ideal theoretical spectrum
+    quality = quality_calc(opt.x, measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
+    cost = np.sum(opt.fun**2)
     opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
-    # params_sens = 1/np.abs(opt.jac) # estimate the sensitivity through the "jacobian"
-    # params_sens[2] = params_sens[2]/opt.x[2] # corrects the sensitivity calculation for log-transformed depth variable
-    return float(opt.x[0]), float(opt.x[1]), float(opt.x[2])
+    
+    vy, vx, d = opt.x
+    return vy, vx, d, cost, quality, status, message  
+    
 
 def optimize_single_spectrum_velocity_unpack(args):
     return optimize_single_spectrum_velocity(*args)
@@ -422,21 +294,20 @@ def optimise_velocity(
     penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
-    optstrategy: str='robust',
     downsample : int=1,
     gauss_width: float=1,
     **kwargs
-) -> np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[bool], List[str]]:
     """
     Runs the optimisation to calculate the optimal velocity components
 
     Parameters
     ----------
-    measured_spectrum : np.ndarray
+    measured_spectra : np.ndarray
         measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
         dimensions [N_windows, Nt, Ny, Nx]
 
-    bnds_list : [(float, float), (float, float), (float, float)]
+    bnds_list: [(float, float), (float, float), (float, float)]
         [(min_vel_y, max_vel_y), (min_vel_x, max_vel_x), (min_depth, max_depth)] velocity (m/s) and depth (m) bounds
         this is supplied as a list with potentially different values for each window
 
@@ -472,13 +343,6 @@ def optimise_velocity(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
         
-    optstrategy: str='robust'
-        optimisation strategy.
-        'robust' implements a differential evolution algorithm to maximise the correlation between measured 
-        and theoretical spectrum.
-        'fast' implements a nonlinear weighted least-squares algorithm to fit the theoretical dispersion relation,
-        where the weights correspond to the amplitude of the spectrum
-        
     downsample: int=1
         downsampling rate. If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to 'downsample'.
         Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially.
@@ -503,13 +367,25 @@ def optimise_velocity(
         
     optimal[:,2] : float
         optimised depth (m)
+    
+    cost : float
+    Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
+    
+    quality : float
+    Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality. 
+    q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
+    This parameter measures the similarity between the measured spectra and ideal spectra. 
+    While there is no direct link with results uncertainties, higher q indicates better quality data.
+    
+    status : Bool
+        Boolean flag indicating the optimiser termination condition
         
-    optimal[:,3] : float
-        cost_function calculated with optimised velocity components
+    message : str
+        termination message returned by the optimiser
     """
 
     args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, optstrategy, kwargs)
+        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs)
         for measured_spectrum, bnds in zip(measured_spectra, bnds_list)
     ]
 
@@ -521,12 +397,84 @@ def optimise_velocity(
                 desc="Optimizing windows"
             )
         )
+        
+    optimal = np.array([[res[0], res[1], res[2]] for res in results])  # vy, vx, d
+    cost    = np.array([res[3] for res in results])
+    quality = np.array([res[4] for res in results])
+    status  = [res[5] for res in results]
+    message = [res[6] for res in results]
 
-    optimised_params = np.array([
-        [float(result[0]), float(result[1]), float(result[2])] 
-        for result in results
-    ])
+    return optimal, cost, quality, status, message
+
+
+def quality_calc(
+    x,
+    measured_spectrum,
+    vel_indx, 
+    window_dims, 
+    res, 
+    fps, 
+    gauss_width, 
+    gravity_waves_switch, 
+    turbulence_switch
+)-> float:
+    """
+    Calculates a quality metric for the optimisation based on the resemblance between the measured spectrum and the theoretical one.
+    The metric ranges from 0 (worst quality) to 1 (best quality).
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Vector of optimised parameters (vy, vx, d).
+        
+    measured_spectrum : np.ndarray
+        measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
+        dimensions [N_windows, Nt, Ny, Nx]
+
+    vel_indx : float
+        surface velocity to depth-averaged-velocity index (-)
+
+    window_dims: [int, int, int]
+        [dim_t, dim_y, dim_x] window dimensions
+
+    res: float
+        image resolution (m/pxl)
+
+    fps: float
+        image acquisition rate (fps)
     
+    gauss_width: float=1
+        width of the synthetic spectrum smoothing kernel.
+        gauss_width > 1 could be useful with very noisy spectra.
 
-    return optimised_params
+    gravity_waves_switch: bool=True
+        if True, gravity waves are modelled
+        if False, gravity waves are NOT modelled
+
+    turbulence_switch: bool=True
+        if True, turbulence-generated patterns and/or floating particles are modelled
+        if False, turbulence-generated patterns and/or floating particles are NOT modelled
+        
+    Returns
+    -------
+    quality : float
+        quality metric
+        
+    """
+    depth = np.exp(x[2])    # guessed depth
+    velocity = [x[0], x[1]]    # guessed velocity components
+
+    # calculate the synthetic spectrum based on the guessed velocity
+    synthetic_spectrum = dispersion.intensity(
+        velocity, depth, vel_indx,
+        window_dims, res, fps, gauss_width,
+        gravity_waves_switch, turbulence_switch
+    )
+    cost_measured = nsp_inv(measured_spectrum, synthetic_spectrum)
+    cost_ideal = nsp_inv(synthetic_spectrum, synthetic_spectrum)
+    
+    quality = 1 - 0.2*np.log10(cost_measured/cost_ideal)
+    
+    return quality
+
 

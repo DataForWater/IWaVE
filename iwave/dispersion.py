@@ -69,72 +69,8 @@ def intensity(
         gravity_waves_switch, turbulence_switch
     )
 
-    th_spectrum = th_spectrum / np.sum(th_spectrum)
-
     return th_spectrum
 
-
-def freq_distance(
-    velocity: Tuple[float, float],
-    depth: float,
-    vel_indx: float,
-    window_dims: Tuple[int, int, int],
-    res: float,
-    fps: float,
-    gravity_waves_switch: bool=True,
-    turbulence_switch: bool=True
-) -> np.ndarray: 
-    """
-    Calculate the distance from the theoretical dispersion relation
-
-    Parameters
-    ----------
-    velocity : [float, float]
-        velocity_y x velocity_x
-        tentative surface velocity components along y and x (m/s)
-
-    depth : float
-        tentative water depth (m)
-
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
-
-    fps: float
-        image acquisition rate (fps)
-
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-
-    Returns
-    -------
-    freq_distance : np.ndarray
-        array of distances from the theoretical dispersion relations of gravity waves and turbulence-generated waves
-
-    """
-
-    # calculate the wavenumber/frequency arrays
-    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
-
-    # calculate theoretical dispersion relation of gravity waves and turbulence-forced waves
-    kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)
-
-    # calculate the residuals
-    res_frequency = res_frequency_calculator(
-        kt_gw, kt_turb, kt, gravity_waves_switch, turbulence_switch
-    )
-
-    return res_frequency
 
 
 def dispersion(
@@ -398,78 +334,6 @@ def theoretical_spectrum(
     return th_spectrum
 
 
-def res_frequency_calculator(
-    kt_gw: np.ndarray,
-    kt_turb: np.ndarray,
-    kt: np.ndarray,
-    gravity_waves_switch: bool=True,
-    turbulence_switch: bool=True
-) -> np.ndarray:
-    """
-    Assemble theoretical 3D spectrum with Gaussian width.
-
-    Parameters
-    ----------
-    kt_gw: np.ndarray
-        1 x N_y x N_x
-        frequency of gravity-capillary waves (rad/s)
-
-    kt_turb: np.ndarray
-        1 x N_y x N_x
-        frequency of turbulence-generated waves and/or floating particles (rad/s)
-
-    kt : np.ndarray
-        frequency array (rad/s)
-
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-
-    Returns
-    -------
-    res_frequency : np.ndarray
-        residual distances from the theoretical dispersion relations of gravity waves and turbulent patterns
-
-    """
-
-    # build 3D kt_gw matrix with dimensions N_t x N_y x N_x
-    kt_gw = np.tile(kt_gw, (len(kt), 1, 1))
-    
-    # build 3D kt_turb matrix with dimensions N_t x N_y x N_x
-    kt_turb = np.tile(kt_turb, (len(kt), 1, 1))  
-    
-    # identify low-frequency threshold for turbulence-generated waves
-    kt_min = kt_turb*3/2 - kt_gw/2
-    
-    # identify threshold to separate gravity waves from turbulence-generated waves
-    kt_mean = kt_turb/2 + kt_gw/2
-
-    # build 3D kt matrix with dimensions N_t x N_y x N_x
-    kt = np.expand_dims(kt, axis=(1, 2))
-    kt = np.tile(kt, (1, kt_gw.shape[-2], kt_gw.shape[-1]))
-
-    # build 3D spectrum of gravity waves
-    th_spectrum_gw = sqdiff_calc(kt_gw, kt, gravity_waves_switch)
-    
-    # build 3D spectrum of turbulence-generated waves and/or floating particles
-    th_spectrum_turb = sqdiff_calc(kt_turb, kt, turbulence_switch)
-
-    # switch sign of distances from turbulence-generated waves (this passage may be unnecessary)
-    res_frequency = np.where(kt < kt_mean, -th_spectrum_turb, th_spectrum_gw)
-    
-    # neglect low-frequency patterns below the expected frequency range for turbulence-generated waves
-    res_frequency = np.where((kt < kt_min) , 0, res_frequency)
-    
-    # rescaling. this should be moved to the weight calculation.
-    res_frequency = res_frequency * kt
-
-    return res_frequency
-
-
 
 def gauss_spectrum_calc(
         kt_theory: np.ndarray,
@@ -505,45 +369,12 @@ def gauss_spectrum_calc(
     if switch:
         dkt = kt - kt_theory
         gauss_spectrum = ne.evaluate('exp(-dkt**2 / gauss_width ** 2)')
-        # gauss_spectrum = np.exp(-(kt - kt_theory) ** 2 / gauss_width ** 2)
     else:
         gauss_spectrum = np.zeros(kt.shape)
 
     return gauss_spectrum
 
-def sqdiff_calc(
-        kt_theory: np.ndarray,
-        kt: np.ndarray,
-        switch: bool = True,
-)-> np.ndarray:
-    """
-    calculates the distance from the theoretical standard deviation
 
-    Parameters
-    ----------
-    kt_theory: np.ndarray
-        1 x N_y x N_x
-        theoretical frequency of (gravity waves/turbulence waves) (rad/s)
-
-    kt : np.ndarray
-        frequency array (rad/s)
-
-    switch: bool=True
-        if False, returns empty spectrum
-
-    Returns
-    -------
-    sqdiff : np.ndarray
-        array of distances from the theoretical dispersion relation
-
-    """
-    # calculates the frequency-wise distance from the theoretical dispersion relation
-    if switch:
-        sqdiff = (kt-kt_theory)
-    else:
-        sqdiff = np.zeros(kt.shape)
-
-    return sqdiff
 
 def spectrum_downsample(
         measured_spectrum: np.ndarray,

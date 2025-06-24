@@ -29,23 +29,11 @@ OPTIM_KWARGS_SADE = {
     "atol" : 1e-12
 }
 
-# optim kwargs for nonlinear least-squares algorithm
-OPTIM_KWARGS_NLLSQ = {
-    "method": 'trf',
-    "jac" : '3-point',
-    "max_nfev": 1000000,
-    "ftol" : 1e-12,
-    "xtol" : 1e-12,
-    "gtol" : 1e-12,
-    "loss" : 'linear',
-}
-
-
 class Iwave(object):
     def __init__(
         self,
         resolution: float,
-        window_size: Tuple[int, int] = (128, 128),
+        window_size: Tuple[int, int] = (64, 64),
         overlap: Tuple[int, int] = (0, 0),
         time_size: int = 128,
         time_overlap: int = 0,
@@ -71,10 +59,10 @@ class Iwave(object):
             Overlap in space (y, x) used to select windows from images or frames.
         time_size : int, optional
             Amount of frames in time used for one spectral analysis. Must be <= amount of frames available.
-        fps : float, optional
-            Frames per second, can be set at the start, otherwise inherited from read video, or imposed with image set.
         time_overlap : int, optional
             Amount of overlap in frames, used to establish time slices.
+        fps : float, optional
+            Frames per second, can be set at the start, otherwise inherited from read video, or imposed with image set.
         imgs : Optional[np.ndarray], optional
             Array of images used for analysis. If not provided, defaults to None.
         norm : Literal["time", "xy"]
@@ -104,7 +92,6 @@ class Iwave(object):
         # this is currently working only for a downsampling rate of 2
         # TODO: generalise to any downsampling value
         self.window_size = tuple((dim if dim % 2 == 0 else dim + 1) for dim in window_size) 
-        # self.window_size = window_size
         self.overlap = overlap
         self.time_size = time_size
         self.time_overlap = time_overlap
@@ -120,9 +107,14 @@ class Iwave(object):
             self.imgs = imgs
         else:
             self.imgs = None
-        self.u = None
-        self.v = None
-
+        self.vy = None  # y velocity component (m/s)
+        self.vx = None  # x velocity component (m/s)
+        self.d = None  # water depth (m)
+        self.cost = None  # cost function value (float)
+        self.quality = None  # quality parameter (0 < q < 1), where 1 is highest quality and 0 is lowest quality
+        self.status = None  # Boolean flag indicating if the optimizer exited successfully
+        self.message = None  # termination message returned by the optimiser
+                
     def __repr__(self):
         if self.imgs is not None:
             no_imgs = len(self.imgs)
@@ -307,7 +299,7 @@ class Iwave(object):
         ----------
         window_idx : int
             Index of the spectrum window to plot.
-        dim : {"x", "y", "time"}
+        dim: {"x", "y", "time"}
             Dimension along which to plot the spectrum.
         slice : int, optional
             Index of the slice to plot in the specified dimension. If not provided, the middle index is used.
@@ -323,7 +315,7 @@ class Iwave(object):
         kt_waves_theory, kt_advected_theory = dispersion.dispersion(
             self.ky,
             self.kx,
-            (self.v.flatten()[window_idx], self.u.flatten()[window_idx]),
+            (self.vy.flatten()[window_idx], self.vx.flatten()[window_idx]),
             depth=1,
             vel_indx=0.85
         )
@@ -392,19 +384,46 @@ class Iwave(object):
 
     def velocimetry(
         self,
-        alpha=0.85,
-        depth=1.,  # If depth = 0, then the water depth is estimated.
-        optstrategy= 'robust',  # optimisation strategy. 'robust' implements a differential evolution algorithm 
-                                # to maximise the correlation between measured and theoretical spectrum.
-                                # 'fast' implements a nonlinear weighted least-squares algorithm to fit the 
-                                # theoretical dispersion relation, where the weights correspond to the amplitude of the spectrum
-        twosteps = False    # If True, the calculations are initially performed on a spectrum with reduced dimensions, 
+        alpha: float = 0.85,
+        depth: float = 1.,  # If depth = 0, then the water depth is estimated.
+        twosteps: bool = False,
+        **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
                             # and subsequently refined during a second step using the whole spectrum. This will reduce 
                             # computational time for large problems, but may reduce accuracy.
     ):
+        """
+        Estimate and set the velocity components u and v on the instance from the subwindowed spectra.
+
+        The optimisation is performed using the differential evolution algorithm of `scipy.optimize`. You can pass
+        arguments of this function to the optimiser. Default arguments are set as a starting point.
+
+        If you set `twosteps=True`, the optimisation is performed twice, with a reduced spectrum in the first step
+        without optimizing depth, and a refined step with full spectrum and optimizing depth.
+
+        Parameters
+        ----------
+        alpha : float, optional
+            depth-average to surface velocity ratio [-], default 0.85
+        depth : float, optional
+            depth of the water column [m], default 1. If set to 0. it will be estimated.
+        twosteps : bool, optional
+            if set, perform the optimisation twice, with a reduced spectrum in the first step without optimizing depth
+            and full spectrum in the second step with optimizing depth. Default False.
+
+        See also
+        --------
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
+
+        """
+        # ensure defaults are set if nothing is provided
+        if not opt_kwargs:
+            opt_kwargs = OPTIM_KWARGS_SADE
         # set search bounds to -/+ maximum velocity for both directions
-        if depth==0:  # If depth = 0, then the water depth is estimated.
+        if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+            if twosteps == False:
+                self.penalty_weight = 0
+                print(f"Depth estimation with the 1 step approach is inaccurate when penalty_weight is not zero. Now setting penalty_weight = 0. Consider reducing smax if results are incorrect, or use the two-steps approach.")
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
@@ -412,18 +431,14 @@ class Iwave(object):
         
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-        
-        if optstrategy == 'robust':
-            opt_kwargs = OPTIM_KWARGS_SADE
-        if optstrategy == 'fast':
-            opt_kwargs = OPTIM_KWARGS_NLLSQ
-            
+
         if twosteps == True:
+            print(f"Step 1:")
             bounds_firststep = bounds_list
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
                     bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
-            optimal = optimise.optimise_velocity(
+            output_step1, _, _, _, _ = optimise.optimise_velocity(
                 self.spectrum,
                 bounds_firststep,
                 alpha,
@@ -433,85 +448,46 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                optstrategy,
                 downsample = 2, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
+            print(f"Step 2:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
+            vy_step1 = output_step1[:, 0]
+            vx_step1 = output_step1[:, 1]
             for i in range(len(bounds_list)):
-                bounds_list[i] = [(optimal[i, 0]-0.1*np.abs(optimal[i,0]), optimal[i, 0]+0.1*np.abs(optimal[i,0])), 
-                       (optimal[i, 1]-0.1*np.abs(optimal[i,1]), optimal[i, 1]+0.1*np.abs(optimal[i,1])), 
+                bounds_list[i] = [(vy_step1[i]-0.1*np.abs(vy_step1[i]), vy_step1[i]+0.1*np.abs(vy_step1[i])), 
+                    (vx_step1[i]-0.1*np.abs(vx_step1[i]), vx_step1[i]+0.1*np.abs(vx_step1[i])), 
                         (bounds[2][0], bounds[2][1])]
-            optimal = optimise.optimise_velocity(
-                self.spectrum,
-                bounds_list,
-                alpha,
-                img_size,
-                self.resolution,
-                self.fps,
-                self.penalty_weight,  
-                self.gravity_waves_switch, 
-                self.turbulence_switch, 
-                optstrategy,
-                downsample = 1, # for the second step, use the original data size
-                gauss_width=1,  # TODO: figure out defaults
-                **opt_kwargs
-            )
-            self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
-            self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
-            self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
-        else:
-            optimal = optimise.optimise_velocity(
-                self.spectrum,
-                bounds_list,
-                alpha,
-                img_size,
-                self.resolution,
-                self.fps,
-                self.penalty_weight,  
-                self.gravity_waves_switch, 
-                self.turbulence_switch, 
-                optstrategy,
-                downsample = 1,
-                gauss_width=1,  # TODO: figure out defaults
-                **opt_kwargs
-            )
-            self.u = optimal[:, 1].reshape(len(self.y), len(self.x))
-            self.v = optimal[:, 0].reshape(len(self.y), len(self.x))
-            self.d = optimal[:, 2].reshape(len(self.y), len(self.x))
-
+            opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
+            self.penalty_weight = 0 # set penalty_weight = 0 for the second step
+        output, cost, quality, status, message = optimise.optimise_velocity(
+            self.spectrum,
+            bounds_list,
+            alpha,
+            img_size,
+            self.resolution,
+            self.fps,
+            self.penalty_weight,  
+            self.gravity_waves_switch, 
+            self.turbulence_switch, 
+            downsample = 1,
+            gauss_width=1,  # TODO: figure out defaults
+            **opt_kwargs
+        )
+        self.vy = output[:, 0].reshape(len(self.y), len(self.x))
+        self.vx = output[:, 1].reshape(len(self.y), len(self.x))
+        self.d = output[:, 2].reshape(len(self.y), len(self.x))
+        self.cost = cost
+        self.quality = quality
+        self.status = status
+        self.message = message
+        
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
+        """Plot the estimated velocity components u and v on the axes instance."""
         if ax is None:
             ax = plt.axes()
-        p = plt.quiver(self.x, self.y, self.u, self.v, **kwargs)
+        p = ax.quiver(self.x, self.y, self.vx, self.vy, **kwargs)
         return p
-
-
-if __name__ == '__main__':
-    ############################################################################
-    frames_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/transformed'
-    video_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/vid/Fersina_20230630.avi'
-    ############################################################################
-    
-    # Initialize
-    iwave = Iwave()
-
-    # Use video
-    frames = iwave.frames_from_video(video_path, start_frame=0, end_frame=4)
-
-    # or use frames
-    #frames = iwave.read_frames(frames_path)
-
-    # Normalize frames
-    frames = iwave.img_normalization(frames)
-
-    # Subwidnows
-    subwins = iwave.subwindows(frames, [64, 64], [32, 32])
-
-    # 3D Spectrum 
-    iwave.get_spectra(subwins, engine="numpy")
-    
-    print('ok')
-    
