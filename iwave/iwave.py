@@ -299,7 +299,7 @@ class Iwave(object):
         ----------
         window_idx : int
             Index of the spectrum window to plot.
-        dim : {"x", "y", "time"}
+        dim: {"x", "y", "time"}
             Dimension along which to plot the spectrum.
         slice : int, optional
             Index of the slice to plot in the specified dimension. If not provided, the middle index is used.
@@ -384,9 +384,9 @@ class Iwave(object):
 
     def velocimetry(
         self,
-        alpha=0.85,
-        depth=1.,  # If depth = 0, then the water depth is estimated.
-        twosteps = False,
+        alpha: float = 0.85,
+        depth: float = 1.,  # If depth = 0, then the water depth is estimated.
+        twosteps: bool = False,
         **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
                             # and subsequently refined during a second step using the whole spectrum. This will reduce 
                             # computational time for large problems, but may reduce accuracy.
@@ -476,9 +476,9 @@ class Iwave(object):
             gauss_width=1,  # TODO: figure out defaults
             **opt_kwargs
         )
-        self.vy = output[:, 0]
-        self.vx = output[:, 1]  
-        self.d = output[:, 2]
+        self.vy = output[:, 0].reshape(len(self.y), len(self.x))
+        self.vx = output[:, 1].reshape(len(self.y), len(self.x))
+        self.d = output[:, 2].reshape(len(self.y), len(self.x))
         self.cost = cost
         self.quality = quality
         self.status = status
@@ -486,35 +486,8 @@ class Iwave(object):
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
+        """Plot the estimated velocity components u and v on the axes instance."""
         if ax is None:
             ax = plt.axes()
-        p = plt.quiver(self.x, self.y, self.vx, self.vy, **kwargs)
+        p = ax.quiver(self.x, self.y, self.vx, self.vy, **kwargs)
         return p
-
-
-if __name__ == '__main__':
-    ############################################################################
-    frames_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/transformed'
-    video_path = '/home/sp/pCloudDrive/Docs/d4w/iwave/vid/Fersina_20230630.avi'
-    ############################################################################
-    
-    # Initialize
-    iwave = Iwave()
-
-    # Use video
-    frames = iwave.frames_from_video(video_path, start_frame=0, end_frame=4)
-
-    # or use frames
-    #frames = iwave.read_frames(frames_path)
-
-    # Normalize frames
-    frames = iwave.img_normalization(frames)
-
-    # Subwidnows
-    subwins = iwave.subwindows(frames, [64, 64], [32, 32])
-
-    # 3D Spectrum 
-    iwave.get_spectra(subwins, engine="numpy")
-    
-    print('ok')
-    
