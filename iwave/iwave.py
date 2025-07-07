@@ -479,8 +479,8 @@ class Iwave(object):
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
         self.vx = output[:, 1].reshape(len(self.y), len(self.x))
         self.d = output[:, 2].reshape(len(self.y), len(self.x))
-        self.cost = cost
-        self.quality = quality
+        self.cost = cost.reshape(len(self.y), len(self.x))
+        self.quality = quality.reshape(len(self.y), len(self.x))
         self.status = status
         self.message = message
         
