@@ -10,6 +10,7 @@ authors = [
   { name = "Hessel Winsemius", email = "winsemius@rainbowsensing.com" }
 ]
 dependencies = [
+    "dask",
     "matplotlib",
     "numpy",
     "numba",

@@ -1,7 +1,7 @@
 """File I/O functions for IWaVE."""
 
+import dask.array as da
 import glob
-
 import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,6 +11,60 @@ from PIL import Image
 from tqdm import tqdm
 from typing import Optional, Literal
 
+try:
+    import cv2
+    ENABLE_CV2 = True
+except:
+    ENABLE_CV2 = False
+
+
+def get_frames_chunk(fn : str, n_start: int, n_end: int) -> np.ndarray:
+    """Retrieve a chunk of frames in one go.
+
+    Parameters
+    ----------
+    fn : str
+        file path of video to read from
+    n_start : int
+        frame number to initiate retrieval
+    n_end : int
+        last frame number of retrieval
+    method : str
+        can be "rgb", "grayscale", or "hsv", default: "grayscale"
+
+    Returns
+    -------
+    frames : np.ndarray
+        3d array (N, grayscale imgs)
+
+    """
+    if ENABLE_CV2 == False:
+        raise ImportError("This function needs cv2. Install iwave with pip install iwave[extra]")
+    print(f"Getting frame {n_start} until {n_end}")
+
+    assert n_start >= 0, "frame number cannot be negative"
+    assert (
+        n_start <= n_end
+    ), "start frame must be smaller than end frame"
+    if not os.path.isfile(fn):
+        raise IOError(f"Video file {fn} does not exist.")
+    cap = cv2.VideoCapture(fn)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, n_start)
+    imgs = []
+    for n in range(n_start, n_end):
+        ret, img = cap.read()
+        if not ret:
+            raise ValueError(f"could not read frame {n}")
+        # turn to gray scale
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        imgs.append(img)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    cap.release()
+    return np.array(imgs)
+
+def get_frames(fn: str, n_start: int, n_end: int, method: str = "grayscale") -> da:
+    """Retrieve frames lazily from file."""
+    pass
 
 def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
     """Read video frames from file

@@ -1,3 +1,4 @@
+dask
 matplotlib
 numpy
 numba
