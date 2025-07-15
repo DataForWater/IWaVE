@@ -1,3 +1,4 @@
+import dask.array as da
 import numpy as np
 from typing import Tuple, Literal
 
@@ -56,23 +57,15 @@ def sliding_window_array(
 
 
 def multi_sliding_window_array(
-    imgs: np.ndarray,
+    imgs: da,
     win_x: np.ndarray,
     win_y: np.ndarray,
     swap_time_dim=False
 ) -> np.ndarray:
-
-    windows = np.stack(
-        [
-            sliding_window_array(
-                img,
-                win_x,
-                win_y
-            ) for img in imgs
-        ]
-    )
+    """Get multiple interrogation windows from a stack of images lazily."""
+    windows = da.moveaxis(imgs.vindex[:, win_y, win_x], -1, 0)
     if swap_time_dim:
-        return np.swapaxes(windows, 0, 1)
+        return da.swapaxes(windows, 0, 1)
     return windows
 
 
