@@ -1,6 +1,7 @@
 """File I/O functions for IWaVE."""
 
 import dask.array as da
+import dask
 import glob
 import matplotlib.axes
 import matplotlib.pyplot as plt
@@ -62,9 +63,42 @@ def get_frames_chunk(fn : str, n_start: int, n_end: int) -> np.ndarray:
     cap.release()
     return np.array(imgs)
 
-def get_frames(fn: str, n_start: int, n_end: int, method: str = "grayscale") -> da:
-    """Retrieve frames lazily from file."""
-    pass
+def get_frames(fn: str, start_frame: int, end_frame: int, chunksize=None) -> da:
+    """Get a dask.array of frames, from `start_frame` until `end_frame`.
+
+    The array may be lazy, so that frames can be read at a later stage.
+
+    Parameters
+    ----------
+    start_frame : int
+        first frame to read
+    end_frame: int
+        last frame to read
+    chunksize : int
+        chunk size as amount of frames to read in one go
+
+    Returns
+    -------
+    frames : dask.array
+        lazy element containing all requested frames
+
+    """
+    if chunksize is None:
+        chunksize = end_frame - start_frame
+    get_frames_chunk_dask = dask.delayed(get_frames_chunk, pure=True)  # Lazy version of get_frames_chunk
+    # derive video shape by reading one frame first
+    sample = get_frames_chunk_dask(fn, n_start=0, n_end=1).compute()[0]
+    # create an empty array
+    data_array = []
+    for n_start in range(start_frame, end_frame, chunksize):
+        n_end = np.minimum(n_start + chunksize, end_frame)
+        frame_chunk = get_frames_chunk_dask(fn, n_start=n_start, n_end=n_end)
+        shape = (n_end - n_start, *sample.shape)
+        data_array.append(dask.array.from_delayed(frame_chunk, dtype=sample.dtype, shape=shape))
+
+    da_stack = dask.array.concatenate(data_array, axis=0)
+    return da_stack
+
 
 def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
     """Read video frames from file
