@@ -1,6 +1,8 @@
+import dask.array as da
+import dask
 import numba as nb
 import numpy as np
-from typing import Literal
+from typing import Literal, Union
 
 
 @nb.njit(cache=True)
@@ -180,10 +182,10 @@ def _numpy_fourier_transform(
 
 
 def spectral_imgs(
-    imgs: np.ndarray,
-    engine: Literal["numpy", "numba"] = "numba",
+    imgs: Union[np.ndarray, da],
+    # engine: Literal["numpy", "numba"] = "numba",
     **kwargs
-) -> np.ndarray:
+) -> Union[np.ndarray, da]:
     """
     Perform 3D spectral analysis.
 
@@ -203,19 +205,34 @@ def spectral_imgs(
         wave spectra for all image window sequences
 
     """
-    if engine == "numpy":
-        return np.array([_numpy_fourier_transform(windows, **kwargs) for windows in imgs])
-    elif engine == "numba":
-        return _numba_fourier_transform_multi(imgs, **kwargs)
+    def numba_process_chunk(chunk):
+        return _numba_fourier_transform(chunk)
+    # if engine == "numpy":
+    #     return np.array([_numpy_fourier_transform(windows, **kwargs) for windows in imgs])
+    # elif engine == "numba":
+    n, t, y, x = imgs.shape
+    t_out = int(np.ceil(t / 2))  # Reduced time dimension
+
+    if isinstance(imgs, dask.array.Array):
+        spectra = da.map_blocks(
+            numba_process_chunk,
+            imgs,
+            # kwargs=kwargs,
+            dtype=np.float64,
+            chunks=(imgs.chunks[0], t_out, y, x)  # provide expected output shape
+        )
     else:
-        raise ValueError(f'engine "{engine}" does not exist. Choose "numba" (default) or "numpy"')
+        # apparently the array is a numpy array and can be processed directly
+        spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
+    return spectra
+    # else:
+    #     raise ValueError(f'engine "{engine}" does not exist. Choose "numba" (default) or "numpy"')
 
 
 def sliding_window_spectrum(
     imgs: np.ndarray,
     win_t: int,
     overlap: int,
-    engine: Literal["numpy", "numba"] = "numba",
     **kwargs
 ) -> np.ndarray:
     """
@@ -230,9 +247,6 @@ def sliding_window_spectrum(
         number of frames per segment
     overlap : int
         overlap (frames)
-    engine : str, optional
-        "numpy" or "numba", compute method to use, typically numba (default) 
-        is a lot faster. Numpy function is easier to read.
     kwargs : dict with additional keyword arguments for processing
 
     Returns
@@ -250,8 +264,12 @@ def sliding_window_spectrum(
     num_segments = imgs.shape[1] // (win_t - overlap)
     
     # sum of individual segments
-    spectrum_sum = sum(spectral_imgs(imgs[:, segment_t0:(segment_t0 + win_t), :, :], engine, **kwargs)
-                       for segment_t0 in range(0, imgs.shape[1] - win_t + 1, win_t - overlap))
+    spectrum_sum = sum(
+        spectral_imgs(
+            imgs[:, segment_t0:(segment_t0 + win_t), :, :],
+            **kwargs
+        ) for segment_t0 in range(0, imgs.shape[1] - win_t + 1, win_t - overlap)
+    )
     
     # renormalisation
     spectra = spectrum_sum / num_segments

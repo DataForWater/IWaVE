@@ -18,6 +18,8 @@ try:
 except:
     ENABLE_CV2 = False
 
+# ensure only one dask task at the time
+# dask.config.set(scheduler="synchronous")
 
 def get_frames_chunk(fn : str, n_start: int, n_end: int) -> np.ndarray:
     """Retrieve a chunk of frames in one go.
@@ -91,11 +93,14 @@ def get_frames(fn: str, start_frame: int, end_frame: int, chunksize=None) -> da:
     # create an empty array
     data_array = []
     for n_start in range(start_frame, end_frame, chunksize):
+        # set end frame for current chunk
         n_end = np.minimum(n_start + chunksize, end_frame)
         frame_chunk = get_frames_chunk_dask(fn, n_start=n_start, n_end=n_end)
         shape = (n_end - n_start, *sample.shape)
+        # add lazy array to stack
         data_array.append(dask.array.from_delayed(frame_chunk, dtype=sample.dtype, shape=shape))
-
+    print(f"Reading {start_frame} until {end_frame} in {len(data_array)} chunks of size {chunksize}")
+    # return concatenated stack
     da_stack = dask.array.concatenate(data_array, axis=0)
     return da_stack
 

@@ -1,6 +1,7 @@
 """IWaVE main api."""
 
 import cv2
+import dask.array as da
 import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +30,138 @@ OPTIM_KWARGS_SADE = {
     "atol" : 1e-12
 }
 
+class LazyWindowArray:
+    def __init__(self, imgs, sliding_window_func, win_x, win_y, norm):
+        """
+        Initialize a lazy array-like object for subwindows.
+
+        Parameters:
+        - imgs: Images (3D numpy array or dask array)
+        - sliding_window_func: Function that extracts subwindows (e.g., `_get_subwindow`).
+        - win_x, win_y: Sampling indexes for window extraction.
+        - norm: Whether to normalize the windows ('xy', 'time', or None).
+        """
+        self.imgs = imgs
+        self.sliding_window_func = sliding_window_func
+        self.win_x = win_x
+        self.win_y = win_y
+        self.norm = norm  # Optional: normalization parameter
+
+    def __repr__(self):
+        return f"Interrogation windows dimensions (windows, time, y, x): {self.shape}"
+
+    def __getitem__(self, idx):
+        """
+        On-the-fly generation of subwindows for the requested index or slice.
+        """
+        if isinstance(idx, slice):
+            # Generate windows for a range of indices
+            start, stop, step = idx.indices(len(self.win_x))
+            win_x_sel = self.win_x[start:stop:step]
+            win_y_sel = self.win_y[start:stop:step]
+            # indexed_imgs = self.imgs[start:stop:step]
+        elif isinstance(idx, int):
+            # Generate windows for a single index
+            win_x_sel = self.win_x[idx : idx + 1]
+            win_y_sel = self.win_y[idx : idx + 1]
+        else:
+            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
+
+        # Use the sliding_window_func to generate the windows
+        windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True)
+
+        # Apply normalization if needed
+        if self.norm == "xy":
+            windows = window.normalize(windows, mode="xy")
+        elif self.norm == "time":
+            windows = window.normalize(windows, mode="time")
+        if isinstance(idx, slice):
+            return windows
+        elif isinstance(idx, int):
+            return windows[0]
+        else:
+            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
+
+    def __len__(self):
+        """
+        Return the total number of windows (or equivalent slices).
+        """
+        return len(self.win_x)
+
+    @property
+    def shape(self):
+        return len(self), self.imgs.shape[0], self.win_x.shape[1], self.win_x.shape[2]
+
+
+class LazySpectrumArray(object):
+    def __init__(
+        self,
+        windows: LazyWindowArray,
+        time_size: int,
+        time_overlap: int,
+        kt: np.ndarray,
+        kx: np.ndarray,
+        ky: np.ndarray,
+        smax: Optional[float] = 4.0,
+        threshold: Optional[float] = 1.0
+    ):
+        self.windows = windows
+        self.time_size = time_size
+        self.time_overlap = time_overlap
+        self.kt = kt
+        self.kx = kx
+        self.ky = ky
+        self.smax = smax
+        self.threshold = threshold
+
+    def __repr__(self):
+        """Return string representation showing spectrum dimensions."""
+        return f"Spectrum dimensions (windows, ft, fy, fx): {self.shape}"
+
+    def __getitem__(self, idx):
+        """
+        Generate on-the-fly spectra for subwindows for the requested index or slice.
+        """
+
+        # Use the sliding_window_func to generate the windows
+        if isinstance(idx, slice):
+            windows_sel = self.windows[idx]
+        else:
+            windows_sel = self.windows[idx : idx + 1]
+        # now apply spectra on windows
+        spectrum = spectral.sliding_window_spectrum(
+            windows_sel,
+            self.time_size,
+            self.time_overlap,
+        )
+
+        # preprocess
+        spectrum = optimise.spectrum_preprocessing(
+            spectrum,
+            self.kt,
+            self.ky,
+            self.kx,
+            self.smax*3,
+            spectrum_threshold=self.threshold
+        )
+        if isinstance(idx, slice):
+            return spectrum
+        elif isinstance(idx, int):
+            return spectrum[0]
+        else:
+            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
+
+    def __len__(self):
+        """
+        Return the total number of windows of spectram
+        """
+        return len(self.windows)
+
+    @property
+    def shape(self):
+        return len(self), self.kt.size, self.ky.size, self.kx.size
+
+
 class Iwave(object):
     def __init__(
         self,
@@ -40,12 +173,14 @@ class Iwave(object):
         fps: Optional[float] = None,
         imgs: Optional[np.ndarray] = None,
         norm: Optional[Literal["time", "xy"]] = "time",
+        spectrum_threshold: Optional[float] = 1.0,
         smax: Optional[float] = 4.0,
         dmin: Optional[float] = 0.01,
         dmax: Optional[float] = 3.0,
         penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
+        window_chunk: Optional[int] = None,
     ):
         """Initialize an Iwave instance.
 
@@ -67,6 +202,8 @@ class Iwave(object):
             Array of images used for analysis. If not provided, defaults to None.
         norm : Literal["time", "xy"]
             Normalization to apply over subwindowed images, either over time ("time") or space ("xy").
+        spectrum_threshold : float, optional
+            cut-off threshold for spectrum intensities, anything below this value is set to zero. Defaults to 1.0.
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
         dmin : float, optional
@@ -86,7 +223,11 @@ class Iwave(object):
             turbulence-generated patterns and/or floating particles are NOT modelled. Default True.
             Setting turbulence_switch = False may improve performance if water waves dominate the scene, or if tracers
             dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
+        window_chunk : int, optional
+            If provided, processing will be done per batch of this size. If not provided, a reasonable estimate will be
+            made on the basis of available memory.
         """
+        self.window_chunk = window_chunk
         self.resolution = resolution
         # ensures that window dimensions are even. this is to facilitate dimension reduction of the spectra.
         # this is currently working only for a downsampling rate of 2
@@ -96,6 +237,7 @@ class Iwave(object):
         self.time_size = time_size
         self.time_overlap = time_overlap
         self.norm = norm
+        self.spectrum_threshold = spectrum_threshold
         self.smax = smax
         self.dmin = dmin
         self.dmax = dmax
@@ -107,6 +249,8 @@ class Iwave(object):
             self.imgs = imgs
         else:
             self.imgs = None
+        self.win_x = None
+        self.win_y = None
         self.vy = None  # y velocity component (m/s)
         self.vx = None  # x velocity component (m/s)
         self.d = None  # water depth (m)
@@ -146,27 +290,55 @@ class Iwave(object):
         if images is not None:
             # TODO: check if image set is large enough for the given dimension of subwindowing and time windowing
             # subwindow images and get axes. This always necessary, so in-scope methods only.
-            self._get_subwindow(images)
-            self._get_x_y_axes(images)
+            # self._get_subwindow(images)
+            # self._get_subwindow(da.from_array(images, chunks=(len(images), -1, -1)))
+            self._get_win_xy(images[0])  # set sampling indexes per interrogation window
+            self._get_x_y_axes(images)  # set envisaged axes
+            # set the wave numbers from image fps
+            self._get_wave_numbers()
 
     @property
     def spectrum(self):
         """Return images represented in subwindows."""
+        if not hasattr(self, "_spectrum"):
+            if self.imgs is None:
+                return None
+            else:
+                self._spectrum = LazySpectrumArray(
+                    windows=self.windows,
+                    time_size=self.time_size,
+                    time_overlap=self.time_overlap,
+                    kt=self.kt,
+                    kx=self.kx,
+                    ky=self.ky,
+                    smax=self.smax,
+                    threshold=self.spectrum_threshold
+                )
         return self._spectrum
 
-    @spectrum.setter
-    def spectrum(self, _spectrum):
-        self._spectrum = _spectrum
-
+    # @spectrum.setter
+    # def spectrum(self, _spectrum):
+    #     self._spectrum = _spectrum
 
     @property
     def windows(self):
         """Return images represented in subwindows."""
+        if not hasattr(self, "_windows"):
+            if self.imgs is None:
+                return None
+            else:
+                self._windows = LazyWindowArray(
+                    self.imgs,
+                    sliding_window_func=window.multi_sliding_window_array,
+                    win_x=self.win_x,
+                    win_y=self.win_y,
+                    norm=self.norm
+                )
         return self._windows
 
-    @windows.setter
-    def windows(self, win):
-        self._windows = win
+    # @windows.setter
+    # def windows(self, win):
+    #     self._windows = win
 
     @property
     def x(self):
@@ -187,32 +359,57 @@ class Iwave(object):
         self._y = _y
 
     @property
+    def win_x(self):
+        return self._win_x
+
+    @win_x.setter
+    def win_x(self, win_x):
+        self._win_x = win_x
+
+    @property
+    def win_y(self):
+        return self._win_y
+
+    @win_y.setter
+    def win_y(self, win_y):
+        self._win_y = win_y
+
+    @property
     def spectrum_dims(self):
         """Return expected dimensions of the spectrum derived from image windows."""
         return (self.time_size, *self.window_size)
 
-    def _get_subwindow(self, images: np.ndarray):
-        """Create and set windows following provided parameters."""
-        # get the x and y coordinates per window
-        # TODO: define windows based on window size and number of windows per dimension instead of overlap
+    def _get_win_xy(self, img_sample):
         win_x, win_y = window.sliding_window_idx(
-            images[0],
+            img_sample,
             window_size=self.window_size,
             overlap=self.overlap,
         )
-        # apply the coordinates on all images
-        windows = window.multi_sliding_window_array(
-            images,
-            win_x,
-            win_y,
-            swap_time_dim=True
-        )
-        if self.norm == "xy":
-            self.windows = window.normalize(windows, mode="xy")
-        elif self.norm == "time":
-            self.windows = window.normalize(windows, mode="time")
-        else:
-            self.windows = windows
+        self.win_x = win_x
+        self.win_y = win_y
+
+    # def _get_subwindow(self, images: np.ndarray):
+    #     """Create and set windows following provided parameters."""
+    #     # get the x and y coordinates per window
+    #     # TODO: define windows based on window size and number of windows per dimension instead of overlap
+    #     win_x, win_y = window.sliding_window_idx(
+    #         images[0],
+    #         window_size=self.window_size,
+    #         overlap=self.overlap,
+    #     )
+    #     # apply the coordinates on all images
+    #     windows = window.multi_sliding_window_array(
+    #         images,
+    #         win_x,
+    #         win_y,
+    #         swap_time_dim=True,
+    #     )
+    #     if self.norm == "xy":
+    #         self.windows = window.normalize(windows, mode="xy")
+    #     elif self.norm == "time":
+    #         self.windows = window.normalize(windows, mode="time")
+    #     else:
+    #         self.windows = windows.persist()
 
     def _get_wave_numbers(self):
         """Prepare and set wave number axes."""
@@ -220,7 +417,6 @@ class Iwave(object):
             self.spectrum_dims,
             self.resolution, self.fps
         )
-
 
     def _get_x_y_axes(self, images: np.ndarray):
         """Prepare and set x and y axes of velocity grid."""
@@ -238,11 +434,8 @@ class Iwave(object):
             self.windows,
             self.time_size,
             self.time_overlap,
-            engine="numba"
         )
-        # set the wave numbers
-        self._get_wave_numbers()
-        
+
         # preprocess
         self.spectrum = optimise.spectrum_preprocessing(
             spectrum,
@@ -350,7 +543,8 @@ class Iwave(object):
         self.imgs = io.get_imgs(path=path, wildcard=wildcard)
 
     def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4):
-        """
+        """Read video from start to end frame.
+
         Parameters
         ----------
         file : str
@@ -359,12 +553,8 @@ class Iwave(object):
             The starting frame number from which to begin reading the video.
         end_frame : int, optional
             The ending frame number until which to read the video.
-        Returns
-        -------
-        numpy.ndarray
-            An array of grayscale images from the video between the specified frames.
         """
-        # set the FPS
+        # set the FPS from the video metadata
         cap = cv2.VideoCapture(file)
         self.fps = cap.get(cv2.CAP_PROP_FPS)
 
@@ -372,7 +562,6 @@ class Iwave(object):
         del cap
         # Retrieve images
         self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame)
-        # get the frame rate from the video
 
 
     def save_frames(self, dst: str):

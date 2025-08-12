@@ -1,4 +1,3 @@
-import dask.array as da
 import numpy as np
 from typing import Tuple, Literal
 
@@ -57,15 +56,28 @@ def sliding_window_array(
 
 
 def multi_sliding_window_array(
-    imgs: da,
+    imgs: np.array,
     win_x: np.ndarray,
     win_y: np.ndarray,
-    swap_time_dim=False
+    swap_time_dim=False,
+    chunksize=None
 ) -> np.ndarray:
     """Get multiple interrogation windows from a stack of images lazily."""
-    windows = da.moveaxis(imgs.vindex[:, win_y, win_x], -1, 0)
+    windows = np.stack(
+        [
+            sliding_window_array(
+                img,
+                win_x,
+                win_y
+            ) for img in imgs
+        ]
+    )
+
     if swap_time_dim:
-        return da.swapaxes(windows, 0, 1)
+        windows = np.swapaxes(windows, 0, 1)
+    if chunksize is not None:
+        windows = windows.rechunk({0: chunksize})
+
     return windows
 
 
@@ -255,7 +267,8 @@ def normalize(
         )
     else:
         raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
-    imgs_norm = (imgs - imgs_mean) / imgs_std
-    imgs_norm = np.nan_to_num(imgs_norm, nan=0.0)
-    return imgs_norm
+    # this step takes a lot of memory, consider doing a stepwise replacement through numba instead of numpy in one go
+    imgs = (imgs - imgs_mean) / imgs_std
+    imgs = np.nan_to_num(imgs)
+    return imgs
 

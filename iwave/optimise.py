@@ -166,7 +166,7 @@ def spectrum_preprocessing(
     preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
     # apply threshold
-    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis = 1, keepdims = True)
+    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
     preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
 
     # set the first slice (frequency=0) to 0
@@ -190,7 +190,6 @@ def spectrum_preprocessing(
         
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
-    
     return preprocessed_spectrum
 
 def dispersion_threshold(
