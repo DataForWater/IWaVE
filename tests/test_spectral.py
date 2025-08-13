@@ -22,16 +22,6 @@ def test_numpy_fft(img_windows_norm):
         windows.shape[1],
         windows.shape[2]
     )
-    # TODO: code below for plotting, may be moved to API
-    # import matplotlib.pyplot as plt
-    # kt, ky, kx = spectral._get_wave_numbers(
-    #     windows.shape,
-    #     0.02, 20
-    # )
-    # plt.imshow(np.log(spectrum[:, :, 32]))
-    # plt.colorbar()
-    # plt.show()
-    # print(spectrum.shape)
 
 
 def test_numba_fft(img_windows_norm):

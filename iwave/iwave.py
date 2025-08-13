@@ -428,24 +428,6 @@ class Iwave(object):
         self.x = x
         self.y = y
 
-    def get_spectra(self, threshold: float = 1.):
-        """Generate and set spectra of all extracted windows."""
-        spectrum = spectral.sliding_window_spectrum(
-            self.windows,
-            self.time_size,
-            self.time_overlap,
-        )
-
-        # preprocess
-        self.spectrum = optimise.spectrum_preprocessing(
-            spectrum,
-            self.kt,
-            self.ky,
-            self.kx,
-            self.smax*3,
-            spectrum_threshold=threshold
-        )
-
     def plot_spectrum(
         self,
         window_idx: int,
@@ -542,7 +524,7 @@ class Iwave(object):
         self.fps = fps
         self.imgs = io.get_imgs(path=path, wildcard=wildcard)
 
-    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4):
+    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4, downsampling: int = 1):
         """Read video from start to end frame.
 
         Parameters
@@ -561,7 +543,8 @@ class Iwave(object):
         cap.release()
         del cap
         # Retrieve images
-        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame)
+        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame, downsampling=downsampling)
+
 
 
     def save_frames(self, dst: str):
@@ -616,13 +599,13 @@ class Iwave(object):
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
-        bounds_list = [bounds for _ in self.spectrum]
+        bounds_list = [bounds for _ in range(len(self.spectrum))]
         
         # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
         img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
 
         if twosteps == True:
-            print(f"Step 1:")
+            print(f"First pass optimization...")
             bounds_firststep = bounds_list
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
@@ -631,17 +614,17 @@ class Iwave(object):
                 self.spectrum,
                 bounds_firststep,
                 alpha,
-                img_size,
+                self.spectrum_dims,
                 self.resolution,
                 self.fps,
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                downsample = 2, # for the first step, reduce the data size by 2
+                downsample=2, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
                 **opt_kwargs
             )
-            print(f"Step 2:")
+            print(f"Second pass optimization...:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
             vy_step1 = output_step1[:, 0]
             vx_step1 = output_step1[:, 1]
@@ -661,7 +644,7 @@ class Iwave(object):
             self.penalty_weight,  
             self.gravity_waves_switch, 
             self.turbulence_switch, 
-            downsample = 1,
+            downsample=1,
             gauss_width=1,  # TODO: figure out defaults
             **opt_kwargs
         )

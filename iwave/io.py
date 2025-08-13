@@ -105,7 +105,7 @@ def get_frames(fn: str, start_frame: int, end_frame: int, chunksize=None) -> da:
     return da_stack
 
 
-def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
+def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, downsampling: int = 1):
     """Read video frames from file
 
     Parameters
@@ -132,7 +132,7 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
 
     # retrieve images from start to end frame
     return np.stack(
-        [cv2.cvtColor(cap.read()[-1], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
+        [cv2.cvtColor(cap.read()[-1][::downsampling, ::downsampling], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
     )
     
 

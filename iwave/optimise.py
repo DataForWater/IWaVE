@@ -1,14 +1,13 @@
 import numpy as np
+import os
 from scipy import optimize
-from scipy.stats import chi2
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 from typing import Tuple, List
 
 from iwave import dispersion
-# from iwave import spectral
-
 
 def cost_function_velocity_depth(
     x: Tuple[float, float, float],
@@ -31,23 +30,17 @@ def cost_function_velocity_depth(
     x :  [float, float, float]
         velocity_y, velocity_x, log-depth
         tentative surface velocity components along y and x (m/s) and log of depth (m)
-
     measured_spectrum : np.ndarray
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
-
-    window_dims: [int, int, int]
+    window_dims : [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
+    res : float
         image resolution (m/pxl)
-
-    fps: float
+    fps : float
         image acquisition rate (fps)
-    
-    penalty_weight: float=1
+    penalty_weight : float
         Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
         may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
         when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
@@ -55,16 +48,13 @@ def cost_function_velocity_depth(
         underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
         but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2 * the 
         typical velocity and setting penalty_weight = 0 will provide the most accurate results.
-
-    gravity_waves_switch: bool=True
+    gravity_waves_switch : bool
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
+    turbulence_switch : bool
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
-
-    gauss_width: float
+    gauss_width : float
         width of the synthetic spectrum smoothing kernel
 
     Returns
@@ -85,17 +75,16 @@ def cost_function_velocity_depth(
         window_dims, res, fps, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
-    
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
     
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function*(1 + 2*penalty_weight*np.linalg.norm(velocity)/(res*fps))
+    cost_function = cost_function*(1 + 2 * penalty_weight * np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
 
 def nsp_inv(
-        measured_spectrum: np.ndarray,
-        synthetic_spectrum: np.ndarray
+    measured_spectrum: np.ndarray,
+    synthetic_spectrum: np.ndarray
 ) -> float:
     """
     Combine the measured and synthetic spectra and calculate the cost function (inverse of the normalised scalar product)
@@ -104,8 +93,7 @@ def nsp_inv(
     ----------
     measured_spectrum : np.ndarray
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
-    synthetic_spectrum: np.ndarray
+    synthetic_spectrum : np.ndarray
         synthetic 3D power spectrum
 
     Returns
@@ -118,7 +106,6 @@ def nsp_inv(
     """
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
     cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
-    
     return cost
 
 
@@ -128,7 +115,7 @@ def spectrum_preprocessing(
         ky: np.ndarray,
         kx: np.ndarray,
         velocity_threshold: float,
-        spectrum_threshold: float=1
+        spectrum_threshold: float = 1
 ) -> np.ndarray:
     """
     pre-processing of the measured spectrum to improve convergence of the optimisation
@@ -139,20 +126,20 @@ def spectrum_preprocessing(
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
         dimensions [wi, kti, kyi, kx]
 
-    kt: np.ndarray
+    kt : np.ndarray
         radian frequency vector (rad/s)
 
-    ky: np.ndarray
+    ky : np.ndarray
         y-wavenumber vector (rad/m)
     
-    kx: np.ndarray
+    kx : np.ndarray
         x-wavenumber vector (rad/m)
 
-    velocity_threshold: float
+    velocity_threshold : float
         maximum threshold velocity for spectrum filtering (m/s).
     
-    spectrum_threshold: float=1
-        threshold parameter for spectrum filtering. 
+    spectrum_threshold : float, optional
+        threshold parameter for spectrum filtering (default 1.0).
         the spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
         threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
 
@@ -256,8 +243,7 @@ def optimize_single_spectrum_velocity(
     Returns:
         v, u, d, cost, quality, status, message
     """
-    
-    if downsample>1: # reduce dimensions of spectrum (for two-step approach)
+    if downsample > 1: # reduce dimensions of spectrum (for two-step approach)
         measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
     
     
@@ -280,8 +266,13 @@ def optimize_single_spectrum_velocity(
     return vy, vx, d, cost, quality, status, message  
     
 
-def optimize_single_spectrum_velocity_unpack(args):
-    return optimize_single_spectrum_velocity(*args)
+def optimize_single_spectrum_velocity_unpack(kwargs):
+    kwargs["measured_spectrum"] = kwargs["measured_spectra"][kwargs["idx"]]
+    kwargs["bnds"] = kwargs["bnds_list"][kwargs["idx"]]
+    del kwargs["measured_spectra"]
+    del kwargs["bnds_list"]
+    del kwargs["idx"]
+    return optimize_single_spectrum_velocity(**kwargs)
 
 def optimise_velocity(
     measured_spectra: np.ndarray,
@@ -383,24 +374,105 @@ def optimise_velocity(
         termination message returned by the optimiser
     """
 
-    args_list = [
-        (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs)
-        for measured_spectrum, bnds in zip(measured_spectra, bnds_list)
-    ]
+    def generate_args(idxs): #, vel_indx, window_dims, res, fps, penalty_weight,
+                      # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
 
-    with ProcessPoolExecutor() as executor:
-        results = list(
-            tqdm(
-                executor.map(optimize_single_spectrum_velocity_unpack, args_list),
-                total=len(args_list),
-                desc="Optimizing windows"
+        """
+        Parameters
+        ----------
+        measured_spectra : LazySpectrumArray
+            A single set of measured spectra and corresponding bounds list
+
+        bnds_list : Tuple
+            The bounds list for the measured spectra
+
+
+        Returns
+        -------
+        tuple
+            A single set of arguments for each corresponding pair in measured_spectra and bnds_list
+        """
+        for idx in idxs:
+            inputs = dict(
+                idx=idx,
+                measured_spectra=measured_spectra,
+                bnds_list=bnds_list,
+                vel_indx=vel_indx,
+                window_dims=window_dims,
+                res=res,
+                fps=fps,
+                penalty_weight=penalty_weight,
+                gravity_waves_switch=gravity_waves_switch,
+                turbulence_switch=turbulence_switch,
+                downsample=downsample,
+                gauss_width=gauss_width,
+                kwargs=kwargs,
             )
-        )
+            yield inputs
+
+    # def optimize_single_spectrum_velocity_unpack(idx):
+    #     """Complete the entire argument list for optimization method and execute."""
+    #     measured_spectrum = measured_spectra[idx]
+    #     bnds = bnds_list[idx]
+    #     return optimize_single_spectrum_velocity(
+    #         measured_spectrum=measured_spectrum,
+    #         bnds=bnds,
+    #         vel_indx=vel_indx,
+    #         window_dims=window_dims,
+    #         res=res,
+    #         fps=fps,
+    #         penalty_weight=penalty_weight,
+    #         gravity_waves_switch=gravity_waves_switch,
+    #         turbulence_switch=turbulence_switch,
+    #         downsample=downsample,
+    #         gauss_width=gauss_width,
+    #         kwargs=kwargs
+    #     )
+    #
+    # args_list = [
+    #     (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs)
+    #     for measured_spectrum, bnds in zip(measured_spectra, bnds_list)
+    # ]
+    idxs = range(len(measured_spectra))  # Pair with indices
+    iter_args = generate_args(idxs)
+
+    results = [None] * len(idxs)  # Placeholder for results
+    max_workers = os.cpu_count()
+    chunk_size = 8
+    # Initialize progress bar before submitting tasks
+    progress_bar = tqdm(total=len(idxs), desc="Optimizing windows")
+    # for chunk_idxs, chunk_args in zip()
+    for idx in idxs[::chunk_size]:
+        idx_sel = idxs[idx:idx + chunk_size]
+        iter_args_sel = [next(iter_args) for _ in range(len(idx_sel))]
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(optimize_single_spectrum_velocity_unpack, input_args): idx for idx, input_args in zip(idx_sel, iter_args_sel)}
+
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()  # Store result in the correct position
+                progress_bar.update(1)
+    progress_bar.close()
+    #
+    # results = process_map(
+    #     optimize_single_spectrum_velocity_unpack,
+    #     iter_args,
+    #     max_workers=None,
+    #     desc="Optimizing windows"
+    # )
+    # with ProcessPoolExecutor() as executor:
+    #     results = list(
+    #         tqdm(
+    #             executor.map(optimize_single_spectrum_velocity_unpack, iter_args),
+    #             total=len(measured_spectra),
+    #             desc="Optimizing windows"
+    #         )
+    #     )
         
     optimal = np.array([[res[0], res[1], res[2]] for res in results])  # vy, vx, d
-    cost    = np.array([res[3] for res in results])
+    cost = np.array([res[3] for res in results])
     quality = np.array([res[4] for res in results])
-    status  = [res[5] for res in results]
+    status = [res[5] for res in results]
     message = [res[6] for res in results]
 
     return optimal, cost, quality, status, message

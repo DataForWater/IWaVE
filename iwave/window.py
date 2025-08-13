@@ -268,7 +268,8 @@ def normalize(
     else:
         raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
     # this step takes a lot of memory, consider doing a stepwise replacement through numba instead of numpy in one go
-    imgs = (imgs - imgs_mean) / imgs_std
+    with np.errstate(divide='ignore', invalid='ignore'):
+        imgs = (imgs - imgs_mean) / imgs_std
     imgs = np.nan_to_num(imgs)
     return imgs
 
