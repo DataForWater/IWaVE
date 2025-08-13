@@ -1,13 +1,22 @@
+import multiprocessing
 import numpy as np
 import os
-from scipy import optimize
+import sys
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from tqdm import tqdm
-from tqdm.contrib.concurrent import process_map
-from typing import Tuple, List
+import multiprocessing
 
-from iwave import dispersion
+from scipy import optimize
+from tqdm import tqdm
+from typing import Tuple, List, Union
+
+from iwave import dispersion, LazySpectrumArray
+
+# Set the multiprocessing start method to 'spawn'
+# multiprocessing.set_start_method("spawn", force=True)
+# Create a context with the desired start method
+start_method = "spawn" if 'ipykernel' in sys.modules else "fork"
+ctx = multiprocessing.get_context(start_method)
 
 def cost_function_velocity_depth(
     x: Tuple[float, float, float],
@@ -109,115 +118,6 @@ def nsp_inv(
     return cost
 
 
-def spectrum_preprocessing(
-        measured_spectrum: np.ndarray, 
-        kt: np.ndarray,
-        ky: np.ndarray,
-        kx: np.ndarray,
-        velocity_threshold: float,
-        spectrum_threshold: float = 1
-) -> np.ndarray:
-    """
-    pre-processing of the measured spectrum to improve convergence of the optimisation
-
-    Parameters
-    ----------
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-        dimensions [wi, kti, kyi, kx]
-
-    kt : np.ndarray
-        radian frequency vector (rad/s)
-
-    ky : np.ndarray
-        y-wavenumber vector (rad/m)
-    
-    kx : np.ndarray
-        x-wavenumber vector (rad/m)
-
-    velocity_threshold : float
-        maximum threshold velocity for spectrum filtering (m/s).
-    
-    spectrum_threshold : float, optional
-        threshold parameter for spectrum filtering (default 1.0).
-        the spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
-        threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
-
-    Returns
-    -------
-    preprocessed_spectrum : np.ndarray
-        pre-processed and normalised measured 3D spectrum
-
-    """
-    # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
-    preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
-
-    # apply threshold
-    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
-    preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
-
-    # set the first slice (frequency=0) to 0
-    preprocessed_spectrum[:,0,:,:] = 0
-
-    kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
-    
-    # set all frequencies higher than the threshold frequency to 0
-    kt_reshaped = kt[:, np.newaxis, np.newaxis] # reshape kt to be broadcastable
-    kt_threshold_bc = np.broadcast_to(kt_threshold, (kt.shape[0], kt_threshold.shape[1], kt_threshold.shape[2])) # broadcast kt_threshold to match the dimensions of kt
-    kt_bc = np.broadcast_to(kt_reshaped, kt_threshold_bc.shape) # broadcast kt to match the dimensions of kt_threshold
-    mask = np.where(kt_bc <= kt_threshold_bc, 1, 0) # create mask
-    mask = np.expand_dims(mask, axis=0)
-
-    preprocessed_spectrum = preprocessed_spectrum *mask # apply mask
-    
-    # normalise so that the maximum at each frequency is 1    
-    for i in range(preprocessed_spectrum.shape[0]):
-        max_value = np.max(preprocessed_spectrum[i,:,:])
-        preprocessed_spectrum[i,:,:] = preprocessed_spectrum[i,:,:]/max_value
-        
-    # remove NaNs
-    preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
-    return preprocessed_spectrum
-
-def dispersion_threshold(
-    ky, 
-    kx, 
-    velocity_threshold
-) -> np.ndarray:
-    
-    """
-    Calculate the frequency corresponding to the threshold velocity
-
-    Parameters
-    ----------
-    ky: np.ndarray
-        wavenumber array along the direction y
-
-    kx: np.ndarray
-        wavenumber array along the direction x
-
-    velocity_threshold : float
-        threshold_velocity (m/s)
-
-    Returns
-    -------
-    kt_threshold : np.ndarray
-        1 x N_y x N_x: threshold frequency
-
-    """
-
-    # create 2D wavenumber grid
-    kx, ky = np.meshgrid(kx, ky)
-
-    # transpose to 1 x N_y x N_x
-    ky = np.expand_dims(ky, axis=0)
-    kx = np.expand_dims(kx, axis=0)
-
-    # wavenumber modulus
-    k_mod = np.sqrt(ky ** 2 + kx ** 2)  
-    
-    return k_mod*velocity_threshold
-
 def cost_function_velocity_wrapper(
     x: Tuple[float, float, float],
     *args
@@ -267,6 +167,7 @@ def optimize_single_spectrum_velocity(
     
 
 def optimize_single_spectrum_velocity_unpack(kwargs):
+    """Wrap all arguments for optimization in a single dictionary."""
     kwargs["measured_spectrum"] = kwargs["measured_spectra"][kwargs["idx"]]
     kwargs["bnds"] = kwargs["bnds_list"][kwargs["idx"]]
     del kwargs["measured_spectra"]
@@ -275,7 +176,7 @@ def optimize_single_spectrum_velocity_unpack(kwargs):
     return optimize_single_spectrum_velocity(**kwargs)
 
 def optimise_velocity(
-    measured_spectra: np.ndarray,
+    measured_spectra: Union[np.ndarray, LazySpectrumArray],
     bnds_list: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
     vel_indx: float,
     window_dims: Tuple[int, int, int], 
@@ -410,42 +311,28 @@ def optimise_velocity(
             )
             yield inputs
 
-    # def optimize_single_spectrum_velocity_unpack(idx):
-    #     """Complete the entire argument list for optimization method and execute."""
-    #     measured_spectrum = measured_spectra[idx]
-    #     bnds = bnds_list[idx]
-    #     return optimize_single_spectrum_velocity(
-    #         measured_spectrum=measured_spectrum,
-    #         bnds=bnds,
-    #         vel_indx=vel_indx,
-    #         window_dims=window_dims,
-    #         res=res,
-    #         fps=fps,
-    #         penalty_weight=penalty_weight,
-    #         gravity_waves_switch=gravity_waves_switch,
-    #         turbulence_switch=turbulence_switch,
-    #         downsample=downsample,
-    #         gauss_width=gauss_width,
-    #         kwargs=kwargs
-    #     )
-    #
-    # args_list = [
-    #     (measured_spectrum, bnds, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs)
-    #     for measured_spectrum, bnds in zip(measured_spectra, bnds_list)
-    # ]
+
     idxs = range(len(measured_spectra))  # Pair with indices
     iter_args = generate_args(idxs)
 
     results = [None] * len(idxs)  # Placeholder for results
     max_workers = os.cpu_count()
-    chunk_size = 8
+    chunk_size = 50
     # Initialize progress bar before submitting tasks
+
+    # Limit thread usage for OpenMP and BLAS backends
+    os.environ["OMP_NUM_THREADS"] = "1"  # OpenMP threads
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"  # OpenBLAS threads
+    os.environ["MKL_NUM_THREADS"] = "1"  # MKL threads
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"  # macOS Accelerate threads
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr threads
+
     progress_bar = tqdm(total=len(idxs), desc="Optimizing windows")
     # for chunk_idxs, chunk_args in zip()
     for idx in idxs[::chunk_size]:
         idx_sel = idxs[idx:idx + chunk_size]
         iter_args_sel = [next(iter_args) for _ in range(len(idx_sel))]
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
             futures = {executor.submit(optimize_single_spectrum_velocity_unpack, input_args): idx for idx, input_args in zip(idx_sel, iter_args_sel)}
 
             for future in as_completed(futures):
@@ -453,22 +340,8 @@ def optimise_velocity(
                 results[idx] = future.result()  # Store result in the correct position
                 progress_bar.update(1)
     progress_bar.close()
-    #
-    # results = process_map(
-    #     optimize_single_spectrum_velocity_unpack,
-    #     iter_args,
-    #     max_workers=None,
-    #     desc="Optimizing windows"
-    # )
-    # with ProcessPoolExecutor() as executor:
-    #     results = list(
-    #         tqdm(
-    #             executor.map(optimize_single_spectrum_velocity_unpack, iter_args),
-    #             total=len(measured_spectra),
-    #             desc="Optimizing windows"
-    #         )
-    #     )
-        
+
+    # wrap results together
     optimal = np.array([[res[0], res[1], res[2]] for res in results])  # vy, vx, d
     cost = np.array([res[3] for res in results])
     quality = np.array([res[4] for res in results])

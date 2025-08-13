@@ -1,7 +1,5 @@
 """File I/O functions for IWaVE."""
 
-import dask.array as da
-import dask
 import glob
 import matplotlib.axes
 import matplotlib.pyplot as plt
@@ -17,92 +15,6 @@ try:
     ENABLE_CV2 = True
 except:
     ENABLE_CV2 = False
-
-# ensure only one dask task at the time
-# dask.config.set(scheduler="synchronous")
-
-def get_frames_chunk(fn : str, n_start: int, n_end: int) -> np.ndarray:
-    """Retrieve a chunk of frames in one go.
-
-    Parameters
-    ----------
-    fn : str
-        file path of video to read from
-    n_start : int
-        frame number to initiate retrieval
-    n_end : int
-        last frame number of retrieval
-    method : str
-        can be "rgb", "grayscale", or "hsv", default: "grayscale"
-
-    Returns
-    -------
-    frames : np.ndarray
-        3d array (N, grayscale imgs)
-
-    """
-    if ENABLE_CV2 == False:
-        raise ImportError("This function needs cv2. Install iwave with pip install iwave[extra]")
-    print(f"Getting frame {n_start} until {n_end}")
-
-    assert n_start >= 0, "frame number cannot be negative"
-    assert (
-        n_start <= n_end
-    ), "start frame must be smaller than end frame"
-    if not os.path.isfile(fn):
-        raise IOError(f"Video file {fn} does not exist.")
-    cap = cv2.VideoCapture(fn)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, n_start)
-    imgs = []
-    for n in range(n_start, n_end):
-        ret, img = cap.read()
-        if not ret:
-            raise ValueError(f"could not read frame {n}")
-        # turn to gray scale
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        imgs.append(img)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    cap.release()
-    return np.array(imgs)
-
-def get_frames(fn: str, start_frame: int, end_frame: int, chunksize=None) -> da:
-    """Get a dask.array of frames, from `start_frame` until `end_frame`.
-
-    The array may be lazy, so that frames can be read at a later stage.
-
-    Parameters
-    ----------
-    start_frame : int
-        first frame to read
-    end_frame: int
-        last frame to read
-    chunksize : int
-        chunk size as amount of frames to read in one go
-
-    Returns
-    -------
-    frames : dask.array
-        lazy element containing all requested frames
-
-    """
-    if chunksize is None:
-        chunksize = end_frame - start_frame
-    get_frames_chunk_dask = dask.delayed(get_frames_chunk, pure=True)  # Lazy version of get_frames_chunk
-    # derive video shape by reading one frame first
-    sample = get_frames_chunk_dask(fn, n_start=0, n_end=1).compute()[0]
-    # create an empty array
-    data_array = []
-    for n_start in range(start_frame, end_frame, chunksize):
-        # set end frame for current chunk
-        n_end = np.minimum(n_start + chunksize, end_frame)
-        frame_chunk = get_frames_chunk_dask(fn, n_start=n_start, n_end=n_end)
-        shape = (n_end - n_start, *sample.shape)
-        # add lazy array to stack
-        data_array.append(dask.array.from_delayed(frame_chunk, dtype=sample.dtype, shape=shape))
-    print(f"Reading {start_frame} until {end_frame} in {len(data_array)} chunks of size {chunksize}")
-    # return concatenated stack
-    da_stack = dask.array.concatenate(data_array, axis=0)
-    return da_stack
 
 
 def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, downsampling: int = 1):

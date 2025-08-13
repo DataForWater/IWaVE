@@ -1,8 +1,5 @@
-import dask.array as da
-import dask
 import numba as nb
 import numpy as np
-from typing import Literal, Union
 
 
 @nb.njit(cache=True)
@@ -182,10 +179,9 @@ def _numpy_fourier_transform(
 
 
 def spectral_imgs(
-    imgs: Union[np.ndarray, da],
-    # engine: Literal["numpy", "numba"] = "numba",
+    imgs: np.ndarray,
     **kwargs
-) -> Union[np.ndarray, da]:
+):
     """
     Perform 3D spectral analysis.
 
@@ -207,26 +203,10 @@ def spectral_imgs(
     """
     def numba_process_chunk(chunk):
         return _numba_fourier_transform(chunk)
-    # if engine == "numpy":
-    #     return np.array([_numpy_fourier_transform(windows, **kwargs) for windows in imgs])
-    # elif engine == "numba":
     n, t, y, x = imgs.shape
     t_out = int(np.ceil(t / 2))  # Reduced time dimension
-
-    if isinstance(imgs, dask.array.Array):
-        spectra = da.map_blocks(
-            numba_process_chunk,
-            imgs,
-            # kwargs=kwargs,
-            dtype=np.float64,
-            chunks=(imgs.chunks[0], t_out, y, x)  # provide expected output shape
-        )
-    else:
-        # apparently the array is a numpy array and can be processed directly
-        spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
+    spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
     return spectra
-    # else:
-    #     raise ValueError(f'engine "{engine}" does not exist. Choose "numba" (default) or "numpy"')
 
 
 def sliding_window_spectrum(
@@ -274,4 +254,115 @@ def sliding_window_spectrum(
     # renormalisation
     spectra = spectrum_sum / num_segments
     return spectra
+
+
+def spectrum_preprocessing(
+        measured_spectrum: np.ndarray,
+        kt: np.ndarray,
+        ky: np.ndarray,
+        kx: np.ndarray,
+        velocity_threshold: float,
+        spectrum_threshold: float = 1
+) -> np.ndarray:
+    """
+    pre-processing of the measured spectrum to improve convergence of the optimisation
+
+    Parameters
+    ----------
+    measured_spectrum : np.ndarray
+        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
+        dimensions [wi, kti, kyi, kx]
+
+    kt : np.ndarray
+        radian frequency vector (rad/s)
+
+    ky : np.ndarray
+        y-wavenumber vector (rad/m)
+
+    kx : np.ndarray
+        x-wavenumber vector (rad/m)
+
+    velocity_threshold : float
+        maximum threshold velocity for spectrum filtering (m/s).
+
+    spectrum_threshold : float, optional
+        threshold parameter for spectrum filtering (default 1.0).
+        the spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
+        threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
+
+    Returns
+    -------
+    preprocessed_spectrum : np.ndarray
+        pre-processed and normalised measured 3D spectrum
+
+    """
+    # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
+    preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
+
+    # apply threshold
+    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
+    preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
+
+    # set the first slice (frequency=0) to 0
+    preprocessed_spectrum[:, 0, :, :] = 0
+
+    kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
+
+    # set all frequencies higher than the threshold frequency to 0
+    kt_reshaped = kt[:, np.newaxis, np.newaxis]  # reshape kt to be broadcastable
+    kt_threshold_bc = np.broadcast_to(kt_threshold, (kt.shape[0], kt_threshold.shape[1], kt_threshold.shape[
+        2]))  # broadcast kt_threshold to match the dimensions of kt
+    kt_bc = np.broadcast_to(kt_reshaped, kt_threshold_bc.shape)  # broadcast kt to match the dimensions of kt_threshold
+    mask = np.where(kt_bc <= kt_threshold_bc, 1, 0)  # create mask
+    mask = np.expand_dims(mask, axis=0)
+
+    preprocessed_spectrum = preprocessed_spectrum * mask  # apply mask
+
+    # normalise so that the maximum at each frequency is 1
+    for i in range(preprocessed_spectrum.shape[0]):
+        max_value = np.max(preprocessed_spectrum[i, :, :])
+        preprocessed_spectrum[i, :, :] = preprocessed_spectrum[i, :, :] / max_value
+
+    # remove NaNs
+    preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
+    return preprocessed_spectrum
+
+
+def dispersion_threshold(
+        ky,
+        kx,
+        velocity_threshold
+) -> np.ndarray:
+    """
+    Calculate the frequency corresponding to the threshold velocity
+
+    Parameters
+    ----------
+    ky: np.ndarray
+        wavenumber array along the direction y
+
+    kx: np.ndarray
+        wavenumber array along the direction x
+
+    velocity_threshold : float
+        threshold_velocity (m/s)
+
+    Returns
+    -------
+    kt_threshold : np.ndarray
+        1 x N_y x N_x: threshold frequency
+
+    """
+
+    # create 2D wavenumber grid
+    kx, ky = np.meshgrid(kx, ky)
+
+    # transpose to 1 x N_y x N_x
+    ky = np.expand_dims(ky, axis=0)
+    kx = np.expand_dims(kx, axis=0)
+
+    # wavenumber modulus
+    k_mod = np.sqrt(ky ** 2 + kx ** 2)
+
+    return k_mod * velocity_threshold
 
