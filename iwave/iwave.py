@@ -47,7 +47,7 @@ class Iwave(object):
         penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
-        window_chunk: Optional[int] = None,
+        window_chunk_size: Optional[int] = 50,
     ):
         """Initialize an Iwave instance.
 
@@ -90,11 +90,10 @@ class Iwave(object):
             turbulence-generated patterns and/or floating particles are NOT modelled. Default True.
             Setting turbulence_switch = False may improve performance if water waves dominate the scene, or if tracers
             dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
-        window_chunk : int, optional
-            If provided, processing will be done per batch of this size. If not provided, a reasonable estimate will be
-            made on the basis of available memory.
+        window_chunk_size : int, optional
+            Number of windows to process at a time. Defaults to 50.
         """
-        self.window_chunk = window_chunk
+        self.window_chunk_size = window_chunk_size
         self.resolution = resolution
         # ensures that window dimensions are even. this is to facilitate dimension reduction of the spectra.
         # this is currently working only for a downsampling rate of 2
@@ -424,7 +423,6 @@ class Iwave(object):
         twosteps : bool, optional
             if set, perform the optimisation twice, with a reduced spectrum in the first step without optimizing depth
             and full spectrum in the second step with optimizing depth. Default False.
-
         See also
         --------
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html

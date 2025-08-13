@@ -2,6 +2,10 @@
 
 __version__ = "0.2.0"
 
+import os
+
+CONCURRENCY = int(os.environ.get("IWAVE_NUM_THREADS", os.cpu_count()))
+
 from . import const
 from . import dispersion
 from . import io
@@ -11,3 +15,4 @@ from . import window
 from .data_models import LazySpectrumArray, LazyWindowArray
 from . import optimise
 from .iwave import Iwave
+

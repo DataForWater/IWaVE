@@ -10,10 +10,8 @@ from scipy import optimize
 from tqdm import tqdm
 from typing import Tuple, List, Union
 
-from iwave import dispersion, LazySpectrumArray
+from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 
-# Set the multiprocessing start method to 'spawn'
-# multiprocessing.set_start_method("spawn", force=True)
 # Create a context with the desired start method
 start_method = "spawn" if 'ipykernel' in sys.modules else "fork"
 ctx = multiprocessing.get_context(start_method)
@@ -187,6 +185,7 @@ def optimise_velocity(
     turbulence_switch: bool=True,
     downsample : int=1,
     gauss_width: float=1,
+    chunk_size: int = 50,
     **kwargs
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[bool], List[str]]:
     """
@@ -197,51 +196,42 @@ def optimise_velocity(
     measured_spectra : np.ndarray
         measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
         dimensions [N_windows, Nt, Ny, Nx]
-
-    bnds_list: [(float, float), (float, float), (float, float)]
+    bnds_list: List[(float, float), (float, float), (float, float)]
         [(min_vel_y, max_vel_y), (min_vel_x, max_vel_x), (min_depth, max_depth)] velocity (m/s) and depth (m) bounds
         this is supplied as a list with potentially different values for each window
-
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
-
-    window_dims: [int, int, int]
+    window_dims: List[int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-
     res: float
         image resolution (m/pxl)
-
     fps: float
         image acquisition rate (fps)
-        
     dof: float
         spectrum degrees of freedom
-    
-    penalty_weight: float=1
-        Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
-        may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
+    penalty_weight: float, optional
+        Defaults to 1.0. Because of the two branches of the surface spectrum (waves and turbulence-forced patterns),
+        the algorithm may choose the wrong solution causing a strongly overestimated velocity magnitude, especially
         when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
         solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
         underestimate the velocity. Setting penalty_weight = 0 will eliminate the bias, but may produce more outliers.
         If the velocity magnitude can be predicted reasonably, setting smax < 2 * the typical velocity and setting 
         penalty_weight = 0 will provide the most accurate results.
-
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
+    gravity_waves_switch: bool, optional
+        if True (default), gravity waves are modelled
         if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
+    turbulence_switch: bool, optional
+        if True (default), turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
-        
-    downsample: int=1
-        downsampling rate. If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to 'downsample'.
-        Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially.
-
-    gauss_width: float=1
-        width of the synthetic spectrum smoothing kernel.
+    downsample: int, optional
+        downsampling rate (default 1). If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to
+        'downsample'. Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the
+        images spatially.
+    gauss_width: float, optional
+        width of the synthetic spectrum smoothing kernel (default 1.0).
         gauss_width > 1 could be useful with very noisy spectra.
-
+    chunk_size : int, optional
+        Number of spectra to process at a time. Defaults to 50
     **kwargs : dict
         keyword arguments to pass to `scipy.optimize.differential_evolution, see also
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
@@ -249,28 +239,16 @@ def optimise_velocity(
     Returns
     -------
     optimal : np.ndarray
-
-    optimal[:,0] : float
-        optimised y velocity component (m/s)
-
-    optimal[:,1] : float
-        optimised x velocity component (m/s)
-        
-    optimal[:,2] : float
-        optimised depth (m)
-    
+        optimised y [0] and x [1] velocity component (m/s) and depth (m) [2]
     cost : float
-    Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
-    
+        Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
     quality : float
-    Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality. 
-    q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
-    This parameter measures the similarity between the measured spectra and ideal spectra. 
-    While there is no direct link with results uncertainties, higher q indicates better quality data.
-    
+        Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality.
+        q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
+        This parameter measures the similarity between the measured spectra and ideal spectra.
+        While there is no direct link with results uncertainties, higher q indicates better quality data.
     status : Bool
         Boolean flag indicating the optimiser termination condition
-        
     message : str
         termination message returned by the optimiser
     """
@@ -316,8 +294,7 @@ def optimise_velocity(
     iter_args = generate_args(idxs)
 
     results = [None] * len(idxs)  # Placeholder for results
-    max_workers = os.cpu_count()
-    chunk_size = 50
+    max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
     # Initialize progress bar before submitting tasks
 
     progress_bar = tqdm(total=len(idxs), desc="Optimizing windows")

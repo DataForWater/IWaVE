@@ -134,9 +134,6 @@ print(f"Shape of the available images is {iw.imgs.shape}")
 # show the shape of the manipulated windows
 print(f"Shape of the available images is {iw.windows.shape}")
 
-# Get the spectra of all windows and filter spectra with a spectral threshold of 1.0
-iw.get_spectra(threshold=1.0)
-
 # create a new figure with two subplots in one row
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
 
@@ -213,9 +210,24 @@ This estimates velocities in x and y-directions (u, v) per interrogation window 
 
 ### Optimisation algorithm
 
-The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (scipy.optimize.differential_evolution) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
+> [!NOTE]
+> By default, optimizations are parallelized using the maximum amount of CPUs available on your system. If you want to 
+> change the amount of CPUs used for optimization, you can set the environment variable `IWAVE_NUM_THREADS` to the desired 
+> number of CPUs.
+> If you set this environment variable within a python script, you can also set it within the script itself.
+> ```python
+> import os
+> os.environ["IWAVE_NUM_THREADS"] = "1"
+> 
+> # make sure you import iwave AFTER setting the environment variable
+> import iwave
+> ```
 
-Setting "twosteps" = True (default = False) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers. 
+
+The sensitivity of water surface dynamics to variations in water depth is minimal. Depth estimations have specific requirements (see below) and can be prone to significant errors. Do not rely on depth estimates for any activity that could pose a risk.
+The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (`scipy.optimize.differential_evolution`) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
+
+Setting `twosteps = True` (default is `False`) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers. 
 
 ### Uncertainties
 
@@ -226,7 +238,7 @@ The dictionary `info` contain additional information returned by the optimisers.
 
 ### Estimating water depth as well as x and y-directional velocity
 
-The depth estimation is enabled by setting depth = 0 in iw.velocimetry:
+The depth estimation is enabled by setting `depth = 0` in `iw.velocimetry`:
 
 ```python
 from iwave import Iwave, sample_data
