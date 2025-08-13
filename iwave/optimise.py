@@ -320,13 +320,6 @@ def optimise_velocity(
     chunk_size = 50
     # Initialize progress bar before submitting tasks
 
-    # Limit thread usage for OpenMP and BLAS backends
-    os.environ["OMP_NUM_THREADS"] = "1"  # OpenMP threads
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"  # OpenBLAS threads
-    os.environ["MKL_NUM_THREADS"] = "1"  # MKL threads
-    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"  # macOS Accelerate threads
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NumExpr threads
-
     progress_bar = tqdm(total=len(idxs), desc="Optimizing windows")
     # for chunk_idxs, chunk_args in zip()
     for idx in idxs[::chunk_size]:

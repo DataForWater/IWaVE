@@ -204,10 +204,6 @@ class Iwave(object):
                 )
         return self._windows
 
-    # @windows.setter
-    # def windows(self, win):
-    #     self._windows = win
-
     @property
     def x(self):
         """Return x-axis of velocimetry field."""
@@ -255,29 +251,6 @@ class Iwave(object):
         )
         self.win_x = win_x
         self.win_y = win_y
-
-    # def _get_subwindow(self, images: np.ndarray):
-    #     """Create and set windows following provided parameters."""
-    #     # get the x and y coordinates per window
-    #     # TODO: define windows based on window size and number of windows per dimension instead of overlap
-    #     win_x, win_y = window.sliding_window_idx(
-    #         images[0],
-    #         window_size=self.window_size,
-    #         overlap=self.overlap,
-    #     )
-    #     # apply the coordinates on all images
-    #     windows = window.multi_sliding_window_array(
-    #         images,
-    #         win_x,
-    #         win_y,
-    #         swap_time_dim=True,
-    #     )
-    #     if self.norm == "xy":
-    #         self.windows = window.normalize(windows, mode="xy")
-    #     elif self.norm == "time":
-    #         self.windows = window.normalize(windows, mode="time")
-    #     else:
-    #         self.windows = windows.persist()
 
     def _get_wave_numbers(self):
         """Prepare and set wave number axes."""
@@ -392,7 +365,7 @@ class Iwave(object):
         self.fps = fps
         self.imgs = io.get_imgs(path=path, wildcard=wildcard)
 
-    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4, downsampling: int = 1):
+    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
         """Read video from start to end frame.
 
         Parameters
@@ -403,6 +376,8 @@ class Iwave(object):
             The starting frame number from which to begin reading the video.
         end_frame : int, optional
             The ending frame number until which to read the video.
+        stride : int, optional
+            lower the sampling rate by this factor. Default 1.
         """
         # set the FPS from the video metadata
         cap = cv2.VideoCapture(file)
@@ -411,7 +386,7 @@ class Iwave(object):
         cap.release()
         del cap
         # Retrieve images
-        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame, downsampling=downsampling)
+        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame, stride=stride)
 
 
 
@@ -469,9 +444,6 @@ class Iwave(object):
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
         bounds_list = [bounds for _ in range(len(self.spectrum))]
         
-        # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
-        img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-
         if twosteps == True:
             print(f"First pass optimization...")
             bounds_firststep = bounds_list
@@ -506,7 +478,7 @@ class Iwave(object):
             self.spectrum,
             bounds_list,
             alpha,
-            img_size,
+            self.spectrum_dims,
             self.resolution,
             self.fps,
             self.penalty_weight,  

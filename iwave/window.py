@@ -56,11 +56,10 @@ def sliding_window_array(
 
 
 def multi_sliding_window_array(
-    imgs: np.array,
+    imgs: np.ndarray,
     win_x: np.ndarray,
     win_y: np.ndarray,
     swap_time_dim=False,
-    chunksize=None
 ) -> np.ndarray:
     """Get multiple interrogation windows from a stack of images lazily."""
     windows = np.stack(
@@ -75,8 +74,6 @@ def multi_sliding_window_array(
 
     if swap_time_dim:
         windows = np.swapaxes(windows, 0, 1)
-    if chunksize is not None:
-        windows = windows.rechunk({0: chunksize})
 
     return windows
 

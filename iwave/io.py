@@ -17,7 +17,7 @@ except:
     ENABLE_CV2 = False
 
 
-def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, downsampling: int = 1):
+def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
     """Read video frames from file
 
     Parameters
@@ -28,6 +28,8 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, downsampling: i
         The starting frame number from which to begin extraction (default is 0).
     end_frame : int, optional
         The frame number at which to stop extraction (default is 4).
+    stride : int, optional
+        lower the sampling rate by this factor. Default 1.
 
     Returns
     -------
@@ -44,7 +46,7 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, downsampling: i
 
     # retrieve images from start to end frame
     return np.stack(
-        [cv2.cvtColor(cap.read()[-1][::downsampling, ::downsampling], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
+        [cv2.cvtColor(cap.read()[-1][::stride, ::stride], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
     )
     
 
