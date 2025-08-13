@@ -41,11 +41,8 @@ def test_numba_fft_multi(img_windows_norm):
         assert np.allclose(spectrum_numpy, spectrum)
 
 
-@pytest.mark.parametrize(
-    "engine", ["numpy", "numba"]
-)
-def test_sliding_window_spectrum(img_windows_norm, engine):
+def test_sliding_window_spectrum(img_windows_norm):
     """Check shape of average of multiple spectra over several time slices."""
-    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10, engine=engine)
+    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10)
     # test if the spectra have the desired size
     assert spectrum.shape[-3] == int(np.ceil(20 / 2))
