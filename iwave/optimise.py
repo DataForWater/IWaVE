@@ -166,12 +166,13 @@ def optimize_single_spectrum_velocity(
 
 def optimize_single_spectrum_velocity_unpack(kwargs):
     """Wrap all arguments for optimization in a single dictionary."""
-    kwargs["measured_spectrum"] = kwargs["measured_spectra"][kwargs["idx"]]
-    kwargs["bnds"] = kwargs["bnds_list"][kwargs["idx"]]
-    del kwargs["measured_spectra"]
-    del kwargs["bnds_list"]
-    del kwargs["idx"]
+    # kwargs["measured_spectrum"] = kwargs["measured_spectra"][kwargs["idx"]]
+    # kwargs["bnds"] = kwargs["bnds_list"][kwargs["idx"]]
+    # del kwargs["measured_spectra"]
+    # del kwargs["bnds_list"]
+    # del kwargs["idx"]
     return optimize_single_spectrum_velocity(**kwargs)
+
 
 def optimise_velocity(
     measured_spectra: Union[np.ndarray, LazySpectrumArray],
@@ -186,6 +187,7 @@ def optimise_velocity(
     downsample : int=1,
     gauss_width: float=1,
     chunk_size: int = 50,
+    desc="Optimizing windows",
     **kwargs
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[bool], List[str]]:
     """
@@ -253,8 +255,8 @@ def optimise_velocity(
         termination message returned by the optimiser
     """
 
-    def generate_args(idxs): #, vel_indx, window_dims, res, fps, penalty_weight,
-                      # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
+    def generate_args(): #, vel_indx, window_dims, res, fps, penalty_weight,
+        # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
 
         """
         Parameters
@@ -271,11 +273,10 @@ def optimise_velocity(
         tuple
             A single set of arguments for each corresponding pair in measured_spectra and bnds_list
         """
-        for idx in idxs:
-            inputs = dict(
-                idx=idx,
-                measured_spectra=measured_spectra,
-                bnds_list=bnds_list,
+        args_list = [
+            dict(
+                measured_spectrum=measured_spectrum,
+                bnds=bnds,
                 vel_indx=vel_indx,
                 window_dims=window_dims,
                 res=res,
@@ -286,24 +287,28 @@ def optimise_velocity(
                 downsample=downsample,
                 gauss_width=gauss_width,
                 kwargs=kwargs,
-            )
-            yield inputs
-
+            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
+        ]
+        return args_list
 
     idxs = range(len(measured_spectra))  # Pair with indices
-    iter_args = generate_args(idxs)
+    # iter_args = generate_args(idxs)
 
     results = [None] * len(idxs)  # Placeholder for results
     max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
     # Initialize progress bar before submitting tasks
 
-    progress_bar = tqdm(total=len(idxs), desc="Optimizing windows")
+    progress_bar = tqdm(total=len(idxs), desc=desc)
     # for chunk_idxs, chunk_args in zip()
     for idx in idxs[::chunk_size]:
+        # select and read the current data block in one go
         idx_sel = idxs[idx:idx + chunk_size]
-        iter_args_sel = [next(iter_args) for _ in range(len(idx_sel))]
+        spectra_sel = measured_spectra[idx: idx + chunk_size]
+        bnds_sel = bnds_list[idx: idx + chunk_size]
+        # iter_args_sel = [next(iter_args) for _ in range(len(idx_sel))]
+        args_sel = generate_args()
         with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-            futures = {executor.submit(optimize_single_spectrum_velocity_unpack, input_args): idx for idx, input_args in zip(idx_sel, iter_args_sel)}
+            futures = {executor.submit(optimize_single_spectrum_velocity_unpack, input_args): idx for idx, input_args in zip(idx_sel, args_sel)}
 
             for future in as_completed(futures):
                 idx = futures[future]

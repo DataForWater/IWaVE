@@ -162,6 +162,23 @@ class Iwave(object):
             self._get_x_y_axes(images)  # set envisaged axes
             # set the wave numbers from image fps
             self._get_wave_numbers()
+            self._windows = LazyWindowArray(
+                self.imgs,
+                sliding_window_func=window.multi_sliding_window_array,
+                win_x=self.win_x,
+                win_y=self.win_y,
+                norm=self.norm
+            )
+            self._spectrum = LazySpectrumArray(
+                windows=self.windows,
+                time_size=self.time_size,
+                time_overlap=self.time_overlap,
+                kt=self.kt,
+                kx=self.kx,
+                ky=self.ky,
+                smax=self.smax,
+                threshold=self.spectrum_threshold
+            )
 
     @property
     def spectrum(self):
@@ -443,7 +460,6 @@ class Iwave(object):
         bounds_list = [bounds for _ in range(len(self.spectrum))]
         
         if twosteps == True:
-            print(f"First pass optimization...")
             bounds_firststep = bounds_list
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
@@ -460,9 +476,9 @@ class Iwave(object):
                 self.turbulence_switch, 
                 downsample=2, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
+                desc="Optimizing windows 1st pass",
                 **opt_kwargs
             )
-            print(f"Second pass optimization...:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
             vy_step1 = output_step1[:, 0]
             vx_step1 = output_step1[:, 1]
@@ -484,6 +500,7 @@ class Iwave(object):
             self.turbulence_switch, 
             downsample=1,
             gauss_width=1,  # TODO: figure out defaults
+            desc="Optimizing windows 2nd pass" if twosteps else "Optimizing windows",
             **opt_kwargs
         )
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
