@@ -13,8 +13,9 @@ from typing import Tuple, List, Union
 from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 
 # Create a context with the desired start method
-start_method = "spawn" if 'ipykernel' in sys.modules else "fork"
-ctx = multiprocessing.get_context(start_method)
+# start_method = "spawn" if 'ipykernel' in sys.modules else "fork"
+# ctx = multiprocessing.get_context(start_method)
+ctx = multiprocessing.get_context("spawn")
 
 def cost_function_velocity_depth(
     x: Tuple[float, float, float],
