@@ -73,7 +73,7 @@ def multi_sliding_window_array(
     )
 
     if swap_time_dim:
-        windows = np.swapaxes(windows, 0, 1)
+        return np.swapaxes(windows, 0, 1)
 
     return windows
 

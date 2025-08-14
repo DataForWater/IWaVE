@@ -181,7 +181,7 @@ def _numpy_fourier_transform(
 def spectral_imgs(
     imgs: np.ndarray,
     **kwargs
-):
+) -> np.ndarray:
     """
     Perform 3D spectral analysis.
 
@@ -201,8 +201,6 @@ def spectral_imgs(
         wave spectra for all image window sequences
 
     """
-    def numba_process_chunk(chunk):
-        return _numba_fourier_transform(chunk)
     n, t, y, x = imgs.shape
     t_out = int(np.ceil(t / 2))  # Reduced time dimension
     spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
@@ -297,7 +295,8 @@ def spectrum_preprocessing(
 
     """
     # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
-    preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
     # apply threshold
     threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)

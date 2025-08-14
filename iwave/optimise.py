@@ -112,7 +112,8 @@ def nsp_inv(
 
     """
     spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
-    cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
+    with np.errstate(divide='ignore', invalid='ignore'):
+        cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
     return cost
 
 
@@ -295,7 +296,10 @@ def optimise_velocity(
     # iter_args = generate_args(idxs)
 
     results = [None] * len(idxs)  # Placeholder for results
-    max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
+    if CONCURRENCY is not None:
+        max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
+    else:
+        max_workers = None
     # Initialize progress bar before submitting tasks
 
     progress_bar = tqdm(total=len(idxs), desc=desc)
@@ -307,7 +311,7 @@ def optimise_velocity(
         bnds_sel = bnds_list[idx: idx + chunk_size]
         # iter_args_sel = [next(iter_args) for _ in range(len(idx_sel))]
         args_sel = generate_args()
-        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
             futures = {executor.submit(optimize_single_spectrum_velocity_unpack, input_args): idx for idx, input_args in zip(idx_sel, args_sel)}
 
             for future in as_completed(futures):
@@ -391,9 +395,7 @@ def quality_calc(
     )
     cost_measured = nsp_inv(measured_spectrum, synthetic_spectrum)
     cost_ideal = nsp_inv(synthetic_spectrum, synthetic_spectrum)
-    
     quality = 1 - 0.2*np.log10(cost_measured/cost_ideal)
-    
     return quality
 
 

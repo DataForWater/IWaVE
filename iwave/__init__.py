@@ -4,7 +4,9 @@ __version__ = "0.2.0"
 
 import os
 
-CONCURRENCY = int(os.environ.get("IWAVE_NUM_THREADS", os.cpu_count()))
+CONCURRENCY = os.environ.get("IWAVE_NUM_THREADS", None)
+if CONCURRENCY is not None:
+    CONCURRENCY = int(CONCURRENCY)
 
 from . import const
 from . import dispersion
