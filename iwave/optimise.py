@@ -13,8 +13,6 @@ from typing import Tuple, List, Union
 from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 
 # Create a context with the desired start method
-# start_method = "spawn" if 'ipykernel' in sys.modules else "fork"
-# ctx = multiprocessing.get_context(start_method)
 ctx = multiprocessing.get_context("spawn")
 
 def cost_function_velocity_depth(
@@ -175,6 +173,10 @@ def optimize_single_spectrum_velocity_unpack(kwargs):
     # del kwargs["idx"]
     return optimize_single_spectrum_velocity(**kwargs)
 
+def silence_output():
+    """Suppress output of worker functions."""
+    sys.stdout = open(os.devnull, "w")
+    sys.stderr = open(os.devnull, "w")
 
 def optimise_velocity(
     measured_spectra: Union[np.ndarray, LazySpectrumArray],
@@ -302,7 +304,6 @@ def optimise_velocity(
     else:
         max_workers = None
     # Initialize progress bar before submitting tasks
-
     progress_bar = tqdm(total=len(idxs), desc=desc)
     # for chunk_idxs, chunk_args in zip()
     for idx in idxs[::chunk_size]:
@@ -310,15 +311,18 @@ def optimise_velocity(
         idx_sel = idxs[idx:idx + chunk_size]
         spectra_sel = measured_spectra[idx: idx + chunk_size]
         bnds_sel = bnds_list[idx: idx + chunk_size]
-        # iter_args_sel = [next(iter_args) for _ in range(len(idx_sel))]
         args_sel = generate_args()
-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers) as executor:
-            futures = {executor.submit(optimize_single_spectrum_velocity_unpack, input_args): idx for idx, input_args in zip(idx_sel, args_sel)}
-
+        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
+            futures = {
+                executor.submit(
+                    optimize_single_spectrum_velocity_unpack, input_args
+                ): idx for idx, input_args in zip(idx_sel, args_sel)
+            }
+            # collect futures
             for future in as_completed(futures):
                 idx = futures[future]
                 results[idx] = future.result()  # Store result in the correct position
-                progress_bar.update(1)
+                progress_bar.update(1)  # increase
     progress_bar.close()
 
     # wrap results together

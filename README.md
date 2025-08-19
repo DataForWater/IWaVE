@@ -179,36 +179,60 @@ from iwave import Iwave, sample_data
 import matplotlib.pyplot as plt
 from matplotlib import patches
 
-iw = Iwave(
-    # repeat from example above...
-)
+# the velocity optimization process is parallelized, for this, you MUST wrap
+# your script in a function and protect it with a `if __name__ == "main":` check
+def main():  
+  iw = Iwave(
+      # repeat from example above...
+  )
+  
+  iw.velocimetry(
+    alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+    depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+    twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
+                   # a reduced-dimension problem and serves as initialisation of the second step. 
+  )
+  
+  ax = plt.axes()
+  ax.imshow(iw.imgs[0], cmap="Greys_r")
+  
+  # add velocity vectors
+  iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
+  
+  # plot the measured spectra and fitted dispersion relation (modify window_idx to visualize different windows)
+  fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 7))
+  p1 = iw.plot_spectrum_fitted(window_idx=4, dim="x", ax=axs[0])
+  axs[0].set_xlim([-100, 100])
+  plt.colorbar(p1, ax=axs[0])
+  p2 = iw.plot_spectrum_fitted(window_idx=4, dim="y", ax=axs[1])
+  axs[1].set_xlim([-100, 100])
+  plt.colorbar(p2, ax=axs[1])
+  plt.show()
 
-iw.velocimetry(
-  alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
-  depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-  twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
-                 # a reduced-dimension problem and serves as initialisation of the second step. 
-)
-
-ax = plt.axes()
-ax.imshow(iw.imgs[0], cmap="Greys_r")
-
-# add velocity vectors
-iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
-
-# plot the measured spectra and fitted dispersion relation (modify window_idx to visualize different windows)
-fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 7))
-p1 = iw.plot_spectrum_fitted(window_idx=4, dim="x", ax=axs[0])
-axs[0].set_xlim([-100, 100])
-plt.colorbar(p1, ax=axs[0])
-p2 = iw.plot_spectrum_fitted(window_idx=4, dim="y", ax=axs[1])
-axs[1].set_xlim([-100, 100])
-plt.colorbar(p2, ax=axs[1])
-plt.show()
+if __name__ == "__main__":
+    main()
 ```
 This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background. If the water depth is not supplied, a water depth = 1 m is assumed. With IWaVE, variations in water depth have a small but sometimes non-negligible impact on the velocity calculations. Therefore, it is recommended to set a representative value for depth, even when this is not known accurately.
 
 ### Optimisation algorithm
+
+> [!IMPORTANT]
+> Optimization of the velocities occurs with a possibly large amount of spawned parallelized processes.
+> The `if __name__ == "__main__":` construction around the script is necessary to optimize
+> velocities without rerunning the entire script in each spawned subprocess. Like so:
+>
+> ```python
+> import os
+> import iwave
+> 
+> def main():
+>     # ... here your core functionalities, making an IWaVE instance, reading video/frames
+>     # calling `iw.velocimetry`, storing results, plotting and so on...
+> 
+> # at the end, call your function with main functionalities
+> if __name__ == "__main__":
+>     main()
+> ```
 
 > [!NOTE]
 > By default, optimizations are parallelized using the maximum amount of CPUs available on your system. If you want to 
