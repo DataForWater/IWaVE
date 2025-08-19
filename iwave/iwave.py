@@ -445,6 +445,10 @@ class Iwave(object):
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
 
         """
+        if self.spectrum is None:
+            raise AttributeError(
+                "No images available. Please set images first `iw.imgs = imgs`, where `imgs` is a numpy array "
+                "of images, or read a video file using `iw.read_video(file)`")
         # ensure defaults are set if nothing is provided
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE

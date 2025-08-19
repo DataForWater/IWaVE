@@ -41,6 +41,10 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1
         import cv2
     except ImportError:
         raise ImportError("This function needs cv2. Install iwave with pip install iwave[extra]")
+    if os.path.isfile(fn) is False:
+        raise FileNotFoundError(
+            f"The provided file path {fn} does not exist. Please check the path and try again."
+        )
     cap = cv2.VideoCapture(fn)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
