@@ -310,7 +310,17 @@ def optimise_velocity(
         # select and read the current data block in one go
         idx_sel = idxs[idx:idx + chunk_size]
         spectra_sel = measured_spectra[idx: idx + chunk_size]
+        # find those that are non-zero
         bnds_sel = bnds_list[idx: idx + chunk_size]
+        nonzero_idx = np.where(np.mean(spectra_sel, axis=(1, 2, 3)) != 0)[0]
+        # push forward the progress bar by the amount less than the original length of arguments
+        update = len(idx_sel) - len(nonzero_idx)
+        if update > 0:
+            progress_bar.update(update)
+        idx_sel = np.array(idx_sel)[nonzero_idx].tolist()
+        bnds_sel = np.array(bnds_sel)[nonzero_idx].tolist()
+        spectra_sel = spectra_sel[nonzero_idx]
+
         args_sel = generate_args()
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
             futures = {
@@ -326,13 +336,13 @@ def optimise_velocity(
     progress_bar.close()
 
     # wrap results together
-    optimal = np.array([[res[0], res[1], res[2]] for res in results])  # vy, vx, d
-    cost = np.array([res[3] for res in results])
-    quality = np.array([res[4] for res in results])
-    status = [res[5] for res in results]
-    message = [res[6] for res in results]
+    optimal = np.array([
+        [res[0], res[1], res[2]] if res is not None else [np.nan, np.nan, np.nan] for res in results
+    ])  # vy, vx, d
+    cost = np.array([res[3] if res is not None else np.nan for res in results])
+    quality = np.array([res[4] if res is not None else np.nan for res in results])
 
-    return optimal, cost, quality, status, message
+    return optimal, cost, quality
 
 
 def quality_calc(

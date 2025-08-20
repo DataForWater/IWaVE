@@ -103,7 +103,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     depth_max = 1
     bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]] * 2
     t1 = time.time()
-    output, _, _, _, _ = optimise.optimise_velocity(
+    output, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
         velocity_indx,
