@@ -216,6 +216,10 @@ This estimates velocities in x and y-directions (u, v) per interrogation window 
 
 ### Optimisation algorithm
 
+The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (`scipy.optimize.differential_evolution`) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
+
+Setting `twosteps = True` (default is `False`) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers.
+
 > [!IMPORTANT]
 > Optimization of the velocities occurs with a possibly large amount of spawned parallelized processes.
 > The `if __name__ == "__main__":` construction around the script is necessary to optimize
@@ -247,11 +251,6 @@ This estimates velocities in x and y-directions (u, v) per interrogation window 
 > import iwave
 > ```
 
-
-The sensitivity of water surface dynamics to variations in water depth is minimal. Depth estimations have specific requirements (see below) and can be prone to significant errors. Do not rely on depth estimates for any activity that could pose a risk.
-The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (`scipy.optimize.differential_evolution`) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
-
-Setting `twosteps = True` (default is `False`) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers. 
 
 ### Uncertainties
 
