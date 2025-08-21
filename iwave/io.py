@@ -1,7 +1,6 @@
 """File I/O functions for IWaVE."""
 
 import glob
-
 import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,8 +10,14 @@ from PIL import Image
 from tqdm import tqdm
 from typing import Optional, Literal
 
+try:
+    import cv2
+    ENABLE_CV2 = True
+except:
+    ENABLE_CV2 = False
 
-def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
+
+def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
     """Read video frames from file
 
     Parameters
@@ -23,6 +28,8 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
         The starting frame number from which to begin extraction (default is 0).
     end_frame : int, optional
         The frame number at which to stop extraction (default is 4).
+    stride : int, optional
+        lower the sampling rate by this factor. Default 1.
 
     Returns
     -------
@@ -34,12 +41,16 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4):
         import cv2
     except ImportError:
         raise ImportError("This function needs cv2. Install iwave with pip install iwave[extra]")
+    if os.path.isfile(fn) is False:
+        raise FileNotFoundError(
+            f"The provided file path {fn} does not exist. Please check the path and try again."
+        )
     cap = cv2.VideoCapture(fn)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     # retrieve images from start to end frame
     return np.stack(
-        [cv2.cvtColor(cap.read()[-1], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
+        [cv2.cvtColor(cap.read()[-1][::stride, ::stride], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
     )
     
 

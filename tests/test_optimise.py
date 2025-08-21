@@ -11,8 +11,8 @@ def test_preprocessing():
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity=[1, 0], depth=1, vel_indx=1)
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
-    measured_spectrum = spectral.sliding_window_spectrum(img, img.shape[1], 0, "numpy")
-    preprocessed_spectrum = optimise.spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold=5)
+    measured_spectrum = spectral.sliding_window_spectrum(img, img.shape[1], 0)
+    preprocessed_spectrum = spectral.spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold=5)
     #test if the size of the preprocessed spectrum matches the one of the theoretical spectrum
     assert preprocessed_spectrum[0].shape == synthetic_spectrum.shape
 
@@ -101,9 +101,9 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     vel_x_max = 0.5
     depth_min = 0.01
     depth_max = 1
-    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]]
+    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]] * 2
     t1 = time.time()
-    output, _, _, _, _ = optimise.optimise_velocity(
+    output, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
         bounds,
         velocity_indx,
@@ -135,7 +135,8 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     
     
 def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
-    """Check hypothetical case optimization with depth for one single window, using single and double pass"""    
+    """Check hypothetical case optimization with depth for one single window, using single and double pass"""
+    np.random.seed(0)
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity = [1, 0]
     depth = 0.2
@@ -194,7 +195,13 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     vy_2steps = iw.vy
     vx_2steps = iw.vx 
     d_2steps = iw.d
-       
+    print("vy_1step:", vy_1step, "expected:", velocity[0])
+    print("vx_1step:", vx_1step, "expected:", velocity[1])
+    print("d_1step:", d_1step, "expected:", depth)
+    print("vy_2steps:", vy_2steps, "expected:", velocity[0])
+    print("vx_2steps:", vx_2steps, "expected:", velocity[1])
+    print("d_2steps:", d_2steps, "expected:", depth)
+
     assert np.all(np.abs(vy_1step - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_1step - velocity[1]) < 0.01)
     assert np.all(np.abs(d_1step - depth) < 0.05)

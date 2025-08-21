@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from typing import Optional, Tuple, Literal
-from iwave import window, spectral, io, optimise, dispersion
+from iwave import window, spectral, io, optimise, dispersion, LazySpectrumArray, LazyWindowArray
 
 
 repr_template = """
@@ -40,12 +40,14 @@ class Iwave(object):
         fps: Optional[float] = None,
         imgs: Optional[np.ndarray] = None,
         norm: Optional[Literal["time", "xy"]] = "time",
+        spectrum_threshold: Optional[float] = 1.0,
         smax: Optional[float] = 4.0,
         dmin: Optional[float] = 0.01,
         dmax: Optional[float] = 3.0,
         penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
+        window_chunk_size: Optional[int] = 50,
     ):
         """Initialize an Iwave instance.
 
@@ -67,6 +69,8 @@ class Iwave(object):
             Array of images used for analysis. If not provided, defaults to None.
         norm : Literal["time", "xy"]
             Normalization to apply over subwindowed images, either over time ("time") or space ("xy").
+        spectrum_threshold : float, optional
+            cut-off threshold for spectrum intensities, anything below this value is set to zero. Defaults to 1.0.
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
         dmin : float, optional
@@ -86,7 +90,10 @@ class Iwave(object):
             turbulence-generated patterns and/or floating particles are NOT modelled. Default True.
             Setting turbulence_switch = False may improve performance if water waves dominate the scene, or if tracers
             dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
+        window_chunk_size : int, optional
+            Number of windows to process at a time. Defaults to 50.
         """
+        self.window_chunk_size = window_chunk_size
         self.resolution = resolution
         # ensures that window dimensions are even. this is to facilitate dimension reduction of the spectra.
         # this is currently working only for a downsampling rate of 2
@@ -96,6 +103,7 @@ class Iwave(object):
         self.time_size = time_size
         self.time_overlap = time_overlap
         self.norm = norm
+        self.spectrum_threshold = spectrum_threshold
         self.smax = smax
         self.dmin = dmin
         self.dmax = dmax
@@ -107,6 +115,8 @@ class Iwave(object):
             self.imgs = imgs
         else:
             self.imgs = None
+        self.win_x = None
+        self.win_y = None
         self.vy = None  # y velocity component (m/s)
         self.vx = None  # x velocity component (m/s)
         self.d = None  # water depth (m)
@@ -146,27 +156,69 @@ class Iwave(object):
         if images is not None:
             # TODO: check if image set is large enough for the given dimension of subwindowing and time windowing
             # subwindow images and get axes. This always necessary, so in-scope methods only.
-            self._get_subwindow(images)
-            self._get_x_y_axes(images)
+            # self._get_subwindow(images)
+            # self._get_subwindow(da.from_array(images, chunks=(len(images), -1, -1)))
+            self._get_win_xy(images[0])  # set sampling indexes per interrogation window
+            self._get_x_y_axes(images)  # set envisaged axes
+            # set the wave numbers from image fps
+            self._get_wave_numbers()
+            self._windows = LazyWindowArray(
+                self.imgs,
+                sliding_window_func=window.multi_sliding_window_array,
+                win_x=self.win_x,
+                win_y=self.win_y,
+                norm=self.norm
+            )
+            self._spectrum = LazySpectrumArray(
+                windows=self.windows,
+                time_size=self.time_size,
+                time_overlap=self.time_overlap,
+                kt=self.kt,
+                kx=self.kx,
+                ky=self.ky,
+                smax=self.smax,
+                threshold=self.spectrum_threshold
+            )
 
     @property
     def spectrum(self):
         """Return images represented in subwindows."""
+        if not hasattr(self, "_spectrum"):
+            if self.imgs is None:
+                return None
+            else:
+                self._spectrum = LazySpectrumArray(
+                    windows=self.windows,
+                    time_size=self.time_size,
+                    time_overlap=self.time_overlap,
+                    kt=self.kt,
+                    kx=self.kx,
+                    ky=self.ky,
+                    smax=self.smax,
+                    threshold=self.spectrum_threshold
+                )
         return self._spectrum
 
     @spectrum.setter
     def spectrum(self, _spectrum):
+        """Set images represented in subwindows directly, only used for testing purposes."""
         self._spectrum = _spectrum
-
 
     @property
     def windows(self):
         """Return images represented in subwindows."""
+        if not hasattr(self, "_windows"):
+            if self.imgs is None:
+                return None
+            else:
+                self._windows = LazyWindowArray(
+                    self.imgs,
+                    sliding_window_func=window.multi_sliding_window_array,
+                    win_x=self.win_x,
+                    win_y=self.win_y,
+                    norm=self.norm
+                )
         return self._windows
-
-    @windows.setter
-    def windows(self, win):
-        self._windows = win
 
     @property
     def x(self):
@@ -187,32 +239,34 @@ class Iwave(object):
         self._y = _y
 
     @property
+    def win_x(self):
+        return self._win_x
+
+    @win_x.setter
+    def win_x(self, win_x):
+        self._win_x = win_x
+
+    @property
+    def win_y(self):
+        return self._win_y
+
+    @win_y.setter
+    def win_y(self, win_y):
+        self._win_y = win_y
+
+    @property
     def spectrum_dims(self):
         """Return expected dimensions of the spectrum derived from image windows."""
         return (self.time_size, *self.window_size)
 
-    def _get_subwindow(self, images: np.ndarray):
-        """Create and set windows following provided parameters."""
-        # get the x and y coordinates per window
-        # TODO: define windows based on window size and number of windows per dimension instead of overlap
+    def _get_win_xy(self, img_sample):
         win_x, win_y = window.sliding_window_idx(
-            images[0],
+            img_sample,
             window_size=self.window_size,
             overlap=self.overlap,
         )
-        # apply the coordinates on all images
-        windows = window.multi_sliding_window_array(
-            images,
-            win_x,
-            win_y,
-            swap_time_dim=True
-        )
-        if self.norm == "xy":
-            self.windows = window.normalize(windows, mode="xy")
-        elif self.norm == "time":
-            self.windows = window.normalize(windows, mode="time")
-        else:
-            self.windows = windows
+        self.win_x = win_x
+        self.win_y = win_y
 
     def _get_wave_numbers(self):
         """Prepare and set wave number axes."""
@@ -220,7 +274,6 @@ class Iwave(object):
             self.spectrum_dims,
             self.resolution, self.fps
         )
-
 
     def _get_x_y_axes(self, images: np.ndarray):
         """Prepare and set x and y axes of velocity grid."""
@@ -231,27 +284,6 @@ class Iwave(object):
         )
         self.x = x
         self.y = y
-
-    def get_spectra(self, threshold: float = 1.):
-        """Generate and set spectra of all extracted windows."""
-        spectrum = spectral.sliding_window_spectrum(
-            self.windows,
-            self.time_size,
-            self.time_overlap,
-            engine="numba"
-        )
-        # set the wave numbers
-        self._get_wave_numbers()
-        
-        # preprocess
-        self.spectrum = optimise.spectrum_preprocessing(
-            spectrum,
-            self.kt,
-            self.ky,
-            self.kx,
-            self.smax*3,
-            spectrum_threshold=threshold
-        )
 
     def plot_spectrum(
         self,
@@ -349,8 +381,9 @@ class Iwave(object):
         self.fps = fps
         self.imgs = io.get_imgs(path=path, wildcard=wildcard)
 
-    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4):
-        """
+    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
+        """Read video from start to end frame.
+
         Parameters
         ----------
         file : str
@@ -359,20 +392,18 @@ class Iwave(object):
             The starting frame number from which to begin reading the video.
         end_frame : int, optional
             The ending frame number until which to read the video.
-        Returns
-        -------
-        numpy.ndarray
-            An array of grayscale images from the video between the specified frames.
+        stride : int, optional
+            lower the sampling rate by this factor. Default 1.
         """
-        # set the FPS
+        # set the FPS from the video metadata
         cap = cv2.VideoCapture(file)
         self.fps = cap.get(cv2.CAP_PROP_FPS)
 
         cap.release()
         del cap
         # Retrieve images
-        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame)
-        # get the frame rate from the video
+        self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame, stride=stride)
+
 
 
     def save_frames(self, dst: str):
@@ -409,12 +440,15 @@ class Iwave(object):
         twosteps : bool, optional
             if set, perform the optimisation twice, with a reduced spectrum in the first step without optimizing depth
             and full spectrum in the second step with optimizing depth. Default False.
-
         See also
         --------
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
 
         """
+        if self.spectrum is None:
+            raise AttributeError(
+                "No images available. Please set images first `iw.imgs = imgs`, where `imgs` is a numpy array "
+                "of images, or read a video file using `iw.read_video(file)`")
         # ensure defaults are set if nothing is provided
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
@@ -427,32 +461,28 @@ class Iwave(object):
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
-        bounds_list = [bounds for _ in self.spectrum]
+        bounds_list = [bounds for _ in range(len(self.spectrum))]
         
-        # TODO: remove img_size from needed inputs. This can be derived from the window size and time_size
-        img_size = (self.time_size, self.spectrum.shape[-2], self.spectrum.shape[-1])
-
         if twosteps == True:
-            print(f"Step 1:")
             bounds_firststep = bounds_list
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
                     bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
-            output_step1, _, _, _, _ = optimise.optimise_velocity(
+            output_step1, _, _ = optimise.optimise_velocity(
                 self.spectrum,
                 bounds_firststep,
                 alpha,
-                img_size,
+                self.spectrum_dims,
                 self.resolution,
                 self.fps,
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                downsample = 2, # for the first step, reduce the data size by 2
+                downsample=2, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
+                desc="Optimizing windows 1st pass",
                 **opt_kwargs
             )
-            print(f"Step 2:")
             # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
             vy_step1 = output_step1[:, 0]
             vx_step1 = output_step1[:, 1]
@@ -462,18 +492,19 @@ class Iwave(object):
                         (bounds[2][0], bounds[2][1])]
             opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
             self.penalty_weight = 0 # set penalty_weight = 0 for the second step
-        output, cost, quality, status, message = optimise.optimise_velocity(
+        output, cost, quality = optimise.optimise_velocity(
             self.spectrum,
             bounds_list,
             alpha,
-            img_size,
+            self.spectrum_dims,
             self.resolution,
             self.fps,
             self.penalty_weight,  
             self.gravity_waves_switch, 
             self.turbulence_switch, 
-            downsample = 1,
+            downsample=1,
             gauss_width=1,  # TODO: figure out defaults
+            desc="Optimizing windows 2nd pass" if twosteps else "Optimizing windows",
             **opt_kwargs
         )
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
@@ -481,8 +512,8 @@ class Iwave(object):
         self.d = output[:, 2].reshape(len(self.y), len(self.x))
         self.cost = cost.reshape(len(self.y), len(self.x))
         self.quality = quality.reshape(len(self.y), len(self.x))
-        self.status = status
-        self.message = message
+        self.status = True
+        self.message = "Optimization terminated successfully."
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):

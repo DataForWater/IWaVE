@@ -96,11 +96,26 @@ loaded any video in memory yet. The inputs have the following meaning:
 * `time_overlap`: also for the time, overlap can be used, in the same manner as for spatial overlap using `overlap`. 
 
 > [!NOTE]
-> Some important remarks on uncertainties: IWaVE employs a spectral approach to compare the observed water surface dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to velocity and water depth (see Dolcetti et al., 2022). 
-> * The spectral resolution improves by increasing the window size and/or the time size. Optimal values of `window_size` should be similar to the water depth or larger. `time_size` should be larger than 5 seconds in most applications, ideally around 10 seconds.
-> * The spatial and temporal resolution of the videos (e.g., the pixel size and frame rate) are less critical than the spectral resolution for the accuracy of the estimates. Reasonable results can usually be obtained also with a pixel size of ~5 cm and a frame rate of ~10 fps. Consider downsampling the data if memory or computational time are an issue.
-> * More averages can significantly improve the convergence of the method. Ideally, one should aim for at least 3 independent slices, regardless of the overlap (e.g., a 30-seconds-long video with a time_size of 10 seconds).
-> * Short waves are more sensitive to flow velocity, while long waves are more sensitive to water depth. Therefore, a better spatial resolution (smaller pixel size) can improve velocity estimates, while a better spatial resolution (larger window size) can improve the depth estimates. However, only the waves with a wavelength similar or larger than the water depth feel the presence of the bed and can be used to estimate the water depth. Typically, these long waves form naturally in flows with Froude number in the range 0.4 to 1.0. These long waves (wavelength ~ 2*pi*F**2*depth) must be visible and their wavelength must be smaller than the window size for the depth estimation to be accurate. Otherwise, depth estimates may fail completely due to lack of sensitivity.  
+> Some important remarks on uncertainties: IWaVE employs a spectral approach to compare the observed water surface 
+> dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty 
+> of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to 
+> velocity and water depth (see Dolcetti et al., 2022). 
+> * The spectral resolution improves by increasing the window size and/or the time size. Optimal values of 
+>   `window_size` should be similar to the water depth or larger. `time_size` should be larger than 5 seconds in most 
+>   applications, ideally around 10 seconds.
+> * The spatial and temporal resolution of the videos (e.g., the pixel size and frame rate) are less critical than 
+>   the spectral resolution for the accuracy of the estimates. Reasonable results can usually be obtained also with 
+>   a pixel size of ~5 cm and a frame rate of ~10 fps. Consider downsampling the data if memory or computational time 
+>   are an issue.
+> * More averages can significantly improve the convergence of the method. Ideally, one should aim for at least 3 
+>   independent slices, regardless of the overlap (e.g., a 30-seconds-long video with a time_size of 10 seconds).
+> * Short waves are more sensitive to flow velocity, while long waves are more sensitive to water depth. Therefore, a 
+>   better spatial resolution (smaller pixel size) can improve velocity estimates, while a better spatial resolution 
+>   (larger window size) can improve the depth estimates. However, only the waves with a wavelength similar or larger 
+>   than the water depth feel the presence of the bed and can be used to estimate the water depth. Typically, these 
+>   long waves form naturally in flows with Froude number in the range 0.4 to 1.0. These long waves (wavelength ~ 
+>   $2\pi F^{2d}$ with $d$ being the depth, must be visible and their wavelength must be smaller than the window size 
+>   for the depth estimation to be accurate. Otherwise, depth estimates may fail completely due to lack of sensitivity.  
 
 ### Reading in a video
 
@@ -133,9 +148,6 @@ print(f"Shape of the available images is {iw.imgs.shape}")
 
 # show the shape of the manipulated windows
 print(f"Shape of the available images is {iw.windows.shape}")
-
-# Get the spectra of all windows and filter spectra with a spectral threshold of 1.0
-iw.get_spectra(threshold=1.0)
 
 # create a new figure with two subplots in one row
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
@@ -182,51 +194,102 @@ from iwave import Iwave, sample_data
 import matplotlib.pyplot as plt
 from matplotlib import patches
 
-iw = Iwave(
-    # repeat from example above...
-)
+# the velocity optimization process is parallelized, for this, you MUST wrap
+# your script in a function and protect it with a `if __name__ == "main":` check
+def main():  
+  iw = Iwave(
+      # repeat from example above...
+  )
+  
+  iw.velocimetry(
+    alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+    depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+    twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
+                   # a reduced-dimension problem and serves as initialisation of the second step. 
+  )
+  
+  ax = plt.axes()
+  ax.imshow(iw.imgs[0], cmap="Greys_r")
+  
+  # add velocity vectors
+  iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
+  
+  # plot the measured spectra and fitted dispersion relation (modify window_idx to visualize different windows)
+  fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 7))
+  p1 = iw.plot_spectrum_fitted(window_idx=4, dim="x", ax=axs[0])
+  axs[0].set_xlim([-100, 100])
+  plt.colorbar(p1, ax=axs[0])
+  p2 = iw.plot_spectrum_fitted(window_idx=4, dim="y", ax=axs[1])
+  axs[1].set_xlim([-100, 100])
+  plt.colorbar(p2, ax=axs[1])
+  plt.show()
 
-iw.velocimetry(
-  alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
-  depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-  twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
-                 # a reduced-dimension problem and serves as initialisation of the second step. 
-)
-
-ax = plt.axes()
-ax.imshow(iw.imgs[0], cmap="Greys_r")
-
-# add velocity vectors
-iw.plot_velocimetry(ax=ax, color="b", scale=10)  # you can add kwargs that belong to matplotlib.pyploy.quiver
-
-# plot the measured spectra and fitted dispersion relation (modify window_idx to visualize different windows)
-fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 7))
-p1 = iw.plot_spectrum_fitted(window_idx=4, dim="x", ax=axs[0])
-axs[0].set_xlim([-100, 100])
-plt.colorbar(p1, ax=axs[0])
-p2 = iw.plot_spectrum_fitted(window_idx=4, dim="y", ax=axs[1])
-axs[1].set_xlim([-100, 100])
-plt.colorbar(p2, ax=axs[1])
-plt.show()
+if __name__ == "__main__":
+    main()
 ```
-This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background. If the water depth is not supplied, a water depth = 1 m is assumed. With IWaVE, variations in water depth have a small but sometimes non-negligible impact on the velocity calculations. Therefore, it is recommended to set a representative value for depth, even when this is not known accurately.
+This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background. If the 
+water depth is not supplied, a water depth of $d=1$ m is assumed. With IWaVE, variations in water depth have a small but 
+sometimes non-negligible impact on the velocity calculations. Therefore, it is recommended to set a representative 
+value for depth, even when this is not known accurately.
 
 ### Optimisation algorithm
 
-The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (scipy.optimize.differential_evolution) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
+The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (`scipy.optimize.differential_evolution`) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
 
-Setting "twosteps" = True (default = False) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers. 
+Setting `twosteps = True` (default is `False`) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers.
+
+> [!IMPORTANT]
+> Optimization of the velocities occurs with a possibly large amount of spawned parallelized processes.
+> The `if __name__ == "__main__":` construction around the script is necessary to optimize
+> velocities without rerunning the entire script in each spawned subprocess. Like so:
+>
+> ```python
+> import os
+> import iwave
+> 
+> def main():
+>     # ... here your core functionalities, making an IWaVE instance, reading video/frames
+>     # calling `iw.velocimetry`, storing results, plotting and so on...
+> 
+> # at the end, call your function with main functionalities
+> if __name__ == "__main__":
+>     main()
+> ```
+
+> [!NOTE]
+> By default, optimizations are parallelized using the maximum amount of CPUs available on your system. If you want to 
+> change the amount of CPUs used for optimization, you can set the environment variable `IWAVE_NUM_THREADS` to the desired 
+> number of CPUs.
+> If you set this environment variable within a python script, you can also set it within the script itself.
+> ```python
+> import os
+> os.environ["IWAVE_NUM_THREADS"] = "1"
+> 
+> # make sure you import iwave AFTER setting the environment variable
+> import iwave
+> ```
+
 
 ### Uncertainties
 
-Metrics of the optimisation are returned in dictionary `uncertainties`. `iw.uncertainties["quality"]` is a quality metric that can represent the confidence in the optimised parameters. The quality q is obtained from the ratio of the cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, q = 10 - 2*log10(measured_cost/ideal_cost). Therefore, 0 < q < 10, where 0 is the worst quality and 1 is the best quality. `iw.uncertainties["cost"]` is the measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. Values of q < 0.7 are often indicative of poor fitting between measured and ideal spectra, which may indicate erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high values of q are not sufficient indicators of accurate depth estimation, although low values of q are usually indicative of large uncertainties in both velocity and depth estimations.
+`iw.quality` is a quality 
+metric that can represent the confidence in the optimised parameters. The quality $q$ is obtained from the ratio of the 
+cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, 
+$q = 10 - 2\log_{10}\frac{c_m}{c_i}$, where $c_m$ is the measured cost, and $c_i$ the ideal cost. 
+Therefore $0 < q < 10$, where 0 is the worst quality and 1 is the best quality. `iw.cost` is the 
+measured cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. 
+Values of $q < 0.7$ are often indicative of poor fitting between measured and ideal spectra, which may indicate 
+erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high 
+values of $q$ are not sufficient indicators of accurate depth estimation, although low values of $q$ are usually 
+indicative of large uncertainties in both velocity and depth estimations.
 
-The dictionary `info` contain additional information returned by the optimisers. `iw.info["status"]` returns a parameter indicating the exit condition. This corresponds to the "success" of the differential_evolution optimiser. `iw.info["message"]` returns the "message" field.
+`iw.status` returns a parameter indicating the exit condition. This corresponds to the "success" of the 
+`differential_evolution` optimiser. `iw.message` returns the "message" field.
 
 
 ### Estimating water depth as well as x and y-directional velocity
 
-The depth estimation is enabled by setting depth = 0 in iw.velocimetry:
+The depth estimation is enabled by setting `depth = 0` in `iw.velocimetry`:
 
 ```python
 from iwave import Iwave, sample_data

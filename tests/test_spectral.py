@@ -22,16 +22,6 @@ def test_numpy_fft(img_windows_norm):
         windows.shape[1],
         windows.shape[2]
     )
-    # TODO: code below for plotting, may be moved to API
-    # import matplotlib.pyplot as plt
-    # kt, ky, kx = spectral._get_wave_numbers(
-    #     windows.shape,
-    #     0.02, 20
-    # )
-    # plt.imshow(np.log(spectrum[:, :, 32]))
-    # plt.colorbar()
-    # plt.show()
-    # print(spectrum.shape)
 
 
 def test_numba_fft(img_windows_norm):
@@ -51,11 +41,8 @@ def test_numba_fft_multi(img_windows_norm):
         assert np.allclose(spectrum_numpy, spectrum)
 
 
-@pytest.mark.parametrize(
-    "engine", ["numpy", "numba"]
-)
-def test_sliding_window_spectrum(img_windows_norm, engine):
+def test_sliding_window_spectrum(img_windows_norm):
     """Check shape of average of multiple spectra over several time slices."""
-    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10, engine=engine)
+    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10)
     # test if the spectra have the desired size
     assert spectrum.shape[-3] == int(np.ceil(20 / 2))
