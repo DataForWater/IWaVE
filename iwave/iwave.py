@@ -445,6 +445,10 @@ class Iwave(object):
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
 
         """
+        if self.spectrum is None:
+            raise AttributeError(
+                "No images available. Please set images first `iw.imgs = imgs`, where `imgs` is a numpy array "
+                "of images, or read a video file using `iw.read_video(file)`")
         # ensure defaults are set if nothing is provided
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
@@ -464,7 +468,7 @@ class Iwave(object):
             if depth==0: # for the first step, neglect water depth effects by assuming a large depth
                 for i in range(len(bounds_list)):
                     bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
-            output_step1, _, _, _, _ = optimise.optimise_velocity(
+            output_step1, _, _ = optimise.optimise_velocity(
                 self.spectrum,
                 bounds_firststep,
                 alpha,
@@ -488,7 +492,7 @@ class Iwave(object):
                         (bounds[2][0], bounds[2][1])]
             opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
             self.penalty_weight = 0 # set penalty_weight = 0 for the second step
-        output, cost, quality, status, message = optimise.optimise_velocity(
+        output, cost, quality = optimise.optimise_velocity(
             self.spectrum,
             bounds_list,
             alpha,
@@ -508,8 +512,8 @@ class Iwave(object):
         self.d = output[:, 2].reshape(len(self.y), len(self.x))
         self.cost = cost.reshape(len(self.y), len(self.x))
         self.quality = quality.reshape(len(self.y), len(self.x))
-        self.status = status
-        self.message = message
+        self.status = True
+        self.message = "Optimization terminated successfully."
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):

@@ -1,7 +1,7 @@
 """Lazy data models for memory intensive processing."""
 import numpy as np
 
-from typing import Optional
+from typing import Optional, Union
 
 from iwave import window, spectral
 
@@ -42,7 +42,7 @@ class LazyWindowArray:
             win_x_sel = self.win_x[start:stop:step]
             win_y_sel = self.win_y[start:stop:step]
             # indexed_imgs = self.imgs[start:stop:step]
-        elif isinstance(idx, int):
+        elif isinstance(idx, Union[int, np.integer]):
             # Generate windows for a single index
             win_x_sel = self.win_x[idx : idx + 1]
             win_y_sel = self.win_y[idx : idx + 1]
@@ -53,10 +53,13 @@ class LazyWindowArray:
         windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True)
 
         # Apply normalization if needed
-        if self.norm == "xy":
-            windows = window.normalize(windows, mode="xy")
-        elif self.norm == "time":
-            windows = window.normalize(windows, mode="time")
+        if self.norm is not None:
+            # find relevant windows with mean != 0. Only those require normalization
+            nonzero_idx = np.where(np.mean(windows, axis=(1, 2, 3)) != 0)[0]
+            if self.norm == "xy":
+                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="xy")
+            elif self.norm == "time":
+                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="time")
         if isinstance(idx, slice):
             return windows
         elif isinstance(idx, int):
@@ -128,7 +131,7 @@ class LazySpectrumArray(object):
         )
         if isinstance(idx, slice):
             return spectrum
-        elif isinstance(idx, int):
+        elif isinstance(idx, Union[int, np.integer]):
             return spectrum[0]
         else:
             raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
