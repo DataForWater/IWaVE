@@ -96,11 +96,26 @@ loaded any video in memory yet. The inputs have the following meaning:
 * `time_overlap`: also for the time, overlap can be used, in the same manner as for spatial overlap using `overlap`. 
 
 > [!NOTE]
-> Some important remarks on uncertainties: IWaVE employs a spectral approach to compare the observed water surface dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to velocity and water depth (see Dolcetti et al., 2022). 
-> * The spectral resolution improves by increasing the window size and/or the time size. Optimal values of `window_size` should be similar to the water depth or larger. `time_size` should be larger than 5 seconds in most applications, ideally around 10 seconds.
-> * The spatial and temporal resolution of the videos (e.g., the pixel size and frame rate) are less critical than the spectral resolution for the accuracy of the estimates. Reasonable results can usually be obtained also with a pixel size of ~5 cm and a frame rate of ~10 fps. Consider downsampling the data if memory or computational time are an issue.
-> * More averages can significantly improve the convergence of the method. Ideally, one should aim for at least 3 independent slices, regardless of the overlap (e.g., a 30-seconds-long video with a time_size of 10 seconds).
-> * Short waves are more sensitive to flow velocity, while long waves are more sensitive to water depth. Therefore, a better spatial resolution (smaller pixel size) can improve velocity estimates, while a better spatial resolution (larger window size) can improve the depth estimates. However, only the waves with a wavelength similar or larger than the water depth feel the presence of the bed and can be used to estimate the water depth. Typically, these long waves form naturally in flows with Froude number in the range 0.4 to 1.0. These long waves (wavelength ~ 2*pi*F**2*depth) must be visible and their wavelength must be smaller than the window size for the depth estimation to be accurate. Otherwise, depth estimates may fail completely due to lack of sensitivity.  
+> Some important remarks on uncertainties: IWaVE employs a spectral approach to compare the observed water surface 
+> dynamics with the theoretical expectations for given flow conditions. The key parameters determining the uncertainty 
+> of measurements are the spectral resolution, the number of averages, and the sensitivity of surface dynamics to 
+> velocity and water depth (see Dolcetti et al., 2022). 
+> * The spectral resolution improves by increasing the window size and/or the time size. Optimal values of 
+>   `window_size` should be similar to the water depth or larger. `time_size` should be larger than 5 seconds in most 
+>   applications, ideally around 10 seconds.
+> * The spatial and temporal resolution of the videos (e.g., the pixel size and frame rate) are less critical than 
+>   the spectral resolution for the accuracy of the estimates. Reasonable results can usually be obtained also with 
+>   a pixel size of ~5 cm and a frame rate of ~10 fps. Consider downsampling the data if memory or computational time 
+>   are an issue.
+> * More averages can significantly improve the convergence of the method. Ideally, one should aim for at least 3 
+>   independent slices, regardless of the overlap (e.g., a 30-seconds-long video with a time_size of 10 seconds).
+> * Short waves are more sensitive to flow velocity, while long waves are more sensitive to water depth. Therefore, a 
+>   better spatial resolution (smaller pixel size) can improve velocity estimates, while a better spatial resolution 
+>   (larger window size) can improve the depth estimates. However, only the waves with a wavelength similar or larger 
+>   than the water depth feel the presence of the bed and can be used to estimate the water depth. Typically, these 
+>   long waves form naturally in flows with Froude number in the range 0.4 to 1.0. These long waves (wavelength ~ 
+>   $2\pi F^{2d}$ with $d$ being the depth, must be visible and their wavelength must be smaller than the window size 
+>   for the depth estimation to be accurate. Otherwise, depth estimates may fail completely due to lack of sensitivity.  
 
 ### Reading in a video
 
@@ -206,7 +221,10 @@ axs[1].set_xlim([-100, 100])
 plt.colorbar(p2, ax=axs[1])
 plt.show()
 ```
-This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background. If the water depth is not supplied, a water depth = 1 m is assumed. With IWaVE, variations in water depth have a small but sometimes non-negligible impact on the velocity calculations. Therefore, it is recommended to set a representative value for depth, even when this is not known accurately.
+This estimates velocities in x and y-directions (u, v) per interrogation window and plots it on a background. If the 
+water depth is not supplied, a water depth of $d=1$ m is assumed. With IWaVE, variations in water depth have a small but 
+sometimes non-negligible impact on the velocity calculations. Therefore, it is recommended to set a representative 
+value for depth, even when this is not known accurately.
 
 ### Optimisation algorithm
 
@@ -231,10 +249,20 @@ Setting `twosteps = True` (default is `False`) will run the optimisation in two 
 
 ### Uncertainties
 
-Metrics of the optimisation are returned in dictionary `uncertainties`. `iw.uncertainties["quality"]` is a quality metric that can represent the confidence in the optimised parameters. The quality q is obtained from the ratio of the cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, q = 10 - 2*log10(measured_cost/ideal_cost). Therefore, 0 < q < 10, where 0 is the worst quality and 1 is the best quality. `iw.uncertainties["cost"]` is the measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. Values of q < 0.7 are often indicative of poor fitting between measured and ideal spectra, which may indicate erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high values of q are not sufficient indicators of accurate depth estimation, although low values of q are usually indicative of large uncertainties in both velocity and depth estimations.
+Metrics of the optimisation are returned in dictionary `uncertainties`. `iw.uncertainties["quality"]` is a quality 
+metric that can represent the confidence in the optimised parameters. The quality q is obtained from the ratio of the 
+cost functions calculated with the measured spectrum and with the (ideal) synthetic spectrum, 
+$q = 10 - 2\log_{10}\frac{c_m}{c_i}$, where $c_m$ is the measured cost, and $c_i$ the ideal cost. 
+Therefore $0 < q < 10$, where 0 is the worst quality and 1 is the best quality. `iw.uncertainties["cost"]` is the 
+measured_cost. Acceptable quality may vary depending on window size, frame rate, and velocity and depth magnitude. 
+Values of $q < 0.7$ are often indicative of poor fitting between measured and ideal spectra, which may indicate 
+erroneous estimates of velocity. The water depth has a relatively small effect on the cost function, therefore high 
+values of $q$ are not sufficient indicators of accurate depth estimation, although low values of $q$ are usually 
+indicative of large uncertainties in both velocity and depth estimations.
 
-The dictionary `info` contain additional information returned by the optimisers. `iw.info["status"]` returns a parameter indicating the exit condition. This corresponds to the "success" of the differential_evolution optimiser. `iw.info["message"]` returns the "message" field.
-
+The dictionary `info` contain additional information returned by the optimisers. `iw.info["status"]` returns a 
+parameter indicating the exit condition. This corresponds to the "success" of the differential_evolution optimiser. 
+`iw.info["message"]` returns the "message" field.
 
 ### Estimating water depth as well as x and y-directional velocity
 
