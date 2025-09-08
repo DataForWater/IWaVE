@@ -239,7 +239,7 @@ def sliding_window_spectrum(
         raise ValueError("win_t and overlap should not be equal.")
     
     # number of segments
-    num_segments = imgs.shape[1] // (win_t - overlap)
+    num_segments = (imgs.shape[1] - win_t) // (win_t - overlap)+ 1
     
     # sum of individual segments
     spectrum_sum = sum(
