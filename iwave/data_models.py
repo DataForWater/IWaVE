@@ -53,13 +53,17 @@ class LazyWindowArray:
         windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True)
 
         # Apply normalization if needed
-        if self.norm is not None:
-            # find relevant windows with mean != 0. Only those require normalization
-            nonzero_idx = np.where(np.mean(windows, axis=(1, 2, 3)) != 0)[0]
-            if self.norm == "xy":
-                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="xy")
-            elif self.norm == "time":
-                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="time")
+        if self.norm == "xy":
+            windows = window.normalize(windows, mode="xy")
+        elif self.norm == "time":
+            windows = window.normalize(windows, mode="time")
+        # if self.norm is not None:
+        #     # find relevant windows with mean != 0. Only those require normalization
+        #     nonzero_idx = np.where(np.mean(windows, axis=(1, 2, 3)) != 0)[0]
+        #     if self.norm == "xy":
+        #         windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="xy")
+        #     elif self.norm == "time":
+        #         windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="time")
         if isinstance(idx, slice):
             return windows
         elif isinstance(idx, int):
