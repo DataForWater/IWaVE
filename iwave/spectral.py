@@ -317,11 +317,6 @@ def spectrum_preprocessing(
 
     preprocessed_spectrum = preprocessed_spectrum * mask  # apply mask
 
-    # normalise so that the maximum at each frequency is 1
-    for i in range(preprocessed_spectrum.shape[0]):
-        max_value = np.max(preprocessed_spectrum[i, :, :])
-        preprocessed_spectrum[i, :, :] = preprocessed_spectrum[i, :, :] / max_value
-
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
     return preprocessed_spectrum
