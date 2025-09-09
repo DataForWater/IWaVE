@@ -239,7 +239,7 @@ def sliding_window_spectrum(
         raise ValueError("win_t and overlap should not be equal.")
     
     # number of segments
-    num_segments = imgs.shape[1] // (win_t - overlap)
+    num_segments = (imgs.shape[1] - win_t) // (win_t - overlap)+ 1
     
     # sum of individual segments
     spectrum_sum = sum(
@@ -316,11 +316,6 @@ def spectrum_preprocessing(
     mask = np.expand_dims(mask, axis=0)
 
     preprocessed_spectrum = preprocessed_spectrum * mask  # apply mask
-
-    # normalise so that the maximum at each frequency is 1
-    for i in range(preprocessed_spectrum.shape[0]):
-        max_value = np.max(preprocessed_spectrum[i, :, :])
-        preprocessed_spectrum[i, :, :] = preprocessed_spectrum[i, :, :] / max_value
 
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)

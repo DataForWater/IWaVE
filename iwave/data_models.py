@@ -50,7 +50,7 @@ class LazyWindowArray:
             raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
 
         # Use the sliding_window_func to generate the windows
-        windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True)
+        windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True).astype(np.float64)
 
         # Apply normalization if needed
         if self.norm is not None:

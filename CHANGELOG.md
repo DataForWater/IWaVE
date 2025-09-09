@@ -1,3 +1,14 @@
+## [0.3.1] - 2025-09-09
+### Added
+### Changed
+### Deprecated
+### Removed
+### Fixed
+* Resolved bug in normalization, resulting in uint8 spectra instead of float64. 
+
+### Security
+
+
 ## [0.3.0] - 2025-08-21
 ### Added
 * Lazy computation of interrogation window intensities and spectra for large video problems.
