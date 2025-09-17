@@ -115,7 +115,7 @@ class LazySpectrumArray(object):
             windows_sel = self.windows[idx : idx + 1]
         # now apply spectra on windows
         spectrum = spectral.sliding_window_spectrum(
-            windows_sel,
+            windows_sel[:,:,::-1,:],
             self.time_size,
             self.time_overlap,
         )
