@@ -52,21 +52,25 @@ def wave_numbers(
     dky = ks / window_dims[-2]
     dkx = ks / window_dims[-1]
     # omega wave numbers (time dim)
-    kt = np.arange(0, kts, dkt)
-    kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
+    # kt = np.arange(0, kts, dkt)
+    # kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
+    
+    kt = np.fft.rfftfreq(window_dims[-3], d=1/fps) * 2 * np.pi  # rad/s
 
     # determine wave numbers in x-direction
-    kx = np.arange(0, ks, dkx)
-    # kx = 0:dkx: (ks - dkx)
-    ky = np.arange(0, ks, dky)
+    # kx = np.arange(0, ks, dkx)
+    # ky = np.arange(0, ks, dky)
+    
+    kx = np.fft.fftfreq(window_dims[-1], d=res) * 2 * np.pi  # rad/m
+    ky = np.fft.fftfreq(window_dims[-2], d=res) * 2 * np.pi  # rad/m
 
     # apply fftshift on determined wave numbers
     kx = np.fft.fftshift(kx)
     ky = np.fft.fftshift(ky)
-    idx_x0 = np.where(kx == 0)[0][0]
-    kx[0: idx_x0] = kx[0:idx_x0] - kx[idx_x0 - 1] - dkx
-    idx_y0 = np.where(ky == 0)[0][0]
-    ky[0: idx_y0] = ky[0:idx_y0] - ky[idx_y0 - 1] - dky
+    # idx_x0 = np.where(kx == 0)[0][0]
+    # kx[0: idx_x0] = kx[0:idx_x0] - kx[idx_x0 - 1] - dkx
+    # idx_y0 = np.where(ky == 0)[0][0]
+    # ky[0: idx_y0] = ky[0:idx_y0] - ky[idx_y0 - 1] - dky
 
     return kt, ky, kx
 
@@ -100,7 +104,7 @@ def _numba_fourier_transform(
     # return spectrum_3d
     power = np.abs(spectrum_3d) ** 2
     # abbreviate to positive omega
-    return power[:int(np.ceil(len(power)/2))]
+    return power[:len(power)//2+1]
 
 
 @nb.njit(parallel=True, cache=True, nogil=True)
@@ -121,7 +125,7 @@ def _numba_fourier_transform_multi(
         n x 3D power spectrum of 3D fourier transform of all imgs
 
     """
-    spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
+    spectra = np.empty((imgs.shape[0], imgs.shape[1]//2+1, imgs.shape[2], imgs.shape[3]), dtype=np.float64)
     for m in nb.prange(imgs.shape[0]):
         spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
         for n in nb.prange(imgs.shape[1]):
@@ -136,7 +140,7 @@ def _numba_fourier_transform_multi(
         # return spectrum_3d
         power = np.abs(spectrum_3d) ** 2
         # abbreviate to positive omega
-        spectra[m] = power[:int(np.ceil(len(power)/2))]
+        spectra[m] = power[:len(power)//2+1]
     return spectra
 
 
@@ -167,7 +171,7 @@ def _numpy_fourier_transform(
     spectrum = np.abs(spectrum_3d) ** 2
 
     # abbreviate to positive omega
-    spectrum = spectrum[:int(np.ceil(len(spectrum)/2))]
+    spectrum = spectrum[:len(spectrum)//2+1]
 
     if norm:
         spectrum_norm = spectrum / np.expand_dims(
@@ -202,7 +206,7 @@ def spectral_imgs(
 
     """
     n, t, y, x = imgs.shape
-    t_out = int(np.ceil(t / 2))  # Reduced time dimension
+    t_out = t // 2 + 1  # Reduced time dimension
     spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
     return spectra
 
