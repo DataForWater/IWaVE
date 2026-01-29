@@ -204,8 +204,8 @@ def main():
   iw.velocimetry(
     alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
     depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-    twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
-                   # a reduced-dimension problem and serves as initialisation of the second step. 
+    twosteps=True # option to perform the calculation in two steps. If True, the first step is calculated based on
+                   # a reduced-dimension problem and serves as initialisation of the second step.
   )
   
   ax = plt.axes()
@@ -236,7 +236,7 @@ value for depth, even when this is not known accurately.
 
 The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (`scipy.optimize.differential_evolution`) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
 
-Setting `twosteps = True` (default is `False`) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust and is more subject to the presence of outliers.
+Setting `twosteps = True` (default is `True`) will run the optimisation in two steps. The first step employs a trimmed spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are neglected during the first step, even when "depth" = 0). During the second step, the search of the optimum is confined within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time by around 50% for large problems, but could be less robust if the input images are noisy or have a low resolution. In that case, it is recommended to run `twosteps = True` while setting `first_pass_downsample = 1` during the initialisation to avoid an eccessive loss in resolution.
 
 > [!IMPORTANT]
 > Optimization of the velocities occurs with a possibly large amount of spawned parallelized processes.
@@ -303,7 +303,7 @@ iw = Iwave(
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
   depth=0  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-  twosteps=False # option to perform the calculation in two steps. If True, the first step is calculated based on
+  twosteps=True # option to perform the calculation in two steps. If True, the first step is calculated based on
                  # a reduced-dimension problem and serves as initialisation of the second step. 
 )
 
