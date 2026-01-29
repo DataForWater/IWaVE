@@ -44,10 +44,11 @@ class Iwave(object):
         smax: Optional[float] = 4.0,
         dmin: Optional[float] = 0.01,
         dmax: Optional[float] = 3.0,
-        penalty_weight: Optional[float]=1,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
         window_chunk_size: Optional[int] = 50,
+        first_pass_downsample: Optional[int]=2,
+        penalty_weight: Optional[float]=1,
     ):
         """Initialize an Iwave instance.
 
@@ -77,11 +78,6 @@ class Iwave(object):
             Minimum depth expected in the scene. Defaults to 0.01 m
         dmax : float, optional
             Maximum depth expected in the scene. Defaults to 3 m
-        penalty_weight : float, optional
-            Parameter to reduce the risk of outliers by penalising solutions with high velocity modulus.
-            Inactive if set to 0. Defaults to 1. 
-            Outliers can be frequent if smax > 2 * flow velocity. Increase penalty_weight only if reducing smax 
-            is not possible, since setting penalty_weight > 0 may introduce a bias.
         gravity_waves_switch: bool, optional
             If True, gravity waves are modelled. If False, gravity waves are NOT modelled. Default True. 
             Setting gravity_waves_swtich = False may improve performance if floating tracers dominate the scene and waves are minimal.
@@ -92,6 +88,13 @@ class Iwave(object):
             dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
         window_chunk_size : int, optional
             Number of windows to process at a time. Defaults to 50.
+        first_pass_downsample : int, optional
+            Downsampling factor to use during the first pass of the two-steps optimisation. Defaults to 2.
+        penalty_weight : float, optional
+            Parameter to reduce the risk of outliers by penalising solutions with high velocity modulus.
+            Inactive if set to 0. Defaults to 1. 
+            Outliers can be frequent if smax > 2 * flow velocity. Increase penalty_weight only if reducing smax 
+            is not possible, since setting penalty_weight > 0 may introduce a bias.
         """
         self.window_chunk_size = window_chunk_size
         self.resolution = resolution
@@ -108,9 +111,10 @@ class Iwave(object):
         self.dmin = dmin
         self.dmax = dmax
         self.fps = fps
-        self.penalty_weight = penalty_weight
         self.gravity_waves_switch = gravity_waves_switch
         self.turbulence_switch = turbulence_switch
+        self.first_pass_downsample = first_pass_downsample
+        self.penalty_weight = penalty_weight
         if imgs is not None:
             self.imgs = imgs
         else:
@@ -417,10 +421,10 @@ class Iwave(object):
         self,
         alpha: float = 0.85,
         depth: float = 1.,  # If depth = 0, then the water depth is estimated.
-        twosteps: bool = False,
+        twosteps: bool = True,
         **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
                             # and subsequently refined during a second step using the whole spectrum. This will reduce 
-                            # computational time for large problems, but may reduce accuracy.
+                            # computational time for large problems.
     ):
         """
         Estimate and set the velocity components u and v on the instance from the subwindowed spectra.
@@ -439,7 +443,7 @@ class Iwave(object):
             depth of the water column [m], default 1. If set to 0. it will be estimated.
         twosteps : bool, optional
             if set, perform the optimisation twice, with a reduced spectrum in the first step without optimizing depth
-            and full spectrum in the second step with optimizing depth. Default False.
+            and full spectrum in the second step with optimizing depth. Default True.
         See also
         --------
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
@@ -453,11 +457,11 @@ class Iwave(object):
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
         # set search bounds to -/+ maximum velocity for both directions
+        if (twosteps == False) & (self.penalty_weight != 0):
+                # self.penalty_weight = 0
+                print(f"Velocity and especially depth estimations with the 1 step approach are biased when penalty_weight is not zero. It is recommended to use the two steps approach and/or set first_pass_downsample=1, or alternatively to set penalty_weight = 0 and decreasing smax to reduce the number of outliers.")
         if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
-            if twosteps == False:
-                self.penalty_weight = 0
-                print(f"Depth estimation with the 1 step approach is inaccurate when penalty_weight is not zero. Now setting penalty_weight = 0. Consider reducing smax if results are incorrect, or use the two-steps approach.")
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
@@ -478,7 +482,7 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
-                downsample=2, # for the first step, reduce the data size by 2
+                downsample=self.first_pass_downsample, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
                 desc="Optimizing windows 1st pass",
                 **opt_kwargs
