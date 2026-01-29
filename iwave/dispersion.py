@@ -431,7 +431,7 @@ def spectrum_downsample(
     kt_indx_last = np.where(np.isclose(kt_old, np.max(kt_new), atol = 1e-05))[0][0]
     kt_indx = np.arange(kt_indx_first, kt_indx_last + 1)
     
-    if len(kx_indx) != len(kx_new) | len(ky_indx) != len(ky_new) | len(kt_indx) != len(kt_new):
+    if (len(kx_indx) != len(kx_new)) or (len(ky_indx) != len(ky_new)) or (len(kt_indx) != len(kt_new)):
         raise ValueError("The dimensions of the trimmed array do not match the target after resampling")
         
     # trim the spectrum
