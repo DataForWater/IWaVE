@@ -188,9 +188,9 @@ def optimise_velocity(
     penalty_weight: float=1,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
+    chunk_size: int = 50,
     downsample : int=1,
     gauss_width: float=1,
-    chunk_size: int = 50,
     desc="Optimizing windows",
     **kwargs
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[bool], List[str]]:

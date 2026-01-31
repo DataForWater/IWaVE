@@ -155,6 +155,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
         dmax=depth_max,
         gravity_waves_switch=True,
         turbulence_switch=True,
+        penalty_weight=0
     )
     
     kt_gw, kt_turb = dispersion.dispersion(

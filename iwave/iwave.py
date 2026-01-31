@@ -478,6 +478,7 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
+                self.window_chunk_size,
                 downsample=2, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
                 desc="Optimizing windows 1st pass",
@@ -502,6 +503,7 @@ class Iwave(object):
             self.penalty_weight,  
             self.gravity_waves_switch, 
             self.turbulence_switch, 
+            self.window_chunk_size,
             downsample=1,
             gauss_width=1,  # TODO: figure out defaults
             desc="Optimizing windows 2nd pass" if twosteps else "Optimizing windows",
