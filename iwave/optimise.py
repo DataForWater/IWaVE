@@ -193,7 +193,7 @@ def optimise_velocity(
     gauss_width: float=1,
     desc="Optimizing windows",
     **kwargs
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[bool], List[str]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Runs the optimisation to calculate the optimal velocity components
 
@@ -244,19 +244,15 @@ def optimise_velocity(
 
     Returns
     -------
-    optimal : np.ndarray
-        optimised y [0] and x [1] velocity component (m/s) and depth (m) [2]
-    cost : float
+    optimal : np.ndarray[float]
+        optimized y [0] and x [1] velocity component (m/s) and depth (m) [2]
+    cost : np.ndarray[float]
         Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
-    quality : float
+    quality : np.ndarray[float]
         Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality.
         q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
         This parameter measures the similarity between the measured spectra and ideal spectra.
         While there is no direct link with results uncertainties, higher q indicates better quality data.
-    status : Bool
-        Boolean flag indicating the optimiser termination condition
-    message : str
-        termination message returned by the optimiser
     """
 
     def generate_args(): #, vel_indx, window_dims, res, fps, penalty_weight,

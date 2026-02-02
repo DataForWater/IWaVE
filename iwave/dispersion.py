@@ -23,29 +23,21 @@ def intensity(
     velocity : [float, float]
         velocity_y x velocity_x
         tentative surface velocity components along y and x (m/s)
-
     depth : float
         tentative water depth (m)
-
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
-
     window_dims: [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-
     res: float
         image resolution (m/pxl)
-
     fps: float
         image acquisition rate (fps)
-        
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
-
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
-
     turbulence_switch: bool=True
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
@@ -87,17 +79,13 @@ def dispersion(
     ----------
     ky: np.ndarray
         wavenumber array along the direction y
-
     kx: np.ndarray
         wavenumber array along the direction x
-
     velocity : [float, float]
         velocity_y x velocity_x
         tentative surface velocity components along y and x (m/s)
-
     depth : float
         tentative water depth (m)
-
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
 
@@ -151,10 +139,8 @@ def beta_calc(
     ----------
     k_mod: np.ndarray
         1 x N_y x N_x: wavenumber modulus
-
     depth : float
         tentative water depth (m)
-
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
 
@@ -192,10 +178,8 @@ def omega_a_calc(
     ----------
     ky: np.ndarray
         1 x N_y x N_x: wavenumber y-component
-
     kx: np.ndarray
         1 x N_y x N_x: wavenumber x-component
-
     velocity : [float, float]
         [velocity_y, velocity_x] tentative velocity components (m/s)
 
@@ -220,7 +204,6 @@ def omega_i_calc(
     ----------
     k_mod: np.ndarray
         1 x N_y x N_x: wavenumber modulus
-
     depth : float
         tentative water depth (m)
 
@@ -243,16 +226,14 @@ def omega_gw_calc(
         omega_i,
 ):
     """
-    Calculate the frequency of gravity-capillary waves considering the effects of the flow velocity
+    Calculate the frequency of gravity-capillary waves considering the effects of the flow velocity.
 
     Parameters
     ----------
     omega_i: np.ndarray
         N_y x N_x: frequency in still water
-        
     omega_a: np.ndarray
         N_y x N_x: flow velocity effect
-
     beta: np.ndarray
         N_y x N_x: velocity-profile effect
 
@@ -286,21 +267,16 @@ def theoretical_spectrum(
     kt_gw: np.ndarray
         1 x N_y x N_x
         frequency of gravity-capillary waves (rad/s)
-
     kt_turb: np.ndarray
         1 x N_y x N_x
         frequency of turbulence-generated waves and/or floating particles (rad/s)
-
     kt : np.ndarray
         frequency array (rad/s)
-        
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
-
     gravity_waves_switch: bool=True
         if True, gravity waves are modelled
         if False, gravity waves are NOT modelled
-
     turbulence_switch: bool=True
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
@@ -342,20 +318,17 @@ def gauss_spectrum_calc(
         switch: bool = True,
 ):
     """
-    creates branch of the theoretical 3D spectrum with Gaussian width based on input theoretical standard deviation
+    Create branch of the theoretical 3D spectrum with Gaussian width based on input theoretical standard deviation.
 
     Parameters
     ----------
     kt_theory: np.ndarray
         1 x N_y x N_x
         theoretical frequency of (gravity waves/turbulence waves) (rad/s)
-
     kt : np.ndarray
         frequency array (rad/s)
-
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
-
     switch: bool=True
         if False, returns empty spectrum
 
@@ -382,7 +355,7 @@ def spectrum_downsample(
         fps: float,
         window_dims : Tuple[int, int, int],
         downsample: int,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, float, float, Tuple[int, int, int]]:
     """
     trims the measured spectrum reducing its dimensions [1] and [2] bny a factor "downsample"
 
@@ -390,16 +363,12 @@ def spectrum_downsample(
     ----------
     measured_spectrum : np.ndarray
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-
     res: float
         image resolution (m/pxl)
-
     fps: float
         image acquisition rate (fps)
-    
     window_dims: [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-    
     downsample: int=1
         downsampling rate. If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to 'downsample'.
         Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially.
@@ -408,18 +377,19 @@ def spectrum_downsample(
     -------
     trimmed_spectrum : np.ndarray
         trimmed spectrum
-
+    res : float
+        resolution (unchanged)
+    fps : float
+        image acquisition rate (fps, unchanged)
+    window_dims : [int, int, int]
+        downsampled window dimensions
     """
-    
-    kt_old, ky_old, kx_old = spectral.wave_numbers(window_dims,res,fps)
-    
+    kt_old, ky_old, kx_old = spectral.wave_numbers(window_dims, res, fps)
     res = res*downsample
     fps = fps
-    
     window_dims = [window_dims[0], np.int64(np.ceil(window_dims[1]/downsample)), np.int64(np.ceil(window_dims[2]/downsample))]
-    kt_new, ky_new, kx_new = spectral.wave_numbers(window_dims,res,fps)
-    
-    # this could probably be simplified, but it is to ensure that the trimmed wavenumber arrays are correctly 
+    kt_new, ky_new, kx_new = spectral.wave_numbers(window_dims, res, fps)
+    # this could probably be simplified, but it is to ensure that the trimmed wavenumber arrays are correctly
     # aligned with the untrimmed one, since they will be calculated only based on res and fps in the following
     kx_indx_first = np.where(np.isclose(kx_old, np.min(kx_new), atol = 1e-06))[0][0]
     kx_indx_last = np.where(np.isclose(kx_old, np.max(kx_new), atol = 1e-06))[0][0]
@@ -430,12 +400,8 @@ def spectrum_downsample(
     kt_indx_first = np.where(np.isclose(kt_old, np.min(kt_new), atol = 1e-05))[0][0]
     kt_indx_last = np.where(np.isclose(kt_old, np.max(kt_new), atol = 1e-05))[0][0]
     kt_indx = np.arange(kt_indx_first, kt_indx_last + 1)
-    
-    if (len(kx_indx) != len(kx_new)) or (len(ky_indx) != len(ky_new)) or (len(kt_indx) != len(kt_new)):
+    if len(kx_indx) != len(kx_new) or len(ky_indx) != len(ky_new) or len(kt_indx) != len(kt_new):
         raise ValueError("The dimensions of the trimmed array do not match the target after resampling")
-        
     # trim the spectrum
     trimmed_spectrum = measured_spectrum[np.ix_(kt_indx,ky_indx,kx_indx)]
-    
-    
     return trimmed_spectrum, res, fps, window_dims
