@@ -46,7 +46,8 @@ def wave_numbers(
 
     """
     # omega wave numbers (time dim)    
-    kt = np.fft.rfftfreq(window_dims[-3], d=1/fps) * 2 * np.pi  # rad/s
+    kt = np.fft.fftfreq(window_dims[-3], d=1/fps) * 2 * np.pi  # rad/s
+    kt = kt[:int(np.ceil(len(kt)/2))]  # abbreviate to positive omega
 
     # determine wave numbers in x- and y-direction
     # this assumes the resolution is the same in x and
@@ -90,7 +91,7 @@ def _numba_fourier_transform(
     # return spectrum_3d
     power = np.abs(spectrum_3d) ** 2
     # abbreviate to positive omega
-    return power[:len(power)//2+1]
+    return power[:int(np.ceil(len(power)/2))]
 
 
 @nb.njit(parallel=True, cache=True, nogil=True)
@@ -111,7 +112,7 @@ def _numba_fourier_transform_multi(
         n x 3D power spectrum of 3D fourier transform of all imgs
 
     """
-    spectra = np.empty((imgs.shape[0], imgs.shape[1]//2+1, imgs.shape[2], imgs.shape[3]), dtype=np.float64)
+    spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
     for m in nb.prange(imgs.shape[0]):
         spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
         for n in nb.prange(imgs.shape[1]):
@@ -126,7 +127,7 @@ def _numba_fourier_transform_multi(
         # return spectrum_3d
         power = np.abs(spectrum_3d) ** 2
         # abbreviate to positive omega
-        spectra[m] = power[:len(power)//2+1]
+        spectra[m] = power[:int(np.ceil(len(power)/2))]
     return spectra
 
 
@@ -157,7 +158,7 @@ def _numpy_fourier_transform(
     spectrum = np.abs(spectrum_3d) ** 2
 
     # abbreviate to positive omega
-    spectrum = spectrum[:len(spectrum)//2+1]
+    spectrum = spectrum[:int(np.ceil(len(spectrum)/2))]
 
     if norm:
         spectrum_norm = spectrum / np.expand_dims(
@@ -192,7 +193,7 @@ def spectral_imgs(
 
     """
     n, t, y, x = imgs.shape
-    t_out = t // 2 + 1  # Reduced time dimension
+    t_out = int(np.ceil(t / 2))  # Reduced time dimension
     spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
     return spectra
 

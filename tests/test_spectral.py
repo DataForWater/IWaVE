@@ -8,7 +8,7 @@ def test_get_wave_numbers(img_windows, res=0.02, fps=25):
     """Check shape of wave numbers, conditional on shape of image."""
     # feed in only the first image window, and of that, only the first frame
     kt, ky, kx = spectral.wave_numbers(img_windows[0].shape, res=res, fps=fps)
-    assert len(kt) == len(img_windows[0])//2+1
+    assert len(kt) == int(np.ceil(len(img_windows[0])/2))
     assert len(ky) == img_windows.shape[-2]
     assert len(kx) == img_windows.shape[-1]
 
@@ -18,7 +18,7 @@ def test_numpy_fft(img_windows_norm):
     windows = img_windows_norm[-1]
     spectrum = spectral._numpy_fourier_transform(windows)
     assert spectrum.shape == (
-        len(windows) // 2 + 1,
+        int(np.ceil(len(windows)/2)),
         windows.shape[1],
         windows.shape[2]
     )
@@ -45,4 +45,4 @@ def test_sliding_window_spectrum(img_windows_norm):
     """Check shape of average of multiple spectra over several time slices."""
     spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10)
     # test if the spectra have the desired size
-    assert spectrum.shape[-3] == 20 // 2 + 1
+    assert spectrum.shape[-3] == int(np.ceil(20 / 2))
