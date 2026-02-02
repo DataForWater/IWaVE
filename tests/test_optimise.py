@@ -154,8 +154,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
         dmin=depth_min,
         dmax=depth_max,
         gravity_waves_switch=True,
-        turbulence_switch=True,
-        penalty_weight=0
+        turbulence_switch=True
     )
     
     kt_gw, kt_turb = dispersion.dispersion(
@@ -180,8 +179,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
-        twosteps=False,
-        popsize=50,
+        twosteps=False
     )
     
     vy_1step = iw.vy
