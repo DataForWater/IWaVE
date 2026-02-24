@@ -476,19 +476,6 @@ class Iwave(object):
                 for i in range(len(bounds_list)):
                     bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
             output_step1, _, _ = optimise.optimise_velocity(
-<<<<<<< 57-clean-up-spectral
-                measured_spectra=self.spectrum,
-                bnds_list=bounds_firststep,
-                vel_indx=alpha,
-                window_dims=self.spectrum_dims,
-                res=self.resolution,
-                fps=self.fps,
-                penalty_weight=self.penalty_weight,
-                gravity_waves_switch=self.gravity_waves_switch,
-                turbulence_switch=self.turbulence_switch,
-                chunk_size=self.window_chunk_size,
-                downsample=2, # for the first step, reduce the data size by 2
-=======
                 self.spectrum,
                 bounds_firststep,
                 alpha,
@@ -498,8 +485,8 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
+                chunk_size=self.window_chunk_size,
                 downsample=self.first_pass_downsample, # for the first step, reduce the data size by 2
->>>>>>> main
                 gauss_width=1,  # TODO: figure out defaults
                 desc="Optimizing windows 1st pass",
                 **opt_kwargs
