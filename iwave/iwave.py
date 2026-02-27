@@ -101,8 +101,11 @@ class Iwave(object):
         # ensures that window dimensions are even. this is to facilitate dimension reduction of the spectra.
         # this is currently working only for a downsampling rate of 2
         # TODO: generalise to any downsampling value
-        self.window_size = tuple((dim if dim % 2 == 0 else dim + 1) for dim in window_size) 
-        self.overlap = overlap
+        self.window_size: tuple[int, int] = (
+            window_size[0] if window_size[0] % 2 == 0 else window_size[0] + 1,
+            window_size[1] if window_size[1] % 2 == 0 else window_size[1] + 1,
+        )
+        self.overlap = tuple(int(o) for o in overlap)
         self.time_size = time_size
         self.time_overlap = time_overlap
         self.norm = norm
@@ -259,7 +262,7 @@ class Iwave(object):
         self._win_y = win_y
 
     @property
-    def spectrum_dims(self):
+    def spectrum_dims(self) -> tuple[int, int, int]:
         """Return expected dimensions of the spectrum derived from image windows."""
         return (self.time_size, *self.window_size)
 
@@ -465,7 +468,7 @@ class Iwave(object):
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
-        bounds_list = [bounds for _ in range(len(self.spectrum))]
+        bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
         if twosteps == True:
             bounds_firststep = bounds_list
@@ -482,6 +485,7 @@ class Iwave(object):
                 self.penalty_weight,  
                 self.gravity_waves_switch, 
                 self.turbulence_switch, 
+                chunk_size=self.window_chunk_size,
                 downsample=self.first_pass_downsample, # for the first step, reduce the data size by 2
                 gauss_width=1,  # TODO: figure out defaults
                 desc="Optimizing windows 1st pass",
@@ -497,15 +501,16 @@ class Iwave(object):
             opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
             self.penalty_weight = 0 # set penalty_weight = 0 for the second step
         output, cost, quality = optimise.optimise_velocity(
-            self.spectrum,
-            bounds_list,
-            alpha,
-            self.spectrum_dims,
-            self.resolution,
-            self.fps,
-            self.penalty_weight,  
-            self.gravity_waves_switch, 
-            self.turbulence_switch, 
+            measured_spectra=self.spectrum,
+            bnds_list=bounds_list,
+            vel_indx=alpha,
+            window_dims=self.spectrum_dims,
+            res=self.resolution,
+            fps=self.fps,
+            penalty_weight=self.penalty_weight,
+            gravity_waves_switch=self.gravity_waves_switch,
+            turbulence_switch=self.turbulence_switch,
+            chunk_size=self.window_chunk_size,
             downsample=1,
             gauss_width=1,  # TODO: figure out defaults
             desc="Optimizing windows 2nd pass" if twosteps else "Optimizing windows",

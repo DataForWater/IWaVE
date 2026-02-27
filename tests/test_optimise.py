@@ -189,7 +189,8 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
-        twosteps=True
+        twosteps=True,
+        popsize= 10
     )
 
     vy_2steps = iw.vy
@@ -205,8 +206,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vy_1step - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_1step - velocity[1]) < 0.01)
     assert np.all(np.abs(d_1step - depth) < 0.05)
-    
+
     assert np.all(np.abs(vy_2steps - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_2steps - velocity[1]) < 0.01)
     assert np.all(np.abs(d_2steps - depth) < 0.05)
-    
