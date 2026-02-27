@@ -105,7 +105,7 @@ class Iwave(object):
             window_size[0] if window_size[0] % 2 == 0 else window_size[0] + 1,
             window_size[1] if window_size[1] % 2 == 0 else window_size[1] + 1,
         )
-        self.overlap = overlap
+        self.overlap = tuple(int(o) for o in overlap)
         self.time_size = time_size
         self.time_overlap = time_overlap
         self.norm = norm
