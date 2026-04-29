@@ -435,7 +435,7 @@ class Iwave(object):
         The optimisation is performed using the differential evolution algorithm of `scipy.optimize`. You can pass
         arguments of this function to the optimiser. Default arguments are set as a starting point.
 
-        If you set `twosteps=True`, the optimisation is performed twice, with a reduced spectrum in the first step
+        If you set `twosteps=True`, the optimisation is performed twice per chunk, with a reduced spectrum in the first step
         without optimizing depth, and a refined step with full spectrum and optimizing depth.
 
         Parameters
@@ -445,7 +445,7 @@ class Iwave(object):
         depth : float, optional
             depth of the water column [m], default 1. If set to 0. it will be estimated.
         twosteps : bool, optional
-            if set, perform the optimisation twice, with a reduced spectrum in the first step without optimizing depth
+            if set, perform the optimisation twice per chunk, with a reduced spectrum in the first step without optimizing depth
             and full spectrum in the second step with optimizing depth. Default True.
         See also
         --------
@@ -463,43 +463,22 @@ class Iwave(object):
         if (twosteps == False) & (self.penalty_weight != 0):
                 # self.penalty_weight = 0
                 print(f"Velocity and especially depth estimations with the 1 step approach are biased when penalty_weight is not zero. It is recommended to use the two steps approach and/or set first_pass_downsample=1, or alternatively to set penalty_weight = 0 and decreasing smax to reduce the number of outliers.")
+        
+        if twosteps:
+            if self.first_pass_downsample > 0:
+                print(f"Optimization in two steps: step 1 will use downsampling factor {self.first_pass_downsample}, followed by step 2 with full resolution.")
+            else:
+                print("Optimization in one step with full resolution.")
         if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
-        # Create a list of bounds for each window. This is to enable narrowing the bounds locally during multiple passages.
+        # Create a list of bounds for each window.
         bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
-        if twosteps == True:
-            bounds_firststep = bounds_list
-            if depth==0: # for the first step, neglect water depth effects by assuming a large depth
-                for i in range(len(bounds_list)):
-                    bounds_firststep[i] = [bounds[0], bounds[1], (10, 10)]
-            output_step1, _, _ = optimise.optimise_velocity(
-                self.spectrum,
-                bounds_firststep,
-                alpha,
-                self.spectrum_dims,
-                self.resolution,
-                self.fps,
-                self.penalty_weight,  
-                self.gravity_waves_switch, 
-                self.turbulence_switch, 
-                chunk_size=self.window_chunk_size,
-                downsample=self.first_pass_downsample, # for the first step, reduce the data size by 2
-                gauss_width=1,  # TODO: figure out defaults
-                desc="Optimizing windows 1st pass",
-                **opt_kwargs
-            )
-            # re-initialise the problem using narrower bounds between 90% and 110% of the first step solution
-            vy_step1 = output_step1[:, 0]
-            vx_step1 = output_step1[:, 1]
-            for i in range(len(bounds_list)):
-                bounds_list[i] = [(vy_step1[i]-0.1*np.abs(vy_step1[i]), vy_step1[i]+0.1*np.abs(vy_step1[i])), 
-                    (vx_step1[i]-0.1*np.abs(vx_step1[i]), vx_step1[i]+0.1*np.abs(vx_step1[i])), 
-                        (bounds[2][0], bounds[2][1])]
-            opt_kwargs["popsize"] = max(1, opt_kwargs["popsize"] // 2) # reduce the population size for the second step
-            self.penalty_weight = 0 # set penalty_weight = 0 for the second step
+        # Determine the two-step downsample factor
+        two_step_downsample = self.first_pass_downsample if twosteps else 0
+        
         output, cost, quality = optimise.optimise_velocity(
             measured_spectra=self.spectrum,
             bnds_list=bounds_list,
@@ -513,7 +492,8 @@ class Iwave(object):
             chunk_size=self.window_chunk_size,
             downsample=1,
             gauss_width=1,  # TODO: figure out defaults
-            desc="Optimizing windows 2nd pass" if twosteps else "Optimizing windows",
+            two_step_downsample=two_step_downsample,
+            desc="Optimizing windows",
             **opt_kwargs
         )
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
