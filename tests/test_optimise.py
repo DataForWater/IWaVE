@@ -115,7 +115,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         gravity_waves_switch=True,
         turbulence_switch=True,
         downsample=1,
-        popsize=10,
+        popsize=20,
         workers=1,
         maxiter=1000,
         # updating="deferred"
