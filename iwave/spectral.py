@@ -45,21 +45,48 @@ def wave_numbers(
         wave numbers of time, y and x
 
     """
+    
+    nd_kt, nd_ky, nd_kx = nondim_wave_numbers(window_dims)
+    
+    kt = nd_kt * fps # rad/s
+    ky = nd_ky / res # rad/m
+    kx = nd_kx / res # rad/m
+    
+    return kt, ky, kx
+
+
+def nondim_wave_numbers(
+    window_dims: tuple
+):
+    """
+    get t, y, x wave numbers
+
+    Parameters
+    ----------
+    windows : np.ndarray
+        time x Y x X windows with intensities
+
+    Returns
+    -------
+    nd_kt, nd_ky, nd_kx: np.ndarray
+        non-dimensional wave numbers of time, y and x
+
+    """
     # omega wave numbers (time dim)    
-    kt = np.fft.fftfreq(window_dims[-3], d=1/fps) * 2 * np.pi  # rad/s
-    kt = kt[:int(np.ceil(len(kt)/2))]  # abbreviate to positive omega
+    nd_kt = np.fft.fftfreq(window_dims[-3]) * 2 * np.pi  
+    nd_kt = nd_kt[:int(np.ceil(len(nd_kt)/2))]  # abbreviate to positive omega
 
     # determine wave numbers in x- and y-direction
     # this assumes the resolution is the same in x and
     # y-direction: TODO make variable for both directions
-    kx = np.fft.fftfreq(window_dims[-1], d=res) * 2 * np.pi  # rad/m
-    ky = np.fft.fftfreq(window_dims[-2], d=res) * 2 * np.pi  # rad/m
+    nd_kx = np.fft.fftfreq(window_dims[-1]) * 2 * np.pi  
+    nd_ky = np.fft.fftfreq(window_dims[-2]) * 2 * np.pi  
 
     # apply fftshift on determined wave numbers
-    kx = np.fft.fftshift(kx)
-    ky = np.fft.fftshift(ky)
+    nd_kx = np.fft.fftshift(nd_kx)
+    nd_ky = np.fft.fftshift(nd_ky)
 
-    return kt, ky, kx
+    return nd_kt, nd_ky, nd_kx
 
 
 @nb.njit(parallel=True, cache=True, nogil=True)
@@ -313,6 +340,65 @@ def spectrum_preprocessing(
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
     return preprocessed_spectrum
 
+def nondim_spectrum_preprocessing(
+        measured_spectrum: np.ndarray,
+        nd_kt: np.ndarray,
+        nd_ky: np.ndarray,
+        nd_kx: np.ndarray,
+        spectrum_threshold: float = 1
+) -> np.ndarray:
+    """
+    pre-processing of the measured spectrum to improve convergence of the optimisation
+
+    Parameters
+    ----------
+    measured_spectrum : np.ndarray
+        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
+        dimensions [wi, kti, kyi, kx]
+
+    nd_kt : np.ndarray
+        nondimensional radian frequency vector (rad)
+
+    nd_ky : np.ndarray
+        nondimensional y-wavenumber vector (rad)
+
+    nd_kx : np.ndarray
+        nondimensional x-wavenumber vector (rad)
+
+    spectrum_threshold : float, optional
+        threshold parameter for spectrum filtering (default 1.0).
+        the spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
+        threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
+
+    Returns
+    -------
+    preprocessed_spectrum : np.ndarray
+        pre-processed and normalised measured 3D spectrum
+
+    """
+    # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
+    with np.errstate(divide='ignore', invalid='ignore'):
+        preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
+
+    # apply threshold
+    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
+    preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
+
+    # set the first slice (frequency=0) to 0
+    preprocessed_spectrum[:, 0, :, :] = 0
+
+    nd_velocity_threshold = len(nd_kt) / np.max([len(nd_kx), len(nd_ky)]) *2  # maximum velocity in non-dimensional units, based on the maximum wavenumber and frequency in the spectrum
+    nd_kt_threshold = dispersion_threshold(nd_ky, nd_kx, nd_velocity_threshold)
+
+    # create mask
+    kt_bc = nd_kt[:, None, None]  
+    mask = kt_bc <= nd_kt_threshold 
+
+    preprocessed_spectrum *= mask  # apply mask
+    
+    # remove NaNs
+    preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
+    return preprocessed_spectrum
 
 def dispersion_threshold(
         ky,

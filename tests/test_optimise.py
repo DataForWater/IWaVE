@@ -12,7 +12,8 @@ def test_preprocessing():
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
     measured_spectrum = spectral.sliding_window_spectrum(img, img.shape[1], 0)
-    preprocessed_spectrum = spectral.spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold=5)
+    nd_kt, nd_ky, nd_kx = spectral.nondim_wave_numbers(img.shape)
+    preprocessed_spectrum = spectral.nondim_spectrum_preprocessing(measured_spectrum, nd_kt, nd_ky, nd_kx, spectrum_threshold=1)
     #test if the size of the preprocessed spectrum matches the one of the theoretical spectrum
     assert preprocessed_spectrum[0].shape == synthetic_spectrum.shape
 
