@@ -114,6 +114,11 @@ def _numba_fourier_transform_multi(
     """
     spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
     for m in nb.prange(imgs.shape[0]):
+        # Skip FFT computation for zero windows (common in edge cases)
+        if not np.any(imgs[m]):
+            spectra[m] = 0.0
+            continue
+        
         spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
         for n in nb.prange(imgs.shape[1]):
             spectrum_3d[n] = fftshift_(

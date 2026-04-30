@@ -141,8 +141,8 @@ def optimize_single_spectrum_velocity(
     Returns:
         v, u, d, cost, quality, status, message
     """
-    # Check if spectrum is nonzero before processing
-    if np.mean(measured_spectrum) == 0:
+    # Zero spectra were skipped during FFT, skip optimization for them too
+    if not np.any(measured_spectrum):
         return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
     
     if downsample > 1: # reduce dimensions of spectrum (for two-step approach)
@@ -189,8 +189,8 @@ def optimize_single_spectrum_velocity_two_steps(
     Returns:
         vy, vx, d, cost, quality, status, message
     """
-    # Check if spectrum is nonzero before processing
-    if np.mean(measured_spectrum) == 0:
+    # Zero spectra were skipped during FFT, skip optimization for them too
+    if not np.any(measured_spectrum):
         return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
     
     # Step 1: Optimize with downsampled spectrum (no depth optimization)
