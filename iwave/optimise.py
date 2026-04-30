@@ -141,6 +141,10 @@ def optimize_single_spectrum_velocity(
     Returns:
         v, u, d, cost, quality, status, message
     """
+    # Check if spectrum is nonzero before processing
+    if np.mean(measured_spectrum) == 0:
+        return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
+    
     if downsample > 1: # reduce dimensions of spectrum (for two-step approach)
         measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
     
@@ -164,14 +168,98 @@ def optimize_single_spectrum_velocity(
     return vy, vx, d, cost, quality, status, message  
     
 
+def optimize_single_spectrum_velocity_two_steps(
+    measured_spectrum: np.ndarray,
+    bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
+    vel_indx: float,
+    window_dims: Tuple[int, int, int], 
+    res: float, 
+    fps: float,
+    penalty_weight: float,
+    gravity_waves_switch: bool,
+    turbulence_switch: bool,
+    two_step_downsample: int,
+    gauss_width: float,
+    kwargs: dict
+) -> Tuple[float, float, float, float, float, bool, str]:
+    """
+    Two-step optimization per window: first with downsampled spectrum, then with full spectrum.
+    This is more efficient than processing all windows in step 1 then all windows in step 2.
+    
+    Returns:
+        vy, vx, d, cost, quality, status, message
+    """
+    # Check if spectrum is nonzero before processing
+    if np.mean(measured_spectrum) == 0:
+        return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
+    
+    # Step 1: Optimize with downsampled spectrum (no depth optimization)
+    measured_spectrum_step1, res_step1, fps_step1, window_dims_step1 = dispersion.spectrum_downsample(
+        measured_spectrum, res, fps, window_dims, two_step_downsample
+    )
+    
+    bnds_step1 = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
+    opt_step1 = optimize.differential_evolution(
+        cost_function_velocity_wrapper,
+        bounds=bnds_step1,
+        args=(measured_spectrum_step1, vel_indx, window_dims_step1, res_step1, fps_step1, 
+              penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
+        **kwargs
+    )
+    
+    # Extract step 1 results
+    vy_step1 = opt_step1.x[0]
+    vx_step1 = opt_step1.x[1]
+    
+    # Step 2: Refine bounds based on step 1 result
+    # Narrow bounds to ±10% of the step 1 solution
+    bnds_step2 = [
+        (vy_step1 - 0.1*np.abs(vy_step1), vy_step1 + 0.1*np.abs(vy_step1)),
+        (vx_step1 - 0.1*np.abs(vx_step1), vx_step1 + 0.1*np.abs(vx_step1)),
+        (np.log(bnds[2][0]), np.log(bnds[2][1]))  # Keep original depth bounds
+    ]
+    
+    # Reduce population size for step 2
+    kwargs_step2 = kwargs.copy()
+    kwargs_step2["popsize"] = max(1, kwargs_step2.get("popsize", 8) // 2)
+    
+    # Step 2: Optimize with full spectrum and refined bounds
+    bnds_log = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
+    opt_step2 = optimize.differential_evolution(
+        cost_function_velocity_wrapper,
+        bounds=bnds_step2,
+        args=(measured_spectrum, vel_indx, window_dims, res, fps, 
+              0, gravity_waves_switch, turbulence_switch, gauss_width),  # penalty_weight=0 for step 2
+        **kwargs_step2
+    )
+    
+    status = opt_step2.success
+    message = opt_step2.message
+    
+    # Calculate quality metric
+    quality = quality_calc(opt_step2.x, measured_spectrum, vel_indx, window_dims, res, fps, 
+                          gauss_width, gravity_waves_switch, turbulence_switch)
+    cost = np.sum(opt_step2.fun**2)
+    opt_step2.x[2] = np.exp(opt_step2.x[2])  # transforms back optimised depth into linear scale
+    
+    vy, vx, d = opt_step2.x
+    return vy, vx, d, cost, quality, status, message
+
+
 def optimize_single_spectrum_velocity_unpack(kwargs):
-    """Wrap all arguments for optimization in a single dictionary."""
-    # kwargs["measured_spectrum"] = kwargs["measured_spectra"][kwargs["idx"]]
-    # kwargs["bnds"] = kwargs["bnds_list"][kwargs["idx"]]
-    # del kwargs["measured_spectra"]
-    # del kwargs["bnds_list"]
-    # del kwargs["idx"]
-    return optimize_single_spectrum_velocity(**kwargs)
+    """Wrap all arguments for optimization in a single dictionary.
+    Routes to either two-step or one-step optimization based on two_step_downsample parameter.
+    """
+    two_step_downsample = kwargs.pop("two_step_downsample", 0)
+    
+    if two_step_downsample > 0:
+        # Two-step optimization
+        kwargs['two_step_downsample'] = two_step_downsample
+        return optimize_single_spectrum_velocity_two_steps(**kwargs)
+    else:
+        # One-step optimization: use downsample=1
+        kwargs['downsample'] = 1
+        return optimize_single_spectrum_velocity(**kwargs)
 
 def silence_output():
     """Suppress output of worker functions."""
@@ -305,91 +393,31 @@ def optimise_velocity(
         max_workers = None
     # Initialize progress bar before submitting tasks
     progress_bar = tqdm(total=len(idxs), desc=desc)
-    # for chunk_idxs, chunk_args in zip()
+    
     for idx in idxs[::chunk_size]:
         # select and read the current data block in one go
         idx_sel = idxs[idx:idx + chunk_size]
         spectra_sel = measured_spectra[idx: idx + chunk_size]
-        # find those that are non-zero
+        # get bounds for this chunk (nonzero check now done in worker)
         bnds_sel = bnds_list[idx: idx + chunk_size]
-        nonzero_idx = np.where(np.mean(spectra_sel, axis=(1, 2, 3)) != 0)[0]
-        # push forward the progress bar by the amount less than the original length of arguments
-        update = len(idx_sel) - len(nonzero_idx)
-        if update > 0:
-            progress_bar.update(update)
-        idx_sel = np.array(idx_sel)[nonzero_idx].tolist()
-        bnds_sel = np.array(bnds_sel)[nonzero_idx].tolist()
-        spectra_sel = spectra_sel[nonzero_idx]
 
-        # If two-step optimization is enabled, run step 1 first
-        if two_step_downsample > 0:
-            # Step 1: Optimization with downsampled spectrum
-            args_sel_step1 = [
-                dict(
-                    measured_spectrum=measured_spectrum,
-                    bnds=bnds,
-                    vel_indx=vel_indx,
-                    window_dims=window_dims,
-                    res=res,
-                    fps=fps,
-                    penalty_weight=penalty_weight,
-                    gravity_waves_switch=gravity_waves_switch,
-                    turbulence_switch=turbulence_switch,
-                    downsample=two_step_downsample,
-                    gauss_width=gauss_width,
-                    kwargs=kwargs,
-                ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
-            ]
-            
-            step1_results = [None] * len(idx_sel)
-            with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
-                futures = {
-                    executor.submit(
-                        optimize_single_spectrum_velocity_unpack, input_args
-                    ): i for i, input_args in enumerate(args_sel_step1)
-                }
-                for future in as_completed(futures):
-                    i = futures[future]
-                    step1_results[i] = future.result()
-            
-            # Refine bounds based on step 1 results
-            bnds_sel_refined = []
-            for i, (bnds, result) in enumerate(zip(bnds_sel, step1_results)):
-                if result is not None:
-                    vy_step1, vx_step1 = result[0], result[1]
-                    # Narrow bounds to ±10% of the step 1 solution
-                    bnds_refined = [
-                        (vy_step1 - 0.1*np.abs(vy_step1), vy_step1 + 0.1*np.abs(vy_step1)),
-                        (vx_step1 - 0.1*np.abs(vx_step1), vx_step1 + 0.1*np.abs(vx_step1)),
-                        bnds[2]  # Keep original depth bounds
-                    ]
-                else:
-                    bnds_refined = bnds
-                bnds_sel_refined.append(bnds_refined)
-            
-            # Reduce population size for step 2
-            kwargs_step2 = kwargs.copy()
-            kwargs_step2["popsize"] = max(1, kwargs_step2.get("popsize", 8) // 2)
-            
-            # Step 2: Optimization with full resolution and refined bounds
-            args_sel = [
-                dict(
-                    measured_spectrum=measured_spectrum,
-                    bnds=bnds,
-                    vel_indx=vel_indx,
-                    window_dims=window_dims,
-                    res=res,
-                    fps=fps,
-                    penalty_weight=0,  # Set penalty weight to 0 for step 2
-                    gravity_waves_switch=gravity_waves_switch,
-                    turbulence_switch=turbulence_switch,
-                    downsample=1,
-                    gauss_width=gauss_width,
-                    kwargs=kwargs_step2,
-                ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel_refined)
-            ]
-        else:
-            args_sel = generate_args()
+        # Generate args for this chunk (handles both one-step and two-step via two_step_downsample parameter)
+        args_sel = [
+            dict(
+                measured_spectrum=measured_spectrum,
+                bnds=bnds,
+                vel_indx=vel_indx,
+                window_dims=window_dims,
+                res=res,
+                fps=fps,
+                penalty_weight=penalty_weight,
+                gravity_waves_switch=gravity_waves_switch,
+                turbulence_switch=turbulence_switch,
+                two_step_downsample=two_step_downsample,
+                gauss_width=gauss_width,
+                kwargs=kwargs,
+            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
+        ]
 
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
             futures = {
