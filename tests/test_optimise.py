@@ -179,6 +179,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
+        popsize= 20,
         twosteps=False
     )
     
@@ -189,8 +190,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
-        twosteps=True,
-        popsize= 10
+        popsize= 20
     )
 
     vy_2steps = iw.vy
