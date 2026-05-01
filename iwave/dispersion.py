@@ -8,9 +8,9 @@ def intensity(
     velocity: Tuple[float, float],
     depth: float,
     vel_indx: float,
-    window_dims: Tuple[int, int, int],
     res: float,
     fps: float,
+    window_dims: Tuple[int, int, int],
     gauss_width: float,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True
@@ -27,12 +27,12 @@ def intensity(
         tentative water depth (m)
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
     res: float
         image resolution (m/pxl)
     fps: float
         image acquisition rate (fps)
+    window_dims: [int, int, int]
+        [dim_t, dim_y, dim_x] window dimensions
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
     gravity_waves_switch: bool=True

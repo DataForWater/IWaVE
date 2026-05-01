@@ -41,9 +41,9 @@ class Iwave(object):
         imgs: Optional[np.ndarray] = None,
         norm: Optional[Literal["time", "xy"]] = "time",
         spectrum_threshold: Optional[float] = 1.0,
-        smax: Optional[float] = 4.0,
+        smax: Optional[float] = 5.0,
         dmin: Optional[float] = 0.01,
-        dmax: Optional[float] = 3.0,
+        dmax: Optional[float] = 10.0,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
         window_chunk_size: Optional[int] = 50,
@@ -355,7 +355,7 @@ class Iwave(object):
             self.ky,
             self.kx,
             (self.vy.flatten()[window_idx], self.vx.flatten()[window_idx]),
-            depth=1,
+            depth=10,
             vel_indx=0.85
         )
         p = io.plot_spectrum_fitted(
@@ -423,11 +423,9 @@ class Iwave(object):
     def velocimetry(
         self,
         alpha: float = 0.85,
-        depth: float = 1.,  # If depth = 0, then the water depth is estimated.
+        depth: float = 10.,
         twosteps: bool = True,
-        **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
-                            # and subsequently refined during a second step using the whole spectrum. This will reduce 
-                            # computational time for large problems.
+        **opt_kwargs
     ):
         """
         Estimate and set the velocity components u and v on the instance from the subwindowed spectra.
@@ -435,21 +433,21 @@ class Iwave(object):
         The optimisation is performed using the differential evolution algorithm of `scipy.optimize`. You can pass
         arguments of this function to the optimiser. Default arguments are set as a starting point.
 
-        If you set `twosteps=True`, the optimisation is performed twice per chunk, with a reduced spectrum in the first step
-        without optimizing depth, and a refined step with full spectrum and optimizing depth.
+        If you set `twosteps=True`, the optimisation is performed twice per chunk, with a reduced spectrum in the first step,
+        and a refined step with full spectrum.
 
         Parameters
         ----------
         alpha : float, optional
             depth-average to surface velocity ratio [-], default 0.85
         depth : float, optional
-            depth of the water column [m], default 1. If set to 0. it will be estimated.
+            Depth of the water column [m]. Set to 0 to estimate depth, or provide a positive value to use fixed depth.
+            Default 1 (fixed).
         twosteps : bool, optional
-            if set, perform the optimisation twice per chunk, with a reduced spectrum in the first step without optimizing depth
-            and full spectrum in the second step with optimizing depth. Default True.
-        See also
-        --------
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
+            If True (default), performs two-step optimization with downsampling in step 1 and refinement in step 2.
+        **opt_kwargs
+            Additional keyword arguments passed to scipy.optimize.differential_evolution.
+            See https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
 
         """
         if self.spectrum is None:
@@ -459,9 +457,12 @@ class Iwave(object):
         # ensure defaults are set if nothing is provided
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
+        
+        # Determine if depth should be estimated based on value (0 = estimate, >0 = fixed)
+        estimate_depth = (depth == 0)
+        
         # set search bounds to -/+ maximum velocity for both directions
         if (twosteps == False) & (self.penalty_weight != 0):
-                # self.penalty_weight = 0
                 print(f"Velocity and especially depth estimations with the 1 step approach are biased when penalty_weight is not zero. It is recommended to use the two steps approach and/or set first_pass_downsample=1, or alternatively to set penalty_weight = 0 and decreasing smax to reduce the number of outliers.")
         
         if twosteps:
@@ -469,10 +470,9 @@ class Iwave(object):
                 print(f"Optimization in two steps: step 1 will use downsampling factor {self.first_pass_downsample}, followed by step 2 with full resolution.")
             else:
                 print("Optimization in one step with full resolution.")
-        if depth == 0:  # If depth = 0, then the water depth is estimated.
-            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
-        else:
-            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
+        
+        # Always set full bounds (needed for two-step optimization where step 1 always estimates depth)
+        bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
         # Create a list of bounds for each window.
         bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
@@ -492,6 +492,8 @@ class Iwave(object):
             chunk_size=self.window_chunk_size,
             downsample=1,
             gauss_width=1,  # TODO: figure out defaults
+            depth=depth if not estimate_depth else 10.0,  # Pass actual depth value if fixed, else default
+            estimate_depth=estimate_depth,
             two_step_downsample=two_step_downsample,
             desc="Optimizing windows",
             **opt_kwargs

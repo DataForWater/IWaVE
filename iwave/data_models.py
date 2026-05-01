@@ -121,14 +121,21 @@ class LazySpectrumArray(object):
         )
 
         # preprocess
-        spectrum = spectral.spectrum_preprocessing(
+        spectrum = spectral.nondim_spectrum_preprocessing(
             spectrum,
             self.kt,
             self.ky,
             self.kx,
-            self.smax*3,
             spectrum_threshold=self.threshold
         )
+        # spectrum = spectral.spectrum_preprocessing(
+        #     spectrum,
+        #     self.kt,
+        #     self.ky,
+        #     self.kx,
+        #     self.smax*3,
+        #     spectrum_threshold=self.threshold
+        # )
         if isinstance(idx, slice):
             return spectrum
         elif isinstance(idx, Union[int, np.integer]):
