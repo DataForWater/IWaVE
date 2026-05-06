@@ -44,6 +44,8 @@ class Iwave(object):
         smax: Optional[float] = 5.0,
         dmin: Optional[float] = 0.01,
         dmax: Optional[float] = 10.0,
+        alphamin: Optional[float] = 0.5,
+        alphamax: Optional[float] = 1.0,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
         window_chunk_size: Optional[int] = 50,
@@ -78,6 +80,10 @@ class Iwave(object):
             Minimum depth expected in the scene. Defaults to 0.01 m
         dmax : float, optional
             Maximum depth expected in the scene. Defaults to 3 m
+        alphamin : float, optional
+            Minimum alpha expected in the scene. Defaults to 0.5.
+        alphamax : float, optional
+            Maximum alpha expected in the scene. Defaults to 1.0.
         gravity_waves_switch: bool, optional
             If True, gravity waves are modelled. If False, gravity waves are NOT modelled. Default True. 
             Setting gravity_waves_swtich = False may improve performance if floating tracers dominate the scene and waves are minimal.
@@ -113,6 +119,8 @@ class Iwave(object):
         self.smax = smax
         self.dmin = dmin
         self.dmax = dmax
+        self.alphamin = alphamin
+        self.alphamax = alphamax
         self.fps = fps
         self.gravity_waves_switch = gravity_waves_switch
         self.turbulence_switch = turbulence_switch
@@ -127,6 +135,7 @@ class Iwave(object):
         self.vy = None  # y velocity component (m/s)
         self.vx = None  # x velocity component (m/s)
         self.d = None  # water depth (m)
+        self.alpha = None  # depth-average to surface velocity ratio (-)
         self.cost = None  # cost function value (float)
         self.quality = None  # quality parameter (0 < q < 1), where 1 is highest quality and 0 is lowest quality
         self.status = None  # Boolean flag indicating if the optimizer exited successfully
@@ -351,12 +360,13 @@ class Iwave(object):
             See :py:func:`matplotlib.pyplot.pcolormesh` for options.
         """
         spectrum_sel = self.spectrum[window_idx]
+        vel_indx = self.alpha.flatten()[window_idx] if self.alpha is not None else 0.85
         kt_waves_theory, kt_advected_theory = dispersion.dispersion(
             self.ky,
             self.kx,
             (self.vy.flatten()[window_idx], self.vx.flatten()[window_idx]),
             depth=10,
-            vel_indx=0.85
+            vel_indx=vel_indx
         )
         p = io.plot_spectrum_fitted(
             spectrum_sel,
@@ -439,10 +449,10 @@ class Iwave(object):
         Parameters
         ----------
         alpha : float, optional
-            depth-average to surface velocity ratio [-], default 0.85
+            depth-average to surface velocity ratio [-], default 0.85. Set to 0 to estimate alpha.
         depth : float, optional
             Depth of the water column [m]. Set to 0 to estimate depth, or provide a positive value to use fixed depth.
-            Default 1 (fixed).
+            Default 10 (fixed).
         twosteps : bool, optional
             If True (default), performs two-step optimization with downsampling in step 1 and refinement in step 2.
         **opt_kwargs
@@ -458,10 +468,13 @@ class Iwave(object):
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
         
-        # Determine if depth should be estimated based on value (0 = estimate, >0 = fixed)
+        # Determine if depth and/or alpha should be estimated
         estimate_depth = (depth == 0)
+        estimate_alpha = (alpha == 0)
         
-        # set search bounds to -/+ maximum velocity for both directions
+        if estimate_depth and estimate_alpha:
+            print("Warning: estimating both depth and alpha simultaneously may lead to wrong parameter estimates.")
+        
         if (twosteps == False) & (self.penalty_weight != 0):
                 print(f"Velocity and especially depth estimations with the 1 step approach are biased when penalty_weight is not zero. It is recommended to use the two steps approach and/or set first_pass_downsample=1, or alternatively to set penalty_weight = 0 and decreasing smax to reduce the number of outliers.")
         
@@ -469,10 +482,19 @@ class Iwave(object):
             if self.first_pass_downsample > 0:
                 print(f"Optimization in two steps: step 1 will use downsampling factor {self.first_pass_downsample}, followed by step 2 with full resolution.")
             else:
-                print("Optimization in one step with full resolution.")
-        
-        # Always set full bounds (needed for two-step optimization where step 1 always estimates depth)
-        bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+                print("Optimization in two steps with full resolution.")
+        else:
+            print("Optimization in one step with full resolution.")
+
+        alpha_bounds = (self.alphamin, self.alphamax)
+        if estimate_alpha:
+            print(f"Alpha estimation is active. Search bounds will be {alpha_bounds}.")
+
+        bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
+        if estimate_depth:
+            bounds.append((self.dmin, self.dmax))
+        if estimate_alpha:
+            bounds.append(alpha_bounds)
         # Create a list of bounds for each window.
         bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
@@ -482,7 +504,7 @@ class Iwave(object):
         output, cost, quality = optimise.optimise_velocity(
             measured_spectra=self.spectrum,
             bnds_list=bounds_list,
-            vel_indx=alpha,
+            vel_indx=alpha if not estimate_alpha else 0.85,
             window_dims=self.spectrum_dims,
             res=self.resolution,
             fps=self.fps,
@@ -494,6 +516,7 @@ class Iwave(object):
             gauss_width=1,  # TODO: figure out defaults
             depth=depth if not estimate_depth else 10.0,  # Pass actual depth value if fixed, else default
             estimate_depth=estimate_depth,
+            estimate_vel_indx=estimate_alpha,
             two_step_downsample=two_step_downsample,
             desc="Optimizing windows",
             **opt_kwargs
@@ -501,6 +524,7 @@ class Iwave(object):
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
         self.vx = output[:, 1].reshape(len(self.y), len(self.x))
         self.d = output[:, 2].reshape(len(self.y), len(self.x))
+        self.alpha = output[:, 3].reshape(len(self.y), len(self.x))
         self.cost = cost.reshape(len(self.y), len(self.x))
         self.quality = quality.reshape(len(self.y), len(self.x))
         self.status = True

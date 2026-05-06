@@ -70,6 +70,57 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     assert cost_12 > cost_11
     assert cost_13 > cost_11
 
+
+def test_cost_function_velocity_alpha(img_size=(256, 64, 64), res=0.02, fps=25):
+    """Check cost function behavior when alpha is estimated."""
+    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
+    depth = 0.30
+    velocity_y = 1
+    velocity_x = 0
+    vel_indx_true = 0.8
+    params_true = [velocity_y, velocity_x, vel_indx_true]
+    params_off = [velocity_y, velocity_x, 0.6]
+    kt_gw, kt_turb = dispersion.dispersion(ky, kx, [velocity_y, velocity_x], depth, vel_indx_true)
+    synthetic_spectrum = dispersion.theoretical_spectrum(
+        kt_gw,
+        kt_turb,
+        kt,
+        gauss_width=1,
+        gravity_waves_switch=True,
+        turbulence_switch=True
+    )
+    cost_true = optimise.cost_function_velocity_depth(
+        params_true,
+        synthetic_spectrum,
+        vel_indx=0.85,
+        window_dims=img_size,
+        res=res,
+        fps=fps,
+        penalty_weight=1,
+        gravity_waves_switch=True,
+        turbulence_switch=True,
+        gauss_width=1,
+        depth=depth,
+        estimate_depth=False,
+        estimate_vel_indx=True,
+    )
+    cost_off = optimise.cost_function_velocity_depth(
+        params_off,
+        synthetic_spectrum,
+        vel_indx=0.85,
+        window_dims=img_size,
+        res=res,
+        fps=fps,
+        penalty_weight=1,
+        gravity_waves_switch=True,
+        turbulence_switch=True,
+        gauss_width=1,
+        depth=depth,
+        estimate_depth=False,
+        estimate_vel_indx=True,
+    )
+    assert cost_true < cost_off
+
 # @pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     """Check hypothetical case optimization with depth for one single window."""
@@ -135,6 +186,72 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
     assert np.all(np.abs(depth_optimal - depth) < 0.05)
     
+def test_optimise_velocity_alpha(img_size=(128, 64, 64), res=0.02, fps=12):
+    """Check hypothetical case optimization with depth for one single window."""
+    kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
+    velocity = [1, 0]
+    depth = 0.1
+    velocity_indx = 0.85
+    kt_gw, kt_turb = dispersion.dispersion(
+        ky,
+        kx,
+        velocity,
+        depth,
+        velocity_indx
+    )
+    synthetic_spectrum = dispersion.theoretical_spectrum(
+        kt_gw,
+        kt_turb,
+        kt,
+        gauss_width=1,
+        gravity_waves_switch=True,
+        turbulence_switch=True
+    )
+    # synthetic_spectrum = optimise.spectrum_preprocessing(synthetic_spectrum, kt, ky, kx, velocity_threshold=10, spectrum_threshold=1)
+    # define ranges for optimization
+
+    synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
+    vel_y_min = 0
+    vel_y_max = 2
+    vel_x_min = -0.5
+    vel_x_max = 0.5
+    alpha_min = 0.7
+    alpha_max = 0.9
+    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (alpha_min, alpha_max)]] * 2
+    t1 = time.time()
+    output, _, _ = optimise.optimise_velocity(
+        synthetic_spectrum,
+        bounds,
+        velocity_indx,
+        img_size,
+        res,
+        fps,
+        gauss_width=1,
+        penalty_weight=0,
+        gravity_waves_switch=True,
+        turbulence_switch=True,
+        downsample=1,
+        popsize=30,
+        workers=1,
+        maxiter=2000,
+        depth=depth,
+        estimate_depth = False,
+        estimate_vel_indx = True
+    )
+    vel_y_optimal = output[:, 0]
+    vel_x_optimal = output[:, 1]  
+    depth_optimal = output[:, 2]
+    alpha_optimal = output[:, 3] 
+    # print(f"Original velocity/alpha was {velocity, alpha}, optimized {optimal}")
+    t2 = time.time()
+    print(f"Took {t2 - t1} seconds")
+    assert vel_x_max >= vel_x_min
+    assert vel_y_max >= vel_y_min
+    assert alpha_max >= alpha_min
+    assert np.all(np.abs(vel_y_optimal - velocity[0]) < 0.01)
+    assert np.all(np.abs(vel_x_optimal - velocity[1]) < 0.01)
+    assert np.all(np.abs(alpha_optimal - velocity_indx) < 0.05)
+
     
 def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     """Check hypothetical case optimization with depth for one single window, using single and double pass"""
