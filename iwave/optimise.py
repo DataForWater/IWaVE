@@ -26,7 +26,7 @@ def cost_function_velocity_depth(
     gravity_waves_switch: bool,
     turbulence_switch: bool,
     gauss_width: float,
-    depth: float = 1.0,
+    depth: float = 10.0,
     estimate_depth: bool = False,
     estimate_vel_indx: bool = False,
 ) -> float: 
@@ -259,7 +259,7 @@ def optimize_single_spectrum_velocity_two_steps(
     opt_step1 = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=bnds_step1,
-        args=(measured_spectrum_step1, 0.85, window_dims_step1, res_step1, fps_step1, 
+        args=(measured_spectrum_step1, vel_indx, window_dims_step1, res_step1, fps_step1, 
               penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, depth, False, False),
         **kwargs
     )

@@ -480,21 +480,20 @@ class Iwave(object):
         
         if twosteps:
             if self.first_pass_downsample > 0:
-                print(f"Optimization in two steps: step 1 will use downsampling factor {self.first_pass_downsample}, followed by step 2 with full resolution.")
+                print(f"Optimization in two steps: step 1 will use spectrum downsampling factor {self.first_pass_downsample}, followed by step 2 with full spectral resolution.")
             else:
-                print("Optimization in two steps with full resolution.")
+                print("Optimization in two steps with full spectral resolution.")
         else:
-            print("Optimization in one step with full resolution.")
+            print("Optimization in one step with full spectral resolution.")
 
-        alpha_bounds = (self.alphamin, self.alphamax)
         if estimate_alpha:
-            print(f"Alpha estimation is active. Search bounds will be {alpha_bounds}.")
+            print(f"Alpha estimation is active. Search bounds will be {(self.alphamin, self.alphamax)}.")
 
         bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
         if estimate_depth:
             bounds.append((self.dmin, self.dmax))
         if estimate_alpha:
-            bounds.append(alpha_bounds)
+            bounds.append((self.alphamin, self.alphamax))
         # Create a list of bounds for each window.
         bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
