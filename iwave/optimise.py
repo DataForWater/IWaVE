@@ -531,11 +531,11 @@ def optimise_velocity(
 
     # wrap results together
     optimal = np.array([
-        tuple(res[:4]) if res is not None else (np.nan, np.nan, np.nan, np.nan)
-        for res in results
+        tuple(result[:4]) if result is not None else (np.nan, np.nan, np.nan, np.nan)
+        for result in results
     ])  # vy, vx, d, alpha
-    cost = np.array([res[4] if res is not None else np.nan for res in results])
-    quality = np.array([res[5] if res is not None else np.nan for res in results])
+    cost = np.array([result[4] if result is not None else np.nan for result in results])
+    quality = np.array([result[5] if result is not None else np.nan for result in results])
 
     return optimal, cost, quality
 
