@@ -387,7 +387,8 @@ def nondim_spectrum_preprocessing(
     # set the first slice (frequency=0) to 0
     preprocessed_spectrum[:, 0, :, :] = 0
 
-    nd_velocity_threshold = len(nd_kt) / np.max([len(nd_kx), len(nd_ky)]) *2  # maximum velocity in non-dimensional units, based on the maximum wavenumber and frequency in the spectrum
+    # nd_velocity_threshold = len(nd_kt) / np.max([len(nd_kx), len(nd_ky)]) *4  # maximum velocity in non-dimensional units, based on the maximum wavenumber and frequency in the spectrum
+    nd_velocity_threshold = np.max([len(nd_kx), len(nd_ky)])  # maximum velocity in non-dimensional units corresponding to a tracer that traverses the whole window in a single frame
     nd_kt_threshold = dispersion_threshold(nd_ky, nd_kx, nd_velocity_threshold)
 
     # create mask
