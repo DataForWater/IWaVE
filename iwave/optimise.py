@@ -167,7 +167,9 @@ def optimize_single_spectrum_velocity(
         return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
     
     if downsample > 1: # reduce dimensions of spectrum (for two-step approach)
-        measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
+        measured_spectrum, window_dims = dispersion.spectrum_downsample(measured_spectrum, window_dims, downsample)
+    res = res * downsample
+    fps = fps
     
     # Build bounds based on which parameters are being estimated
     param_bounds = [bnds[0], bnds[1]]
@@ -250,9 +252,11 @@ def optimize_single_spectrum_velocity_two_steps(
         return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
     
     # Step 1: Optimize with downsampled spectrum (always uses fixed depth and fixed alpha in step 1)
-    measured_spectrum_step1, res_step1, fps_step1, window_dims_step1 = dispersion.spectrum_downsample(
-        measured_spectrum, res, fps, window_dims, two_step_downsample
+    measured_spectrum_step1, window_dims_step1 = dispersion.spectrum_downsample(
+        measured_spectrum, window_dims, two_step_downsample
     )
+    res_step1 = res * two_step_downsample
+    fps_step1 = fps
     
     # Step 1 bounds: only velocity, no depth or alpha optimization
     bnds_step1 = [bnds[0], bnds[1]]
@@ -269,10 +273,6 @@ def optimize_single_spectrum_velocity_two_steps(
     vx_step1 = opt_step1.x[1]
     
     # Step 2: Refine bounds based on step 1 result
-    # bnds_step2 = [
-    #     (vy_step1 - 0.1 * np.abs(vy_step1), vy_step1 + 0.1 * np.abs(vy_step1)),
-    #     (vx_step1 - 0.1 * np.abs(vx_step1), vx_step1 + 0.1 * np.abs(vx_step1)),
-    # ]
     bnds_step2 = [
         (vy_step1 - 0.1 , vy_step1 + 0.1 ),
         (vx_step1 - 0.1 , vx_step1 + 0.1 ),

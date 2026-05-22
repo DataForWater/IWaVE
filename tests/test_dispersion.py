@@ -26,7 +26,7 @@ def test_downsample(img_windows_norm):
     """Check shape of intensity result."""
     img_single_window = img_windows_norm[0]
     full_spectrum = spectral._numpy_fourier_transform(img_single_window)
-    trimmed_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(full_spectrum, res=0.01, fps=25, window_dims=img_single_window.shape, downsample=2)
+    trimmed_spectrum, window_dims = dispersion.spectrum_downsample(full_spectrum, window_dims=img_single_window.shape, downsample=2)
     downsampled_img = img_single_window[:, ::2, ::2]
     downsampled_spectrum = spectral._numpy_fourier_transform(downsampled_img)
     assert trimmed_spectrum.shape == downsampled_spectrum.shape

@@ -351,11 +351,10 @@ def gauss_spectrum_calc(
 
 def spectrum_downsample(
         measured_spectrum: np.ndarray,
-        res: float,
-        fps: float,
         window_dims : Tuple[int, int, int],
         downsample: int,
-) -> Tuple[np.ndarray, float, float, Tuple[int, int, int]]:
+) -> Tuple[np.ndarray, Tuple[int, int, int]]:
+# ) -> Tuple[np.ndarray, float, float, Tuple[int, int, int]]:
     """
     trims the measured spectrum reducing its dimensions [1] and [2] bny a factor "downsample"
 
@@ -363,10 +362,6 @@ def spectrum_downsample(
     ----------
     measured_spectrum : np.ndarray
         measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-    res: float
-        image resolution (m/pxl)
-    fps: float
-        image acquisition rate (fps)
     window_dims: [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
     downsample: int=1
@@ -377,18 +372,14 @@ def spectrum_downsample(
     -------
     trimmed_spectrum : np.ndarray
         trimmed spectrum
-    res : float
-        resolution (unchanged)
-    fps : float
-        image acquisition rate (fps, unchanged)
     window_dims : [int, int, int]
         downsampled window dimensions
     """
-    kt_old, ky_old, kx_old = spectral.wave_numbers(window_dims, res, fps)
-    res = res*downsample
-    fps = fps
+    kt_old, ky_old, kx_old = spectral.nondim_wave_numbers(window_dims)
     window_dims = [window_dims[0], np.int64(np.ceil(window_dims[1]/downsample)), np.int64(np.ceil(window_dims[2]/downsample))]
-    kt_new, ky_new, kx_new = spectral.wave_numbers(window_dims, res, fps)
+    kt_new, ky_new, kx_new = spectral.nondim_wave_numbers(window_dims)
+    kx_new = kx_new / downsample
+    ky_new = ky_new / downsample
     # this could probably be simplified, but it is to ensure that the trimmed wavenumber arrays are correctly
     # aligned with the untrimmed one, since they will be calculated only based on res and fps in the following
     kx_indx_first = np.where(np.isclose(kx_old, np.min(kx_new), atol = 1e-06))[0][0]
@@ -404,4 +395,4 @@ def spectrum_downsample(
         raise ValueError("The dimensions of the trimmed array do not match the target after resampling")
     # trim the spectrum
     trimmed_spectrum = measured_spectrum[np.ix_(kt_indx,ky_indx,kx_indx)]
-    return trimmed_spectrum, res, fps, window_dims
+    return trimmed_spectrum, window_dims
