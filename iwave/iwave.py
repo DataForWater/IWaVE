@@ -489,13 +489,14 @@ class Iwave(object):
         if estimate_alpha:
             print(f"Alpha estimation is active. Search bounds will be {(self.alphamin, self.alphamax)}.")
 
-        bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
-        if estimate_depth:
-            bounds.append((self.dmin, self.dmax))
-        if estimate_alpha:
-            bounds.append((self.alphamin, self.alphamax))
-        # Create a list of bounds for each window.
-        bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
+        bounds = (
+            (-self.smax, self.smax),   # vy
+            (-self.smax, self.smax),   # vx
+            (self.dmin, self.dmax),    # depth
+            (self.alphamin, self.alphamax),  # vel_indx
+        )
+
+        bounds_list = [bounds for _ in range(len(self.spectrum))]
         
         # Determine the two-step downsample factor
         two_step_downsample = self.first_pass_downsample if twosteps else 0

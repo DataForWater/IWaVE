@@ -153,7 +153,9 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     vel_x_max = 0.5
     depth_min = 0.01
     depth_max = 1
-    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max)]] * 2
+    alpha_min = 0.5
+    alpha_max = 1.0
+    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max), (alpha_min, alpha_max)]] * 2
     t1 = time.time()
     output, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
@@ -215,9 +217,11 @@ def test_optimise_velocity_alpha(img_size=(128, 64, 64), res=0.02, fps=12):
     vel_y_max = 2
     vel_x_min = -0.5
     vel_x_max = 0.5
+    depth_min = 0.01
+    depth_max = 1
     alpha_min = 0.7
     alpha_max = 0.9
-    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (alpha_min, alpha_max)]] * 2
+    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max), (alpha_min, alpha_max)]] * 2
     t1 = time.time()
     output, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,

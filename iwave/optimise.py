@@ -15,6 +15,79 @@ from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 # Create a context with the desired start method
 ctx = multiprocessing.get_context("spawn")
 
+PARAM_ORDER = ("vy", "vx", "log_depth", "vel_indx")
+
+
+def get_active_params(
+    estimate_depth: bool,
+    estimate_vel_indx: bool,
+):
+    active = ["vy", "vx"]
+
+    if estimate_depth:
+        active.append("log_depth")
+
+    if estimate_vel_indx:
+        active.append("vel_indx")
+
+    return active
+
+
+def build_default_params(
+    depth: float,
+    vel_indx: float,
+):
+    return {
+        "log_depth": np.log(depth),
+        "vel_indx": vel_indx,
+    }
+
+
+def vector_to_params(
+    x,
+    active_params,
+    defaults,
+):
+    if len(x) != len(active_params):
+        raise ValueError(
+            f"Expected {len(active_params)} parameters, "
+            f"got {len(x)}"
+        )
+    
+    params = defaults.copy()
+
+    for name, value in zip(active_params, x):
+        params[name] = value
+
+    return params
+
+
+def select_bounds(
+    full_bounds,
+    active_params,
+):
+    return [full_bounds[p] for p in active_params]
+
+
+def normalize_bounds(bnds):
+
+    if len(bnds) != 4:
+        raise ValueError(
+            "Bounds must contain "
+            "(vy, vx, depth, vel_indx)"
+        )
+
+    return {
+        "vy": bnds[0],
+        "vx": bnds[1],
+        "log_depth": (
+            np.log(bnds[2][0]),
+            np.log(bnds[2][1]),
+        ),
+        "vel_indx": bnds[3],
+    }
+        
+
 def cost_function_velocity_depth(
     x: Tuple[float, ...],
     measured_spectrum: np.ndarray,
@@ -83,26 +156,34 @@ def cost_function_velocity_depth(
         synthetic spectrum calculated according to the estimated flow parameters
 
     """
-    velocity = [x[0], x[1]]
-    idx = 2
 
     if estimate_depth:
-        depth = np.exp(x[idx])
-        idx += 1
+        if estimate_vel_indx:
+            vy, vx, log_depth, vel_indx = x
+        else:
+            vy, vx, log_depth = x
 
-    if estimate_vel_indx:
-        vel_indx = x[idx]
-        idx += 1
+        depth_local = np.exp(log_depth)
+
+    else:
+        depth_local = depth
+
+        if estimate_vel_indx:
+            vy, vx, vel_indx = x
+        else:
+            vy, vx = x
+            
 
     synthetic_spectrum = dispersion.intensity(
-        velocity, depth, vel_indx, res, fps,
+        [vy, vx], depth_local, vel_indx, res, fps,
         window_dims, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
 
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    cost_function = cost_function * (1 + 2 * penalty_weight * np.linalg.norm(velocity) / (res * fps))
+    vel_norm = np.sqrt(vy * vy + vx * vx)
+    cost_function = cost_function * (1 + 2 * penalty_weight * vel_norm / (res * fps))
     return cost_function
 
 
@@ -171,13 +252,15 @@ def optimize_single_spectrum_velocity(
     res = res * downsample
     fps = fps
     
-    # Build bounds based on which parameters are being estimated
-    param_bounds = [bnds[0], bnds[1]]
-    if estimate_depth:
-        param_bounds.append((np.log(bnds[2][0]), np.log(bnds[2][1])))
-    if estimate_vel_indx:
-        alpha_bounds = bnds[3] if estimate_depth else bnds[2]
-        param_bounds.append(alpha_bounds)
+    active_params = get_active_params(
+        estimate_depth,
+        estimate_vel_indx,
+    )
+
+    param_bounds = select_bounds(
+        bnds,
+        active_params,
+    )
     
     opt = optimize.differential_evolution(
         cost_function_velocity_wrapper,
@@ -188,19 +271,26 @@ def optimize_single_spectrum_velocity(
     status = opt.success
     message = opt.message
     
-    vy, vx = opt.x[0], opt.x[1]
-    idx = 2
-    if estimate_depth:
-        d = np.exp(opt.x[idx])
-        idx += 1
-    else:
-        d = depth
-    if estimate_vel_indx:
-        alpha_opt = opt.x[idx]
-    else:
-        alpha_opt = vel_indx
+    defaults = build_default_params(
+        depth,
+        vel_indx,
+    )
 
-    x_for_quality = [vy, vx, d]
+    params = vector_to_params(
+        opt.x,
+        active_params,
+        defaults,
+    )
+
+    vy = params["vy"]
+    vx = params["vx"]
+    d = np.exp(params["log_depth"])
+    alpha_opt = params["vel_indx"]
+
+    if estimate_depth:
+        x_for_quality = [vy, vx, np.log(d)]
+    else:
+        x_for_quality = [vy, vx, d]
     if estimate_vel_indx:
         x_for_quality.append(alpha_opt)
 
@@ -259,7 +349,13 @@ def optimize_single_spectrum_velocity_two_steps(
     fps_step1 = fps
     
     # Step 1 bounds: only velocity, no depth or alpha optimization
-    bnds_step1 = [bnds[0], bnds[1]]
+    step1_active = ["vy", "vx"]
+
+    bnds_step1 = select_bounds(
+        bnds,
+        step1_active,
+    )
+
     opt_step1 = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=bnds_step1,
@@ -273,15 +369,25 @@ def optimize_single_spectrum_velocity_two_steps(
     vx_step1 = opt_step1.x[1]
     
     # Step 2: Refine bounds based on step 1 result. The bounds are set to be around the step 1 solution, with a margin of 0.1 m/s.
-    bnds_step2 = [
-        (vy_step1 - 0.1 , vy_step1 + 0.1 ),
-        (vx_step1 - 0.1 , vx_step1 + 0.1 ),
-    ]
-    if estimate_depth:
-        bnds_step2.append((np.log(bnds[2][0]), np.log(bnds[2][1])))
-    if estimate_vel_indx:
-        alpha_bounds = bnds[3] if estimate_depth else bnds[2]
-        bnds_step2.append(alpha_bounds)
+    bnds_step2 = bnds.copy()
+    bnds_step2["vy"] = (
+        vy_step1 - 0.1,
+        vy_step1 + 0.1,
+    )
+    bnds_step2["vx"] = (
+        vx_step1 - 0.1,
+        vx_step1 + 0.1,
+    )
+
+    active_params = get_active_params(
+        estimate_depth,
+        estimate_vel_indx,
+    )
+
+    param_bounds_step2 = select_bounds(
+        bnds_step2,
+        active_params,
+    )
     
     # Reduce population size for step 2
     kwargs_step2 = kwargs.copy()
@@ -290,7 +396,7 @@ def optimize_single_spectrum_velocity_two_steps(
     # Step 2: Optimize with full spectrum and refined bounds
     opt_step2 = optimize.differential_evolution(
         cost_function_velocity_wrapper,
-        bounds=bnds_step2,
+        bounds=param_bounds_step2,
         args=(measured_spectrum, vel_indx, window_dims, res, fps, 
               0, gravity_waves_switch, turbulence_switch, gauss_width, depth, estimate_depth, estimate_vel_indx),
         **kwargs_step2
@@ -300,19 +406,26 @@ def optimize_single_spectrum_velocity_two_steps(
     message = opt_step2.message
     
     # Extract results and handle depth and alpha based on estimation flags
-    vy, vx = opt_step2.x[0], opt_step2.x[1]
-    idx = 2
-    if estimate_depth:
-        d = np.exp(opt_step2.x[idx])
-        idx += 1
-    else:
-        d = depth
-    if estimate_vel_indx:
-        alpha_opt = opt_step2.x[idx]
-    else:
-        alpha_opt = vel_indx
+    defaults = build_default_params(
+        depth,
+        vel_indx,
+    )
 
-    x_for_quality = [vy, vx, d]
+    params = vector_to_params(
+        opt_step2.x,
+        active_params,
+        defaults,
+    )
+
+    vy = params["vy"]
+    vx = params["vx"]
+    d = np.exp(params["log_depth"])
+    alpha_opt = params["vel_indx"]
+
+    if estimate_depth:
+        x_for_quality = [vy, vx, np.log(d)]
+    else:
+        x_for_quality = [vy, vx, d]
     if estimate_vel_indx:
         x_for_quality.append(alpha_opt)
 
@@ -445,41 +558,41 @@ def optimise_velocity(
         While there is no direct link with results uncertainties, higher q indicates better quality data.
     """
 
-    def generate_args(): #, vel_indx, window_dims, res, fps, penalty_weight,
-        # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
+    # def generate_args(): #, vel_indx, window_dims, res, fps, penalty_weight,
+    #     # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
 
-        """
-        Parameters
-        ----------
-        measured_spectra : LazySpectrumArray
-            A single set of measured spectra and corresponding bounds list
+    #     """
+    #     Parameters
+    #     ----------
+    #     measured_spectra : LazySpectrumArray
+    #         A single set of measured spectra and corresponding bounds list
 
-        bnds_list : Tuple
-            The bounds list for the measured spectra
+    #     bnds_list : Tuple
+    #         The bounds list for the measured spectra
 
 
-        Returns
-        -------
-        tuple
-            A single set of arguments for each corresponding pair in measured_spectra and bnds_list
-        """
-        args_list = [
-            dict(
-                measured_spectrum=measured_spectrum,
-                bnds=bnds,
-                vel_indx=vel_indx,
-                window_dims=window_dims,
-                res=res,
-                fps=fps,
-                penalty_weight=penalty_weight,
-                gravity_waves_switch=gravity_waves_switch,
-                turbulence_switch=turbulence_switch,
-                downsample=downsample,
-                gauss_width=gauss_width,
-                kwargs=kwargs,
-            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
-        ]
-        return args_list
+    #     Returns
+    #     -------
+    #     tuple
+    #         A single set of arguments for each corresponding pair in measured_spectra and bnds_list
+    #     """
+    #     args_list = [
+    #         dict(
+    #             measured_spectrum=measured_spectrum,
+    #             bnds=bnds,
+    #             vel_indx=vel_indx,
+    #             window_dims=window_dims,
+    #             res=res,
+    #             fps=fps,
+    #             penalty_weight=penalty_weight,
+    #             gravity_waves_switch=gravity_waves_switch,
+    #             turbulence_switch=turbulence_switch,
+    #             downsample=downsample,
+    #             gauss_width=gauss_width,
+    #             kwargs=kwargs,
+    #         ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
+    #     ]
+    #     return args_list
 
     idxs = range(len(measured_spectra))  # Pair with indices
     # iter_args = generate_args(idxs)
@@ -492,35 +605,43 @@ def optimise_velocity(
     # Initialize progress bar before submitting tasks
     progress_bar = tqdm(total=len(idxs), desc=desc)
     
-    for idx in idxs[::chunk_size]:
-        # select and read the current data block in one go
-        idx_sel = idxs[idx:idx + chunk_size]
-        spectra_sel = measured_spectra[idx: idx + chunk_size]
-        # get bounds for this chunk (nonzero check now done in worker)
-        bnds_sel = bnds_list[idx: idx + chunk_size]
+    normalized_bnds_list = [
+        normalize_bounds(b)
+        for b in bnds_list
+    ]
+    
+    with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
+    
+        for idx in idxs[::chunk_size]:
+            # select and read the current data block in one go
+            idx_sel = idxs[idx:idx + chunk_size]
+            spectra_sel = measured_spectra[idx: idx + chunk_size]
+            # get bounds for this chunk (nonzero check now done in worker)
+            bnds_sel = normalized_bnds_list[idx: idx + chunk_size]
+            # bnds_sel = [normalize_bounds(b) for b in bnds_sel]
 
-        # Generate args for this chunk (handles both one-step and two-step via two_step_downsample parameter)
-        args_sel = [
-            dict(
-                measured_spectrum=measured_spectrum,
-                bnds=bnds,
-                vel_indx=vel_indx,
-                window_dims=window_dims,
-                res=res,
-                fps=fps,
-                penalty_weight=penalty_weight,
-                gravity_waves_switch=gravity_waves_switch,
-                turbulence_switch=turbulence_switch,
-                depth=depth,
-                estimate_depth=estimate_depth,
-                estimate_vel_indx=estimate_vel_indx,
-                two_step_downsample=two_step_downsample,
-                gauss_width=gauss_width,
-                kwargs=kwargs,
-            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
-        ]
+            # Generate args for this chunk (handles both one-step and two-step via two_step_downsample parameter)
+            args_sel = [
+                dict(
+                    measured_spectrum=measured_spectrum,
+                    bnds=bnds,
+                    vel_indx=vel_indx,
+                    window_dims=window_dims,
+                    res=res,
+                    fps=fps,
+                    penalty_weight=penalty_weight,
+                    gravity_waves_switch=gravity_waves_switch,
+                    turbulence_switch=turbulence_switch,
+                    depth=depth,
+                    estimate_depth=estimate_depth,
+                    estimate_vel_indx=estimate_vel_indx,
+                    two_step_downsample=two_step_downsample,
+                    gauss_width=gauss_width,
+                    kwargs=kwargs,
+                ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
+            ]
 
-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
+        
             futures = {
                 executor.submit(
                     optimize_single_spectrum_velocity_unpack, input_args
@@ -595,8 +716,7 @@ def quality_calc(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
     
-    estimate_depth: bool, optional
-        If True, x[2] is log(depth). If False, x[2] is already depth. Defaults to True.
+    x : array-like Vector of parameters [vy, vx, depth].
         
     Returns
     -------
@@ -605,10 +725,8 @@ def quality_calc(
         
     """
     velocity = [x[0], x[1]]    # guessed velocity components
-    if estimate_depth:
-        depth = np.exp(x[2])    # guessed depth (log-transformed)
-    elif depth is None:
-        depth = x[2]  # depth already in linear scale if not provided
+    if depth is None:
+        depth = x[2]    
 
     if estimate_vel_indx:
         vel_indx = x[-1]
