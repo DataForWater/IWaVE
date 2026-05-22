@@ -269,9 +269,13 @@ def optimize_single_spectrum_velocity_two_steps(
     vx_step1 = opt_step1.x[1]
     
     # Step 2: Refine bounds based on step 1 result
+    # bnds_step2 = [
+    #     (vy_step1 - 0.1 * np.abs(vy_step1), vy_step1 + 0.1 * np.abs(vy_step1)),
+    #     (vx_step1 - 0.1 * np.abs(vx_step1), vx_step1 + 0.1 * np.abs(vx_step1)),
+    # ]
     bnds_step2 = [
-        (vy_step1 - 0.1 * np.abs(vy_step1), vy_step1 + 0.1 * np.abs(vy_step1)),
-        (vx_step1 - 0.1 * np.abs(vx_step1), vx_step1 + 0.1 * np.abs(vx_step1)),
+        (vy_step1 - 0.1 , vy_step1 + 0.1 ),
+        (vx_step1 - 0.1 , vx_step1 + 0.1 ),
     ]
     if estimate_depth:
         bnds_step2.append((np.log(bnds[2][0]), np.log(bnds[2][1])))
@@ -364,7 +368,7 @@ def optimise_velocity(
     chunk_size: int = 50,
     downsample : int=1,
     gauss_width: float=1,
-    depth: float=1.,
+    depth: float=10.,
     estimate_depth: bool=False,
     estimate_vel_indx: bool=False,
     desc="Optimizing windows",
