@@ -272,7 +272,7 @@ def optimize_single_spectrum_velocity_two_steps(
     vy_step1 = opt_step1.x[0]
     vx_step1 = opt_step1.x[1]
     
-    # Step 2: Refine bounds based on step 1 result
+    # Step 2: Refine bounds based on step 1 result. The bounds are set to be around the step 1 solution, with a margin of 0.1 m/s.
     bnds_step2 = [
         (vy_step1 - 0.1 , vy_step1 + 0.1 ),
         (vx_step1 - 0.1 , vx_step1 + 0.1 ),
