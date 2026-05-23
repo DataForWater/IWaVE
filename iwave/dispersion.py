@@ -8,9 +8,9 @@ def intensity(
     velocity: Tuple[float, float],
     depth: float,
     vel_indx: float,
-    res: float,
-    fps: float,
-    window_dims: Tuple[int, int, int],
+    kt: np.ndarray,
+    ky: np.ndarray,
+    kx: np.ndarray,
     gauss_width: float,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True
@@ -27,12 +27,12 @@ def intensity(
         tentative water depth (m)
     vel_indx : float
         surface velocity to depth-averaged-velocity index (-)
-    res: float
-        image resolution (m/pxl)
-    fps: float
-        image acquisition rate (fps)
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
+    kt: np.ndarray
+        frequency array (rad/s)
+    ky: np.ndarray
+        wavenumber array along the direction y  (rad/m)
+    kx: np.ndarray      
+        wavenumber array along the direction x (rad/m)    
     gauss_width: float
         width of the synthetic spectrum smoothing kernel
     gravity_waves_switch: bool=True
@@ -48,9 +48,6 @@ def intensity(
         synthetic 3D power spectrum to be compared with measured spectrum
 
     """
-
-    # calculate the wavenumber/frequency arrays
-    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
 
     # calculate theoretical dispersion relation of gravity waves and turbulence-forced waves
     kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)

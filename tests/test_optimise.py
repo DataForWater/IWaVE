@@ -32,6 +32,7 @@ def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
     
 def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     """Check cost function (with depth) against expected gradients."""
+    nd_kt, nd_ky, nd_kx = spectral.nondim_wave_numbers(img_size)
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     depth_1 = 0.30
     depth_2 = 0.29
@@ -53,17 +54,20 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
     )
     cost_11 = optimise.cost_function_velocity_depth(
         params_1, synthetic_spectrum_1, vel_indx,
-        img_size, res, fps, gauss_width=1, penalty_weight = 1,
+        nd_kt, nd_ky, nd_kx,
+        res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True, estimate_depth = True
     )
     cost_12 = optimise.cost_function_velocity_depth(
         params_2, synthetic_spectrum_1, vel_indx,
-        img_size, res, fps, gauss_width=1, penalty_weight = 1,
+        nd_kt, nd_ky, nd_kx,
+        res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True, estimate_depth = True
     )
     cost_13 = optimise.cost_function_velocity_depth(
         params_3, synthetic_spectrum_1, vel_indx,
-        img_size, res, fps, gauss_width=1, penalty_weight = 1,
+        nd_kt, nd_ky, nd_kx,
+        res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True, estimate_depth = True
     )
     #test if the cost function increases when the depth deviates from optimal
@@ -73,6 +77,7 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
 
 def test_cost_function_velocity_alpha(img_size=(256, 64, 64), res=0.02, fps=25):
     """Check cost function behavior when alpha is estimated."""
+    nd_kt, nd_ky, nd_kx = spectral.nondim_wave_numbers(img_size)
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     depth = 0.30
     velocity_y = 1
@@ -93,7 +98,9 @@ def test_cost_function_velocity_alpha(img_size=(256, 64, 64), res=0.02, fps=25):
         params_true,
         synthetic_spectrum,
         vel_indx=0.85,
-        window_dims=img_size,
+        nd_kt=nd_kt,
+        nd_ky=nd_ky,
+        nd_kx=nd_kx,
         res=res,
         fps=fps,
         penalty_weight=1,
@@ -108,7 +115,9 @@ def test_cost_function_velocity_alpha(img_size=(256, 64, 64), res=0.02, fps=25):
         params_off,
         synthetic_spectrum,
         vel_indx=0.85,
-        window_dims=img_size,
+        nd_kt=nd_kt,
+        nd_ky=nd_ky,
+        nd_kx=nd_kx,
         res=res,
         fps=fps,
         penalty_weight=1,

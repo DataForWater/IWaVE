@@ -10,7 +10,7 @@ from scipy import optimize
 from tqdm import tqdm
 from typing import Tuple, List, Union
 
-from iwave import dispersion, LazySpectrumArray, CONCURRENCY
+from iwave import dispersion, LazySpectrumArray, CONCURRENCY, spectral
 
 # Create a context with the desired start method
 ctx = multiprocessing.get_context("spawn")
@@ -92,7 +92,9 @@ def cost_function_velocity_depth(
     x: Tuple[float, ...],
     measured_spectrum: np.ndarray,
     vel_indx: float,
-    window_dims: Tuple[int, int, int],
+    nd_kt: np.ndarray,
+    nd_ky: np.ndarray,
+    nd_kx: np.ndarray,
     res: float,
     fps: float,
     penalty_weight: float,
@@ -156,7 +158,7 @@ def cost_function_velocity_depth(
         synthetic spectrum calculated according to the estimated flow parameters
 
     """
-
+    # maintained this structure to avoid repeated loading from dictionary
     if estimate_depth:
         if estimate_vel_indx:
             vy, vx, log_depth, vel_indx = x
@@ -173,10 +175,16 @@ def cost_function_velocity_depth(
         else:
             vy, vx = x
             
+    
+    # scale the wavenumber/frequency arrays to physical units
+    kt = nd_kt * fps # rad/s
+    ky = nd_ky / res # rad/m
+    kx = nd_kx / res # rad/m
 
     synthetic_spectrum = dispersion.intensity(
-        [vy, vx], depth_local, vel_indx, res, fps,
-        window_dims, gauss_width,
+        [vy, vx], depth_local, vel_indx,
+        kt, ky, kx,
+        gauss_width,
         gravity_waves_switch, turbulence_switch
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
@@ -252,6 +260,8 @@ def optimize_single_spectrum_velocity(
     res = res * downsample
     fps = fps
     
+    nd_kt, nd_ky, nd_kx = spectral.nondim_wave_numbers(window_dims)
+    
     active_params = get_active_params(
         estimate_depth,
         estimate_vel_indx,
@@ -265,7 +275,7 @@ def optimize_single_spectrum_velocity(
     opt = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=param_bounds,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, depth, estimate_depth, estimate_vel_indx),
+        args=(measured_spectrum, vel_indx, nd_kt, nd_ky, nd_kx, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, depth, estimate_depth, estimate_vel_indx),
         **kwargs
     )
     status = opt.success
@@ -348,6 +358,8 @@ def optimize_single_spectrum_velocity_two_steps(
     res_step1 = res * two_step_downsample
     fps_step1 = fps
     
+    nd_kt_step1, nd_ky_step1, nd_kx_step1 = spectral.nondim_wave_numbers(window_dims_step1)
+    
     # Step 1 bounds: only velocity, no depth or alpha optimization
     step1_active = ["vy", "vx"]
 
@@ -359,7 +371,7 @@ def optimize_single_spectrum_velocity_two_steps(
     opt_step1 = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=bnds_step1,
-        args=(measured_spectrum_step1, vel_indx, window_dims_step1, res_step1, fps_step1, 
+        args=(measured_spectrum_step1, vel_indx, nd_kt_step1, nd_ky_step1, nd_kx_step1, res_step1, fps_step1, 
               penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, depth, False, False),
         **kwargs
     )
@@ -389,6 +401,9 @@ def optimize_single_spectrum_velocity_two_steps(
         active_params,
     )
     
+    
+    nd_kt, nd_ky, nd_kx = spectral.nondim_wave_numbers(window_dims)
+    
     # Reduce population size for step 2
     kwargs_step2 = kwargs.copy()
     kwargs_step2["popsize"] = max(1, kwargs_step2.get("popsize", 8) // 2)
@@ -397,7 +412,7 @@ def optimize_single_spectrum_velocity_two_steps(
     opt_step2 = optimize.differential_evolution(
         cost_function_velocity_wrapper,
         bounds=param_bounds_step2,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, 
+        args=(measured_spectrum, vel_indx, nd_kt, nd_ky, nd_kx, res, fps, 
               0, gravity_waves_switch, turbulence_switch, gauss_width, depth, estimate_depth, estimate_vel_indx),
         **kwargs_step2
     )
@@ -730,10 +745,12 @@ def quality_calc(
 
     if estimate_vel_indx:
         vel_indx = x[-1]
+        
+    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
 
     synthetic_spectrum = dispersion.intensity(
-        velocity, depth, vel_indx, res, fps,
-        window_dims, gauss_width,
+        velocity, depth, vel_indx,
+        kt, ky, kx, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
     cost_measured = nsp_inv(measured_spectrum, synthetic_spectrum)
