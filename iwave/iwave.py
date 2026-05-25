@@ -46,6 +46,8 @@ class Iwave(object):
         dmax: Optional[float] = 10.0,
         alphamin: Optional[float] = 0.5,
         alphamax: Optional[float] = 1.0,
+        resmin: Optional[float] = 0.005,
+        resmax: Optional[float] = 0.5,
         gravity_waves_switch: Optional[bool]=True,
         turbulence_switch: Optional[bool]=True,
         window_chunk_size: Optional[int] = 50,
@@ -84,6 +86,10 @@ class Iwave(object):
             Minimum alpha expected in the scene. Defaults to 0.5.
         alphamax : float, optional
             Maximum alpha expected in the scene. Defaults to 1.0.
+        resmin : float, optional
+            Minimum expected pixel resolution. Defaults to 0.005 m/pxl.
+        resmax : float, optional
+            Maximum expected pixel resolution. Defaults to 0.5 m/pxl.
         gravity_waves_switch: bool, optional
             If True, gravity waves are modelled. If False, gravity waves are NOT modelled. Default True. 
             Setting gravity_waves_swtich = False may improve performance if floating tracers dominate the scene and waves are minimal.
@@ -121,6 +127,8 @@ class Iwave(object):
         self.dmax = dmax
         self.alphamin = alphamin
         self.alphamax = alphamax
+        self.resmin = resmin
+        self.resmax = resmax
         self.fps = fps
         self.gravity_waves_switch = gravity_waves_switch
         self.turbulence_switch = turbulence_switch
@@ -134,6 +142,7 @@ class Iwave(object):
         self.win_y = None
         self.vy = None  # y velocity component (m/s)
         self.vx = None  # x velocity component (m/s)
+        self.local_res = None  # local resolution (m/pxl)
         self.d = None  # water depth (m)
         self.alpha = None  # depth-average to surface velocity ratio (-)
         self.cost = None  # cost function value (float)
@@ -361,11 +370,13 @@ class Iwave(object):
         """
         spectrum_sel = self.spectrum[window_idx]
         vel_indx = self.alpha.flatten()[window_idx] if self.alpha is not None else 0.85
+        depth = self.d.flatten()[window_idx] if self.d is not None else 10
+        res = self.local_res.flatten()[window_idx] if self.local_res is not None else self.resolution
         kt_waves_theory, kt_advected_theory = dispersion.dispersion(
             self.ky,
             self.kx,
             (self.vy.flatten()[window_idx], self.vx.flatten()[window_idx]),
-            depth=10,
+            depth=depth,
             vel_indx=vel_indx
         )
         p = io.plot_spectrum_fitted(
@@ -468,9 +479,14 @@ class Iwave(object):
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
         
-        # Determine if depth and/or alpha should be estimated
+        # Determine if resolution, depth and/or alpha should be estimated
+        resolution = self.resolution
+        estimate_res = (resolution == 0)
         estimate_depth = (depth == 0)
         estimate_alpha = (alpha == 0)
+        
+        if estimate_res and not self.gravity_waves_switch:
+            print("Warning: estimating resolution is only possible in the presence of waves.")
         
         if estimate_depth and estimate_alpha:
             print("Warning: estimating both depth and alpha simultaneously may lead to wrong parameter estimates.")
@@ -486,12 +502,19 @@ class Iwave(object):
         else:
             print("Optimization in one step with full spectral resolution.")
 
+        if estimate_res:
+            print(f"Resolution estimation is active. Search bounds will be {(self.resmin, self.resmax)}.")
+            
+        if estimate_depth:
+            print(f"Depth estimation is active. Search bounds will be {(self.dmin, self.dmax)}.")
+
         if estimate_alpha:
             print(f"Alpha estimation is active. Search bounds will be {(self.alphamin, self.alphamax)}.")
 
         bounds = (
             (-self.smax, self.smax),   # vy
             (-self.smax, self.smax),   # vx
+            (self.resmin, self.resmax),  # resolution
             (self.dmin, self.dmax),    # depth
             (self.alphamin, self.alphamax),  # vel_indx
         )
@@ -506,7 +529,7 @@ class Iwave(object):
             bnds_list=bounds_list,
             vel_indx=alpha if not estimate_alpha else 0.85,
             window_dims=self.spectrum_dims,
-            res=self.resolution,
+            res=resolution if not estimate_res else None,
             fps=self.fps,
             penalty_weight=self.penalty_weight,
             gravity_waves_switch=self.gravity_waves_switch,
@@ -515,6 +538,7 @@ class Iwave(object):
             downsample=1,
             gauss_width=1,  # TODO: figure out defaults
             depth=depth if not estimate_depth else 10.0,  # Pass actual depth value if fixed, else default
+            estimate_res=estimate_res,
             estimate_depth=estimate_depth,
             estimate_vel_indx=estimate_alpha,
             two_step_downsample=two_step_downsample,
@@ -523,8 +547,9 @@ class Iwave(object):
         )
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
         self.vx = output[:, 1].reshape(len(self.y), len(self.x))
-        self.d = output[:, 2].reshape(len(self.y), len(self.x))
-        self.alpha = output[:, 3].reshape(len(self.y), len(self.x))
+        self.local_res = output[:, 2].reshape(len(self.y), len(self.x))
+        self.d = output[:, 3].reshape(len(self.y), len(self.x))
+        self.alpha = output[:, 4].reshape(len(self.y), len(self.x))
         self.cost = cost.reshape(len(self.y), len(self.x))
         self.quality = quality.reshape(len(self.y), len(self.x))
         self.status = True

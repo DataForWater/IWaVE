@@ -164,7 +164,9 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     depth_max = 1
     alpha_min = 0.5
     alpha_max = 1.0
-    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max), (alpha_min, alpha_max)]] * 2
+    res_min = 0.01
+    res_max = 0.05
+    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (res_min, res_max), (depth_min, depth_max), (alpha_min, alpha_max)]] * 2
     t1 = time.time()
     output, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
@@ -186,7 +188,8 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     )
     vel_y_optimal = output[:, 0]
     vel_x_optimal = output[:, 1]  
-    depth_optimal = output[:, 2] 
+    res_optimal = output[:, 2]
+    depth_optimal = output[:, 3] 
     # print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
@@ -230,7 +233,9 @@ def test_optimise_velocity_alpha(img_size=(128, 64, 64), res=0.02, fps=12):
     depth_max = 1
     alpha_min = 0.7
     alpha_max = 0.9
-    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (depth_min, depth_max), (alpha_min, alpha_max)]] * 2
+    res_min = 0.01
+    res_max = 0.05
+    bounds = [[(vel_y_min, vel_y_max), (vel_x_min, vel_x_max), (res_min, res_max), (depth_min, depth_max), (alpha_min, alpha_max)]] * 2
     t1 = time.time()
     output, _, _ = optimise.optimise_velocity(
         synthetic_spectrum,
@@ -248,13 +253,15 @@ def test_optimise_velocity_alpha(img_size=(128, 64, 64), res=0.02, fps=12):
         workers=1,
         maxiter=2000,
         depth=depth,
+        estimate_res = False,
         estimate_depth = False,
         estimate_vel_indx = True
     )
     vel_y_optimal = output[:, 0]
-    vel_x_optimal = output[:, 1]  
-    depth_optimal = output[:, 2]
-    alpha_optimal = output[:, 3] 
+    vel_x_optimal = output[:, 1] 
+    res_optimal = output[:, 2] 
+    depth_optimal = output[:, 3]
+    alpha_optimal = output[:, 4] 
     # print(f"Original velocity/alpha was {velocity, alpha}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
