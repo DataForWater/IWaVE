@@ -198,9 +198,9 @@ class Iwave(object):
                 windows=self.windows,
                 time_size=self.time_size,
                 time_overlap=self.time_overlap,
-                kt=self.kt,
-                kx=self.kx,
-                ky=self.ky,
+                kt=self.nd_kt,
+                kx=self.nd_kx,
+                ky=self.nd_ky,
                 smax=self.smax,
                 threshold=self.spectrum_threshold
             )
@@ -216,9 +216,9 @@ class Iwave(object):
                     windows=self.windows,
                     time_size=self.time_size,
                     time_overlap=self.time_overlap,
-                    kt=self.kt,
-                    kx=self.kx,
-                    ky=self.ky,
+                    kt=self.nd_kt,
+                    kx=self.nd_kx,
+                    ky=self.nd_ky,
                     smax=self.smax,
                     threshold=self.spectrum_threshold
                 )
@@ -295,9 +295,8 @@ class Iwave(object):
 
     def _get_wave_numbers(self):
         """Prepare and set wave number axes."""
-        self.kt, self.ky, self.kx = spectral.wave_numbers(
-            self.spectrum_dims,
-            self.resolution, self.fps
+        self.nd_kt, self.nd_ky, self.nd_kx = spectral.nondim_wave_numbers(
+            self.spectrum_dims
         )
 
     def _get_x_y_axes(self, images: np.ndarray):
@@ -338,7 +337,7 @@ class Iwave(object):
             See :py:func:`matplotlib.pyplot.pcolormesh` for options.
         """
         spectrum_sel = self.spectrum[window_idx]
-        p = io.plot_spectrum(spectrum_sel, self.kt, self.ky, self.kx, dim, slice, ax=ax, log=log, **kwargs)
+        p = io.plot_spectrum(spectrum_sel, self.nd_kt, self.nd_ky, self.nd_kx, dim, slice, ax=ax, log=log, **kwargs)
         return p
     
     def plot_spectrum_fitted(
@@ -373,19 +372,19 @@ class Iwave(object):
         depth = self.d.flatten()[window_idx] if self.d is not None else 10
         res = self.local_res.flatten()[window_idx] if self.local_res is not None else self.resolution
         kt_waves_theory, kt_advected_theory = dispersion.dispersion(
-            self.ky,
-            self.kx,
+            self.nd_ky/res,
+            self.nd_kx/res,
             (self.vy.flatten()[window_idx], self.vx.flatten()[window_idx]),
             depth=depth,
             vel_indx=vel_indx
         )
         p = io.plot_spectrum_fitted(
             spectrum_sel,
-            kt_waves_theory,
-            kt_advected_theory,
-            self.kt,
-            self.ky,
-            self.kx,
+            kt_waves_theory/self.fps,
+            kt_advected_theory/self.fps,
+            self.nd_kt,
+            self.nd_ky,
+            self.nd_kx,
             dim,
             slice,
             ax=ax,
