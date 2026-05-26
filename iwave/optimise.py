@@ -398,7 +398,10 @@ def optimize_single_spectrum_velocity_two_steps(
     fps_step1 = fps
     nd_kt_step1, nd_ky_step1, nd_kx_step1 = spectral.nondim_wave_numbers(window_dims_step1)
     
-    res_step1 = res * two_step_downsample if two_step_downsample > 1 else res
+    if estimate_res:
+        res_step1 = None
+    else:
+        res_step1 = res * two_step_downsample if two_step_downsample > 1 else res
     
     # Step 1 bounds: only velocity and resolution, no depth or alpha optimization
     step1_active = ["vy", "vx", "resolution"] if estimate_res else ["vy", "vx"]
@@ -412,7 +415,7 @@ def optimize_single_spectrum_velocity_two_steps(
         cost_function_velocity_wrapper,
         bounds=bnds_step1,
         args=(measured_spectrum_step1, vel_indx, nd_kt_step1, nd_ky_step1, nd_kx_step1, res_step1, fps_step1, 
-              penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, depth, False, False),
+              penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width, depth, estimate_res, False, False),
         **kwargs
     )
     
@@ -431,10 +434,22 @@ def optimize_single_spectrum_velocity_two_steps(
         vx_step1 - 0.1,
         vx_step1 + 0.1,
     )
+    # define boundaries for resolution estimation
     if estimate_res:
-        bnds_step2["resolution"] = (
-            res_step1 - 0.01,
-            res_step1 + 0.01,
+        if two_step_downsample > 1:
+            bnds_step2["resolution"] = (
+                res_step1/two_step_downsample - 0.01,
+                res_step1/two_step_downsample + 0.01,
+            )
+        else:
+            bnds_step2["resolution"] = (
+                res_step1 - 0.01,
+                res_step1 + 0.01,
+            )
+        bnds_step2["resolution"] = np.where(
+            np.array(bnds_step2["resolution"]) < bnds_step1[2][0],
+            bnds_step1[2][0],
+            np.array(bnds_step2["resolution"])
         )
 
     active_params = get_active_params(
