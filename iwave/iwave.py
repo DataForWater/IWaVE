@@ -528,7 +528,7 @@ class Iwave(object):
             bnds_list=bounds_list,
             vel_indx=alpha if not estimate_alpha else 0.85,
             window_dims=self.spectrum_dims,
-            res=resolution if not estimate_res else None,
+            res=resolution if not estimate_res else 0,
             fps=self.fps,
             penalty_weight=self.penalty_weight,
             gravity_waves_switch=self.gravity_waves_switch,

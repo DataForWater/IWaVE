@@ -15,7 +15,7 @@ from iwave import dispersion, LazySpectrumArray, CONCURRENCY, spectral
 # Create a context with the desired start method
 ctx = multiprocessing.get_context("spawn")
 
-PARAM_ORDER = ("vy", "vx", "resolution", "log_depth", "vel_indx")
+PARAM_ORDER = ("vy", "vx", "log_res", "log_depth", "vel_indx")
 
 
 def get_active_params(
@@ -26,7 +26,7 @@ def get_active_params(
     active = ["vy", "vx"]
 
     if estimate_res:
-        active.append("resolution")
+        active.append("log_res")
 
     if estimate_depth:
         active.append("log_depth")
@@ -43,7 +43,7 @@ def build_default_params(
     vel_indx: float,
 ):
     return {
-        "resolution": resolution,
+        "log_res": np.log(resolution),
         "log_depth": np.log(depth),
         "vel_indx": vel_indx,
     }
@@ -86,7 +86,10 @@ def normalize_bounds(bnds):
     return {
         "vy": bnds[0],
         "vx": bnds[1],
-        "resolution": bnds[2],
+        "log_res": (
+            np.log(bnds[2][0]),
+            np.log(bnds[2][1]),
+        ),
         "log_depth": (
             np.log(bnds[3][0]),
             np.log(bnds[3][1]),
@@ -172,19 +175,21 @@ def cost_function_velocity_depth(
     if estimate_res:
         if estimate_depth:
             if estimate_vel_indx:
-                vy, vx, resolution, log_depth, vel_indx = x
+                vy, vx, log_res, log_depth, vel_indx = x
             else:
-                vy, vx, resolution, log_depth = x
+                vy, vx, log_res, log_depth = x
 
+            res_local = np.exp(log_res)
             depth_local = np.exp(log_depth)
 
         else:
             depth_local = depth
 
             if estimate_vel_indx:
-                vy, vx, resolution, vel_indx = x
+                vy, vx, log_res, vel_indx = x
             else:
-                vy, vx, resolution = x
+                vy, vx, log_res = x
+            res_local = np.exp(log_res)
     else:
         if estimate_depth:
             if estimate_vel_indx:
@@ -202,13 +207,13 @@ def cost_function_velocity_depth(
             else:
                 vy, vx = x
                 
-        resolution = res
+        res_local = res
             
     
     # scale the wavenumber/frequency arrays to physical units
     kt = nd_kt * fps # rad/s
-    ky = nd_ky / resolution # rad/m
-    kx = nd_kx / resolution # rad/m
+    ky = nd_ky / res_local # rad/m
+    kx = nd_kx / res_local # rad/m
 
     synthetic_spectrum = dispersion.intensity(
         [vy, vx], depth_local, vel_indx,
@@ -220,7 +225,8 @@ def cost_function_velocity_depth(
 
     # add a penalisation proportional to the non-dimensionalised velocity modulus
     vel_norm = np.sqrt(vy * vy + vx * vx)
-    cost_function = cost_function * (1 + 2 * penalty_weight * vel_norm / (resolution * fps))
+    # cost_function = cost_function * (1 + 2 * penalty_weight * vel_norm / (res_local * fps))
+    cost_function = cost_function * (1 + penalty_weight * vel_norm)
     return cost_function
 
 
@@ -326,10 +332,11 @@ def optimize_single_spectrum_velocity(
 
     vy = params["vy"]
     vx = params["vx"]
-    res_opt = params["resolution"]
+    res_opt = np.exp(params["log_res"])
     d = np.exp(params["log_depth"])
     alpha_opt = params["vel_indx"]
 
+    
     if estimate_res:
         x_for_quality = [vy, vx, res_opt]
     else:
@@ -406,7 +413,7 @@ def optimize_single_spectrum_velocity_two_steps(
         res_step1 = res * two_step_downsample if two_step_downsample > 1 else res
     
     # Step 1 bounds: only velocity and resolution, no depth or alpha optimization
-    step1_active = ["vy", "vx", "resolution"] if estimate_res else ["vy", "vx"]
+    step1_active = ["vy", "vx", "log_res"] if estimate_res else ["vy", "vx"]
 
     bnds_step1 = select_bounds(
         bnds,
@@ -424,7 +431,7 @@ def optimize_single_spectrum_velocity_two_steps(
     # Extract step 1 results
     vy_step1 = opt_step1.x[0]
     vx_step1 = opt_step1.x[1]
-    res_step1 = opt_step1.x[2] if estimate_res else res
+    res_step1 = np.exp(opt_step1.x[2]) if estimate_res else res
     
     # Step 2: Refine bounds based on step 1 result. The bounds are set to be around the step 1 solution, with a margin of 0.1 m/s.
     bnds_step2 = bnds.copy()
@@ -439,20 +446,20 @@ def optimize_single_spectrum_velocity_two_steps(
     # define boundaries for resolution estimation
     if estimate_res:
         if two_step_downsample > 1:
-            bnds_step2["resolution"] = (
-                res_step1/two_step_downsample - 0.01,
-                res_step1/two_step_downsample + 0.01,
+            bnds_step2["log_res"] = (
+                np.log(res_step1/two_step_downsample) - np.log(2),
+                np.log(res_step1/two_step_downsample) + np.log(2),
             )
         else:
-            bnds_step2["resolution"] = (
-                res_step1 - 0.01,
-                res_step1 + 0.01,
+            bnds_step2["log_res"] = (
+                np.log(res_step1) - np.log(2),
+                np.log(res_step1) + np.log(2),
             )
-        bnds_step2["resolution"] = np.where(
-            np.array(bnds_step2["resolution"]) < bnds_step1[2][0],
-            bnds_step1[2][0],
-            np.array(bnds_step2["resolution"])
-        )
+        # bnds_step2["log_res"] = np.where(
+        #     np.array(bnds_step2["log_res"]) < bnds_step1[2][0],
+        #     bnds_step1[2][0],
+        #     np.array(bnds_step2["log_res"])
+        # )
 
     active_params = get_active_params(
         estimate_res,
@@ -500,7 +507,7 @@ def optimize_single_spectrum_velocity_two_steps(
 
     vy = params["vy"]
     vx = params["vx"]
-    res_opt = params["resolution"]
+    res_opt = np.exp(params["log_res"])
     d = np.exp(params["log_depth"])
     alpha_opt = params["vel_indx"]
 
@@ -778,7 +785,7 @@ def quality_calc(
     Parameters
     ----------
     x : array-like
-        Vector of parameters [vy, vx, d].
+        Vector of parameters [vy, vx, res, d, vel_indx].
         
     measured_spectrum : np.ndarray
         measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
