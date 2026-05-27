@@ -335,11 +335,13 @@ def optimize_single_spectrum_velocity(
     else:
         x_for_quality = [vy, vx, res]
     if estimate_depth:
-        x_for_quality.append(np.log(d))
-    else:
         x_for_quality.append(d)
+    else:
+        x_for_quality.append(depth)
     if estimate_vel_indx:
         x_for_quality.append(alpha_opt)
+    else:
+        x_for_quality.append(vel_indx)
 
     quality = quality_calc(
         x_for_quality,
@@ -507,11 +509,13 @@ def optimize_single_spectrum_velocity_two_steps(
     else:
         x_for_quality = [vy, vx, res]
     if estimate_depth:
-        x_for_quality.append(np.log(d))
-    else:
         x_for_quality.append(d)
+    else:
+        x_for_quality.append(depth)
     if estimate_vel_indx:
         x_for_quality.append(alpha_opt)
+    else:
+        x_for_quality.append(vel_indx)
 
     quality = quality_calc(
         x_for_quality,
