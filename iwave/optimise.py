@@ -508,16 +508,17 @@ def optimize_single_spectrum_velocity_unpack(kwargs):
     """Wrap all arguments for optimization in a single dictionary.
     Routes to either two-step or one-step optimization based on two_step_downsample parameter.
     """
-    two_step_downsample = kwargs.pop("two_step_downsample", 0)
+    kwargs_local = kwargs.copy()
+    two_step_downsample = kwargs_local.pop("two_step_downsample", 0)
     
     if two_step_downsample > 0:
         # Two-step optimization
-        kwargs['two_step_downsample'] = two_step_downsample
-        return optimize_single_spectrum_velocity_two_steps(**kwargs)
+        kwargs_local['two_step_downsample'] = two_step_downsample
+        return optimize_single_spectrum_velocity_two_steps(**kwargs_local)
     else:
         # One-step optimization: use downsample=1
-        kwargs['downsample'] = 1
-        return optimize_single_spectrum_velocity(**kwargs)
+        kwargs_local['downsample'] = 1
+        return optimize_single_spectrum_velocity(**kwargs_local )
 
 def silence_output():
     """Suppress output of worker functions."""
