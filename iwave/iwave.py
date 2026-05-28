@@ -4,6 +4,7 @@ import cv2
 import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 
 from typing import Optional, Tuple, Literal
 from iwave import window, spectral, io, optimise, dispersion, LazySpectrumArray, LazyWindowArray
@@ -149,6 +150,7 @@ class Iwave(object):
         self.quality = None  # quality parameter (0 < q < 1), where 1 is highest quality and 0 is lowest quality
         self.status = None  # Boolean flag indicating if the optimizer exited successfully
         self.message = None  # termination message returned by the optimiser
+        self.optim_kwargs = copy.deepcopy(OPTIM_KWARGS_SADE)
                 
     def __repr__(self):
         if self.imgs is not None:
@@ -475,8 +477,8 @@ class Iwave(object):
                 "No images available. Please set images first `iw.imgs = imgs`, where `imgs` is a numpy array "
                 "of images, or read a video file using `iw.read_video(file)`")
         # ensure defaults are set if nothing is provided
-        if not opt_kwargs:
-            opt_kwargs = OPTIM_KWARGS_SADE
+        opt_kwargs_final = self.optim_kwargs.copy()
+        opt_kwargs_final.update(opt_kwargs)
         
         # Determine if resolution, depth and/or alpha should be estimated
         resolution = self.resolution
@@ -541,7 +543,7 @@ class Iwave(object):
             estimate_vel_indx=estimate_alpha,
             two_step_downsample=two_step_downsample,
             desc="Optimizing windows",
-            **opt_kwargs
+            **opt_kwargs_final
         )
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
         self.vx = output[:, 1].reshape(len(self.y), len(self.x))

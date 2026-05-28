@@ -210,23 +210,45 @@ def cost_function_velocity_depth(
 
     """
         
-    params = decode_params(
-        x,
-        estimate_res,
-        estimate_depth,
-        estimate_vel_indx,
-        res,
-        depth,
-        vel_indx,
-    )
+    vy = x[0]
+    vx = x[1]
+
+    idx = 2
+
+    if estimate_res:
+        res_local = np.exp(x[idx])
+        idx += 1
+    else:
+        res_local = res
+
+    if estimate_depth:
+        depth_local = np.exp(x[idx])
+        idx += 1
+    else:
+        depth_local = depth
+
+    if estimate_vel_indx:
+        vel_indx_local = x[idx]
+    else:
+        vel_indx_local = vel_indx
+
+    # params = decode_params(
+    #     x,
+    #     estimate_res,
+    #     estimate_depth,
+    #     estimate_vel_indx,
+    #     res,
+    #     depth,
+    #     vel_indx,
+    # )
     
     # scale the wavenumber/frequency arrays to physical units
     kt = nd_kt * fps # rad/s
-    ky = nd_ky / params["res"]
-    kx = nd_kx / params["res"]
+    ky = nd_ky / res_local
+    kx = nd_kx / res_local
 
     synthetic_spectrum = dispersion.intensity(
-        [params["vy"], params["vx"]], params["depth"], params["vel_indx"],
+        [vy, vx], depth_local, vel_indx_local,
         kt, ky, kx,
         gauss_width,
         gravity_waves_switch, turbulence_switch
@@ -234,7 +256,7 @@ def cost_function_velocity_depth(
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
 
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    vel_norm = np.sqrt(params["vy"]**2 + params["vx"]**2)
+    vel_norm = np.sqrt(vy**2 + vx**2)
     # cost_function = cost_function * (1 + 2 * penalty_weight * vel_norm / (res_local * fps))
     cost_function = cost_function * (1 + penalty_weight * vel_norm)
     return cost_function
