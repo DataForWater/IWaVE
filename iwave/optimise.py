@@ -4,7 +4,6 @@ import os
 import sys
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
 
 from scipy import optimize
 from tqdm import tqdm
