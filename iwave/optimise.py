@@ -17,6 +17,41 @@ ctx = multiprocessing.get_context("spawn")
 
 PARAM_ORDER = ("vy", "vx", "log_res", "log_depth", "vel_indx")
 
+def decode_params(
+    x,
+    estimate_res,
+    estimate_depth,
+    estimate_vel_indx,
+    res,
+    depth,
+    vel_indx,
+):
+    # determine active parameters based on estimation flags and decode the optimization vector into a full parameter dictionary
+    active_params = get_active_params(
+        estimate_res,
+        estimate_depth,
+        estimate_vel_indx,
+    )
+
+    defaults = build_default_params(
+        res,
+        depth,
+        vel_indx,
+    )
+
+    params = vector_to_params(
+        x,
+        active_params,
+        defaults,
+    )
+
+    return {
+        "vy": params["vy"],
+        "vx": params["vx"],
+        "res": np.exp(params["log_res"]),
+        "depth": np.exp(params["log_depth"]),
+        "vel_indx": params["vel_indx"],
+    }
 
 def get_active_params(
     estimate_res: bool,
@@ -39,11 +74,10 @@ def get_active_params(
 
 
 def build_default_params(
-    resolution: float,
-    depth: float,
-    vel_indx: float,
+    resolution,
+    depth,
+    vel_indx,
 ):
-    # build a dictionary of default parameters for the optimization
     return {
         "log_res": np.log(resolution),
         "log_depth": np.log(depth),
@@ -176,52 +210,24 @@ def cost_function_velocity_depth(
         synthetic spectrum calculated according to the estimated flow parameters
 
     """
-    # maintained this structure to avoid repeated loading from dictionary
-    if estimate_res:
-        if estimate_depth:
-            if estimate_vel_indx:
-                vy, vx, log_res, log_depth, vel_indx = x
-            else:
-                vy, vx, log_res, log_depth = x
-
-            res_local = np.exp(log_res)
-            depth_local = np.exp(log_depth)
-
-        else:
-            depth_local = depth
-
-            if estimate_vel_indx:
-                vy, vx, log_res, vel_indx = x
-            else:
-                vy, vx, log_res = x
-            res_local = np.exp(log_res)
-    else:
-        if estimate_depth:
-            if estimate_vel_indx:
-                vy, vx, log_depth, vel_indx = x
-            else:
-                vy, vx, log_depth = x
-
-            depth_local = np.exp(log_depth)
-
-        else:
-            depth_local = depth
-
-            if estimate_vel_indx:
-                vy, vx, vel_indx = x
-            else:
-                vy, vx = x
-                
-        res_local = res
-            
+        
+    params = decode_params(
+        x,
+        estimate_res,
+        estimate_depth,
+        estimate_vel_indx,
+        res,
+        depth,
+        vel_indx,
+    )
     
     # scale the wavenumber/frequency arrays to physical units
     kt = nd_kt * fps # rad/s
-    ky = nd_ky / res_local # rad/m
-    kx = nd_kx / res_local # rad/m
+    ky = nd_ky / params["res"]
+    kx = nd_kx / params["res"]
 
     synthetic_spectrum = dispersion.intensity(
-        [vy, vx], depth_local, vel_indx,
+        [params["vy"], params["vx"]], params["depth"], params["vel_indx"],
         kt, ky, kx,
         gauss_width,
         gravity_waves_switch, turbulence_switch
@@ -229,7 +235,7 @@ def cost_function_velocity_depth(
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
 
     # add a penalisation proportional to the non-dimensionalised velocity modulus
-    vel_norm = np.sqrt(vy * vy + vx * vx)
+    vel_norm = np.sqrt(params["vy"]**2 + params["vx"]**2)
     # cost_function = cost_function * (1 + 2 * penalty_weight * vel_norm / (res_local * fps))
     cost_function = cost_function * (1 + penalty_weight * vel_norm)
     return cost_function
@@ -308,7 +314,6 @@ def optimize_single_spectrum_velocity(
         estimate_depth,
         estimate_vel_indx,
     )
-
     param_bounds = select_bounds(
         bnds,
         active_params,
@@ -323,52 +328,30 @@ def optimize_single_spectrum_velocity(
     status = opt.success
     message = opt.message
     
-    defaults = build_default_params(
+    params = decode_params(
+        opt.x,
+        estimate_res,
+        estimate_depth,
+        estimate_vel_indx,
         res,
         depth,
         vel_indx,
-    )
-
-    params = vector_to_params(
-        opt.x,
-        active_params,
-        defaults,
     )
 
     vy = params["vy"]
     vx = params["vx"]
-    res_opt = np.exp(params["log_res"])
-    d = np.exp(params["log_depth"])
+    res_opt = params["res"]
+    d = params["depth"]
     alpha_opt = params["vel_indx"]
 
-    
-    if estimate_res:
-        x_for_quality = [vy, vx, res_opt]
-    else:
-        x_for_quality = [vy, vx, res]
-    if estimate_depth:
-        x_for_quality.append(d)
-    else:
-        x_for_quality.append(depth)
-    if estimate_vel_indx:
-        x_for_quality.append(alpha_opt)
-    else:
-        x_for_quality.append(vel_indx)
-
     quality = quality_calc(
-        x_for_quality,
+        params,
         measured_spectrum,
-        vel_indx,
         window_dims,
-        res,
         fps,
         gauss_width,
         gravity_waves_switch,
         turbulence_switch,
-        estimate_res,
-        estimate_depth,
-        estimate_vel_indx,
-        depth,
     )
     cost = np.sum(opt.fun**2)
     
@@ -413,7 +396,7 @@ def optimize_single_spectrum_velocity_two_steps(
     nd_kt_step1, nd_ky_step1, nd_kx_step1 = spectral.nondim_wave_numbers(window_dims_step1)
     
     if estimate_res:
-        res_step1 = None
+        res_step1 = 0
     else:
         res_step1 = res * two_step_downsample if two_step_downsample > 1 else res
     
@@ -466,7 +449,6 @@ def optimize_single_spectrum_velocity_two_steps(
         estimate_depth,
         estimate_vel_indx,
     )
-
     param_bounds_step2 = select_bounds(
         bnds_step2,
         active_params,
@@ -493,51 +475,30 @@ def optimize_single_spectrum_velocity_two_steps(
     message = opt_step2.message
     
     # Extract results and handle depth and alpha based on estimation flags
-    defaults = build_default_params(
+    params = decode_params(
+        opt_step2.x,
+        estimate_res,
+        estimate_depth,
+        estimate_vel_indx,
         res,
         depth,
         vel_indx,
     )
-
-    params = vector_to_params(
-        opt_step2.x,
-        active_params,
-        defaults,
-    )
-
+    
     vy = params["vy"]
     vx = params["vx"]
-    res_opt = np.exp(params["log_res"])
-    d = np.exp(params["log_depth"])
+    res_opt = params["res"]
+    d = params["depth"]
     alpha_opt = params["vel_indx"]
 
-    if estimate_res:
-        x_for_quality = [vy, vx, res_opt]
-    else:
-        x_for_quality = [vy, vx, res]
-    if estimate_depth:
-        x_for_quality.append(d)
-    else:
-        x_for_quality.append(depth)
-    if estimate_vel_indx:
-        x_for_quality.append(alpha_opt)
-    else:
-        x_for_quality.append(vel_indx)
-
     quality = quality_calc(
-        x_for_quality,
+        params,
         measured_spectrum,
-        vel_indx,
         window_dims,
-        res,
         fps,
         gauss_width,
         gravity_waves_switch,
         turbulence_switch,
-        estimate_res,
-        estimate_depth,
-        estimate_vel_indx,
-        depth,
     )
     cost = np.sum(opt_step2.fun**2)
     
@@ -763,19 +724,13 @@ def optimise_velocity(
 
 
 def quality_calc(
-    x,
+    params,
     measured_spectrum,
-    vel_indx, 
     window_dims, 
-    res, 
     fps, 
     gauss_width, 
     gravity_waves_switch, 
     turbulence_switch,
-    estimate_res: bool = False,
-    estimate_depth: bool = True,
-    estimate_vel_indx: bool = False,
-    depth: float = None,
 )-> float:
     """
     Calculates a quality metric for the optimisation based on the resemblance between the measured spectrum and the theoretical one.
@@ -790,14 +745,8 @@ def quality_calc(
         measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
         dimensions [N_windows, Nt, Ny, Nx]
 
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
     window_dims: [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
 
     fps: float
         image acquisition rate (fps)
@@ -814,31 +763,20 @@ def quality_calc(
         if True, turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
     
-    x : array-like Vector of parameters [vy, vx, res, depth].
-        
+    params : dict
+        Dictionary containing the parameters [vy, vx, res, depth, vel_indx].
+
     Returns
     -------
     quality : float
         quality metric
         
     """
-    velocity = [x[0], x[1]]    # guessed velocity components
-    
-    if estimate_res:
-        res = x[2]
-        if estimate_depth:
-            depth = x[3]  
-    else:
-        if estimate_depth:
-            depth = x[2]
-    
-    if estimate_vel_indx:
-        vel_indx = x[-1]
         
-    kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
+    kt, ky, kx = spectral.wave_numbers(window_dims, params["res"], fps)
 
     synthetic_spectrum = dispersion.intensity(
-        velocity, depth, vel_indx,
+        [params["vy"], params["vx"]], params["depth"], params["vel_indx"],
         kt, ky, kx, gauss_width,
         gravity_waves_switch, turbulence_switch
     )
