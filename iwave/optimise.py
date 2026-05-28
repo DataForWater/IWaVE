@@ -23,6 +23,7 @@ def get_active_params(
     estimate_depth: bool,
     estimate_vel_indx: bool,
 ):
+    # select active parameters based on estimation flags
     active = ["vy", "vx"]
 
     if estimate_res:
@@ -42,6 +43,7 @@ def build_default_params(
     depth: float,
     vel_indx: float,
 ):
+    # build a dictionary of default parameters for the optimization
     return {
         "log_res": np.log(resolution),
         "log_depth": np.log(depth),
@@ -54,6 +56,7 @@ def vector_to_params(
     active_params,
     defaults,
 ):
+    # convert optimization vector to a dictionary of parameters, filling in default values for non-optimized parameters
     if len(x) != len(active_params):
         raise ValueError(
             f"Expected {len(active_params)} parameters, "
@@ -72,10 +75,12 @@ def select_bounds(
     full_bounds,
     active_params,
 ):
+    # select bounds for the active parameters from the full bounds dictionary
     return [full_bounds[p] for p in active_params]
 
 
 def normalize_bounds(bnds):
+    # convert bounds to the format expected by the optimization function, and take logs for resolution and depth
 
     if len(bnds) != 5:
         raise ValueError(
@@ -455,11 +460,6 @@ def optimize_single_spectrum_velocity_two_steps(
                 np.log(res_step1) - np.log(2),
                 np.log(res_step1) + np.log(2),
             )
-        # bnds_step2["log_res"] = np.where(
-        #     np.array(bnds_step2["log_res"]) < bnds_step1[2][0],
-        #     bnds_step1[2][0],
-        #     np.array(bnds_step2["log_res"])
-        # )
 
     active_params = get_active_params(
         estimate_res,
@@ -575,7 +575,6 @@ def optimise_velocity(
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     chunk_size: int = 50,
-    downsample : int=1,
     gauss_width: float=1,
     depth: float=10.,
     estimate_res: bool=False,

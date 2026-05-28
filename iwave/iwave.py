@@ -534,7 +534,6 @@ class Iwave(object):
             gravity_waves_switch=self.gravity_waves_switch,
             turbulence_switch=self.turbulence_switch,
             chunk_size=self.window_chunk_size,
-            downsample=1,
             gauss_width=1,  # TODO: figure out defaults
             depth=depth if not estimate_depth else 10.0,  # Pass actual depth value if fixed, else default
             estimate_res=estimate_res,
