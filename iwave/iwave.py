@@ -5,7 +5,7 @@ import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
 
-from typing import Optional, Tuple, Literal
+from typing import List, Optional, Tuple, Literal
 from iwave import window, spectral, io, optimise, dispersion, LazySpectrumArray, LazyWindowArray
 
 
@@ -393,12 +393,11 @@ class Iwave(object):
         self,
         alpha: float = 0.85,
         depth: float = 1.,  # If depth = 0, then the water depth is estimated.
-        twosteps: bool = True,
+        pass_downsampling: Optional[List[int]] = None,
         dmin: Optional[float] = 0.01,
         dmax: Optional[float] = 3.0,
         gravity_waves_switch: Optional[bool] = True,
         turbulence_switch: Optional[bool] = True,
-        first_pass_downsample: Optional[int] = 2,
         penalty_weight: Optional[float] = 1,
         **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
                             # and subsequently refined during a second step using the whole spectrum. This will reduce 
@@ -419,9 +418,8 @@ class Iwave(object):
             depth-average to surface velocity ratio [-], default 0.85
         depth : float, optional
             depth of the water column [m], default 1. If set to 0. it will be estimated.
-        twosteps : bool, optional
-            if set, perform the optimisation twice per chunk, with a reduced spectrum in the first step without 
-            optimizing depth and full spectrum in the second step with optimizing depth. Default True.
+        pass_downsampling : List[int], optional
+            List of downsampling factors to use during the passes of the multi-steps optimisation. Defaults to [2, 1].
         dmin : float, optional
             Minimum depth expected in the scene. Defaults to 0.01 m
         dmax : float, optional
@@ -434,8 +432,6 @@ class Iwave(object):
             turbulence-generated patterns and/or floating particles are NOT modelled. Default True.
             Setting turbulence_switch = False may improve performance if water waves dominate the scene, or if tracers
             dynamics are not representative of the actual flow velocity (e.g., due to air resistance, surface tension, etc.)
-        first_pass_downsample : int, optional
-            Downsampling factor to use during the first pass of the two-steps optimisation. Defaults to 2.
         penalty_weight : float, optional
             Parameter to reduce the risk of outliers by penalising solutions with high velocity modulus.
             Inactive if set to 0. Defaults to 1. 
@@ -454,7 +450,9 @@ class Iwave(object):
         # ensure defaults are set if nothing is provided
         if not opt_kwargs:
             opt_kwargs = OPTIM_KWARGS_SADE
-        if not twosteps and penalty_weight != 0:
+        if not pass_downsampling:
+            pass_downsampling = [2, 1]
+        if len(pass_downsampling)==1 and penalty_weight != 0:
             # self.penalty_weight = 0
             print(
                 f"Velocity and especially depth estimations with the 1 step approach are biased when `penalty_weight` "
@@ -462,14 +460,12 @@ class Iwave(object):
                 f"or alternatively to set `penalty_weight = 0` and `smax` to reduce the number of outliers."
             )
         # decide if downsampling is applied or not
-        if twosteps:
-            if first_pass_downsample > 0:
-                print(
-                    f"Optimization in two steps: step 1 will use downsampling factor {first_pass_downsample}, "
-                    f"followed by step 2 with full resolution."
+        if len(pass_downsampling) > 1:
+            print(
+                    f"Optimization in {len(pass_downsampling)} steps with spectrum downsampling factor {pass_downsampling}"
                 )
-            else:
-                print("Optimization in one step with full resolution.")
+        else:
+            print("Optimization in one step with full resolution.")
         # set search bounds to -/+ maximum velocity for both directions, and depth if applicable
         if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
@@ -483,8 +479,6 @@ class Iwave(object):
         # Create a list of bounds for each window.
         bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
-        # Determine the two-step downsample factor
-        two_step_downsample = first_pass_downsample if twosteps else 0
         # Optimize velocities and depth for each window in the spectrum
         output, cost, quality = optimise.optimise_velocity(
             measured_spectra=self.spectrum,
@@ -497,9 +491,8 @@ class Iwave(object):
             gravity_waves_switch=gravity_waves_switch,
             turbulence_switch=turbulence_switch,
             chunk_size=self.window_chunk_size,
-            downsample=1,
             gauss_width=1,  # TODO: figure out defaults
-            two_step_downsample=two_step_downsample,
+            pass_downsampling=pass_downsampling,
             desc="Optimizing windows",
             **opt_kwargs
         )

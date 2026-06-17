@@ -133,7 +133,7 @@ def optimize_single_spectrum_velocity(
     penalty_weight: float,
     gravity_waves_switch: bool,
     turbulence_switch: bool,
-    downsample: int,
+    pass_downsampling: List[int],
     gauss_width: float,
     kwargs: dict
 ) -> Tuple[float, float, float, float, float, bool, str]:
@@ -145,121 +145,152 @@ def optimize_single_spectrum_velocity(
     if not np.any(measured_spectrum):
         return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
     
-    if downsample > 1: # reduce dimensions of spectrum (for two-step approach)
-        measured_spectrum, res, fps, window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, downsample)
+    # assume very large depth for initial passes
+    # pass_bnds = [bnds[0], bnds[1], (np.log(1000), np.log(1000))] # log-transform depth to homogenise convergence
+    pass_kwargs = kwargs.copy()
     
-    
-    bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
-    opt = optimize.differential_evolution(
-        cost_function_velocity_wrapper,
-        bounds=bnds,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
-        **kwargs
-    )
-    status = opt.success # Boolean flag indicating if the optimizer exited successfully returned by scipy.optimizer.differential_evolution
-    message = opt.message # termination message returned by scipy.optimizer.differential_evolution
-        
-    # define a quality metric by comparing the measured spectrum with an ideal theoretical spectrum
-    quality = quality_calc(opt.x, measured_spectrum, vel_indx, window_dims, res, fps, gauss_width, gravity_waves_switch, turbulence_switch)
-    cost = np.sum(opt.fun**2)
-    opt.x[2] = np.exp(opt.x[2]) # transforms back optimised depth into linear scale
-    
-    vy, vx, d = opt.x
-    return vy, vx, d, cost, quality, status, message  
-    
+    for n, sample in enumerate(pass_downsampling):
+        if n > 0:
+            pass_bnds = [
+                (pass_vy-0.1,pass_vy+0.1),
+                (pass_vx-0.1,pass_vx+0.1),
+                (np.log(1000), np.log(1000))]
+            if n == len(pass_downsampling) - 1:
+                # in the last step, the penalty_weight becomes zero and depth is also
+                penalty_weight = 0
+                
+                # Reduce population size for last step
+                
+                pass_kwargs["popsize"] = max(1, pass_kwargs.get("popsize", 8) // 2)
+                
+                pass_bnds = [
+                    (pass_vy-0.1,pass_vy+0.1),
+                    (pass_vx-0.1,pass_vx+0.1),
+                    (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
+        else:
+            pass_bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
 
-def optimize_single_spectrum_velocity_two_steps(
-    measured_spectrum: np.ndarray,
-    bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
-    vel_indx: float,
-    window_dims: Tuple[int, int, int], 
-    res: float, 
-    fps: float,
-    penalty_weight: float,
-    gravity_waves_switch: bool,
-    turbulence_switch: bool,
-    two_step_downsample: int,
-    gauss_width: float,
-    kwargs: dict
-) -> Tuple[float, float, float, float, float, bool, str]:
-    """
-    Two-step optimization per window: first with downsampled spectrum, then with full spectrum.
-    This is more efficient than processing all windows in step 1 then all windows in step 2.
+        pass_measured_spectrum, pass_res, pass_fps, pass_window_dims = dispersion.spectrum_downsample(measured_spectrum, res, fps, window_dims, pass_downsampling[n])
+            
+        pass_opt = optimize.differential_evolution(
+            cost_function_velocity_wrapper,
+            bounds=pass_bnds,
+            args=(pass_measured_spectrum, vel_indx, pass_window_dims, pass_res, pass_fps, 
+                penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
+            **pass_kwargs
+        )
+        
+        # Extract step 1 results
+        pass_vy = pass_opt.x[0]
+        pass_vx = pass_opt.x[1]
     
-    Returns:
-        vy, vx, d, cost, quality, status, message
-    """
-    # Zero spectra were skipped during FFT, skip optimization for them too
-    if not np.any(measured_spectrum):
-        return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
     
-    # Step 1: Optimize with downsampled spectrum (no depth optimization)
-    measured_spectrum_step1, res_step1, fps_step1, window_dims_step1 = dispersion.spectrum_downsample(
-        measured_spectrum, res, fps, window_dims, two_step_downsample
-    )
-    
-    bnds_step1 = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
-    opt_step1 = optimize.differential_evolution(
-        cost_function_velocity_wrapper,
-        bounds=bnds_step1,
-        args=(measured_spectrum_step1, vel_indx, window_dims_step1, res_step1, fps_step1, 
-              penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
-        **kwargs
-    )
-    
-    # Extract step 1 results
-    vy_step1 = opt_step1.x[0]
-    vx_step1 = opt_step1.x[1]
-    
-    # Step 2: Refine bounds based on step 1 result
-    # Narrow bounds to ±10% of the step 1 solution
-    bnds_step2 = [
-        (vy_step1 - 0.1*np.abs(vy_step1), vy_step1 + 0.1*np.abs(vy_step1)),
-        (vx_step1 - 0.1*np.abs(vx_step1), vx_step1 + 0.1*np.abs(vx_step1)),
-        (np.log(bnds[2][0]), np.log(bnds[2][1]))  # Keep original depth bounds
-    ]
-    
-    # Reduce population size for step 2
-    kwargs_step2 = kwargs.copy()
-    kwargs_step2["popsize"] = max(1, kwargs_step2.get("popsize", 8) // 2)
-    
-    # Step 2: Optimize with full spectrum and refined bounds
-    bnds_log = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
-    opt_step2 = optimize.differential_evolution(
-        cost_function_velocity_wrapper,
-        bounds=bnds_step2,
-        args=(measured_spectrum, vel_indx, window_dims, res, fps, 
-              0, gravity_waves_switch, turbulence_switch, gauss_width),  # penalty_weight=0 for step 2
-        **kwargs_step2
-    )
-    
-    status = opt_step2.success
-    message = opt_step2.message
+    status = pass_opt.success
+    message = pass_opt.message
     
     # Calculate quality metric
-    quality = quality_calc(opt_step2.x, measured_spectrum, vel_indx, window_dims, res, fps, 
+    quality = quality_calc(pass_opt.x, measured_spectrum, vel_indx, window_dims, res, fps, 
                           gauss_width, gravity_waves_switch, turbulence_switch)
-    cost = np.sum(opt_step2.fun**2)
-    opt_step2.x[2] = np.exp(opt_step2.x[2])  # transforms back optimised depth into linear scale
+    cost = np.sum(pass_opt.fun**2)
+    pass_opt.x[2] = np.exp(pass_opt.x[2])  # transforms back optimised depth into linear scale
     
-    vy, vx, d = opt_step2.x
+    vy, vx, d = pass_opt.x
     return vy, vx, d, cost, quality, status, message
+    
+    
+
+# def optimize_single_spectrum_velocity_two_steps(
+#     measured_spectrum: np.ndarray,
+#     bnds: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
+#     vel_indx: float,
+#     window_dims: Tuple[int, int, int], 
+#     res: float, 
+#     fps: float,
+#     penalty_weight: float,
+#     gravity_waves_switch: bool,
+#     turbulence_switch: bool,
+#     two_step_downsample: int,
+#     gauss_width: float,
+#     kwargs: dict
+# ) -> Tuple[float, float, float, float, float, bool, str]:
+#     """
+#     Two-step optimization per window: first with downsampled spectrum, then with full spectrum.
+#     This is more efficient than processing all windows in step 1 then all windows in step 2.
+    
+#     Returns:
+#         vy, vx, d, cost, quality, status, message
+#     """
+#     # Zero spectra were skipped during FFT, skip optimization for them too
+#     if not np.any(measured_spectrum):
+#         return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
+    
+#     # Step 1: Optimize with downsampled spectrum (no depth optimization)
+#     measured_spectrum_step1, res_step1, fps_step1, window_dims_step1 = dispersion.spectrum_downsample(
+#         measured_spectrum, res, fps, window_dims, two_step_downsample
+#     )
+    
+#     bnds_step1 = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
+#     opt_step1 = optimize.differential_evolution(
+#         cost_function_velocity_wrapper,
+#         bounds=bnds_step1,
+#         args=(measured_spectrum_step1, vel_indx, window_dims_step1, res_step1, fps_step1, 
+#               penalty_weight, gravity_waves_switch, turbulence_switch, gauss_width),
+#         **kwargs
+#     )
+    
+#     # Extract step 1 results
+#     vy_step1 = opt_step1.x[0]
+#     vx_step1 = opt_step1.x[1]
+    
+#     # Step 2: Refine bounds based on step 1 result
+#     # Narrow bounds to ±10% of the step 1 solution
+#     bnds_step2 = [
+#         (vy_step1 - 0.1*np.abs(vy_step1), vy_step1 + 0.1*np.abs(vy_step1)),
+#         (vx_step1 - 0.1*np.abs(vx_step1), vx_step1 + 0.1*np.abs(vx_step1)),
+#         (np.log(bnds[2][0]), np.log(bnds[2][1]))  # Keep original depth bounds
+#     ]
+    
+#     # Reduce population size for step 2
+#     kwargs_step2 = kwargs.copy()
+#     kwargs_step2["popsize"] = max(1, kwargs_step2.get("popsize", 8) // 2)
+    
+#     # Step 2: Optimize with full spectrum and refined bounds
+#     bnds_log = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
+#     opt_step2 = optimize.differential_evolution(
+#         cost_function_velocity_wrapper,
+#         bounds=bnds_step2,
+#         args=(measured_spectrum, vel_indx, window_dims, res, fps, 
+#               0, gravity_waves_switch, turbulence_switch, gauss_width),  # penalty_weight=0 for step 2
+#         **kwargs_step2
+#     )
+    
+#     status = opt_step2.success
+#     message = opt_step2.message
+    
+#     # Calculate quality metric
+#     quality = quality_calc(opt_step2.x, measured_spectrum, vel_indx, window_dims, res, fps, 
+#                           gauss_width, gravity_waves_switch, turbulence_switch)
+#     cost = np.sum(opt_step2.fun**2)
+#     opt_step2.x[2] = np.exp(opt_step2.x[2])  # transforms back optimised depth into linear scale
+    
+#     vy, vx, d = opt_step2.x
+#     return vy, vx, d, cost, quality, status, message
 
 
 def optimize_single_spectrum_velocity_unpack(kwargs):
     """Wrap all arguments for optimization in a single dictionary.
-    Routes to either two-step or one-step optimization based on two_step_downsample parameter.
     """
-    two_step_downsample = kwargs.pop("two_step_downsample", 0)
+    return optimize_single_spectrum_velocity(**kwargs)
+    # two_step_downsample = kwargs.pop("two_step_downsample", 0)
     
-    if two_step_downsample > 0:
-        # Two-step optimization
-        kwargs['two_step_downsample'] = two_step_downsample
-        return optimize_single_spectrum_velocity_two_steps(**kwargs)
-    else:
-        # One-step optimization: use downsample=1
-        kwargs['downsample'] = 1
-        return optimize_single_spectrum_velocity(**kwargs)
+    # if two_step_downsample > 0:
+    #     # Two-step optimization
+    #     kwargs['two_step_downsample'] = two_step_downsample
+    #     return optimize_single_spectrum_velocity_two_steps(**kwargs)
+    # else:
+    #     # One-step optimization: use downsample=1
+    #     kwargs['downsample'] = 1
+    #     return optimize_single_spectrum_velocity(**kwargs)
 
 def silence_output():
     """Suppress output of worker functions."""
@@ -277,10 +308,9 @@ def optimise_velocity(
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     chunk_size: int = 50,
-    downsample : int=1,
     gauss_width: float=1,
     desc="Optimizing windows",
-    two_step_downsample: int = 0,
+    pass_downsampling: List[int] = None,
     **kwargs
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -318,18 +348,15 @@ def optimise_velocity(
     turbulence_switch: bool, optional
         if True (default), turbulence-generated patterns and/or floating particles are modelled
         if False, turbulence-generated patterns and/or floating particles are NOT modelled
-    downsample: int, optional
-        downsampling rate (default 1). If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to
-        'downsample'. Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the
-        images spatially.
     gauss_width: float, optional
         width of the synthetic spectrum smoothing kernel (default 1.0).
         gauss_width > 1 could be useful with very noisy spectra.
     chunk_size : int, optional
         Number of spectra to process at a time. Defaults to 50
-    two_step_downsample: int, optional
-        If > 0, performs a two-step optimization per chunk. First step uses this downsample factor,
-        then bounds are refined and second step runs with downsample=1. Defaults to 0 (disabled).
+    pass_downsampling: List[int], optional
+        List of downsampling rates (default [1]). If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to
+        'downsample'. Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the
+        images spatially.
     **kwargs : dict
         keyword arguments to pass to `scipy.optimize.differential_evolution, see also
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
@@ -376,7 +403,7 @@ def optimise_velocity(
                 penalty_weight=penalty_weight,
                 gravity_waves_switch=gravity_waves_switch,
                 turbulence_switch=turbulence_switch,
-                downsample=downsample,
+                pass_downsampling=pass_downsampling,
                 gauss_width=gauss_width,
                 kwargs=kwargs,
             ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
@@ -413,7 +440,7 @@ def optimise_velocity(
                 penalty_weight=penalty_weight,
                 gravity_waves_switch=gravity_waves_switch,
                 turbulence_switch=turbulence_switch,
-                two_step_downsample=two_step_downsample,
+                pass_downsampling=pass_downsampling,
                 gauss_width=gauss_width,
                 kwargs=kwargs,
             ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)

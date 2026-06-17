@@ -114,7 +114,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         penalty_weight=0,
         gravity_waves_switch=True,
         turbulence_switch=True,
-        downsample=1,
+        pass_downsampling=[1],
         popsize=20,
         workers=1,
         maxiter=1000,
@@ -176,7 +176,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
         popsize= 20,
-        twosteps=False,
+        pass_downsampling=[1],
         dmin=depth_min,
         dmax=depth_max,
         gravity_waves_switch=True,
