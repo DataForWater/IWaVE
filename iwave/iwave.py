@@ -468,7 +468,7 @@ class Iwave(object):
             print("Optimization in one step with full resolution.")
         # set search bounds to -/+ maximum velocity for both directions, and depth if applicable
         if depth == 0:  # If depth = 0, then the water depth is estimated.
-            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (self.dmin, self.dmax)]
+            bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (dmin, dmax)]
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         
