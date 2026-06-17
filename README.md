@@ -72,8 +72,8 @@ from iwave import Iwave
 # Initialize IWaVE object
 iw = Iwave(
     resolution=0.01,
-    window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
-    overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
+    window_size=(64, 64),  # size of interrogation windows over which velocities are estimated
+    overlap=(32, 32),  # overlap in space (y, x) used to select windows from images or frames
     time_size=250,  # amount of frames in time used for one spectral analysis
     time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of 
         # time_size implies that you use a 50% overlap in time between frame sets.
@@ -128,8 +128,8 @@ from iwave import Iwave, sample_data
 
 iw = Iwave(
     resolution=0.01,  # resolution of videos you will analyze in meters. 
-    window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
-    overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
+    window_size=(64, 64),  # size of interrogation windows over which velocities are estimated
+    overlap=(32, 32),  # overlap in space (y, x) used to select windows from images or frames
     time_size=250,  # amount of frames used for one spectral analysis
     time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of 
         # time_size implies that you use a 50% overlap in time between frame sets.
