@@ -1,3 +1,22 @@
+## [0.3.2] - 2026-06-18
+### Added
+* Added the capability to run an arbitrary number of passes with desired downsampling factors
+### Changed
+* Made multiple pass sequential to avoid double-loading of images
+* Moved chek for blank windows before spectra calculations to avoid unnecessary calculations
+* Increased default popsize to improve convergence
+* Moved definition of velocimetry parameters outside of __init__
+* Brought multiple pass calculations to a higher level
+* Modified README to reflect new changes
+### Deprecated
+### Removed
+* Removed distinct one-step and two-steps optimisation functions
+### Fixed
+* Resolved bug which prevented windows with different size along x and y. 
+* Fixed wrong sign of y velocity component
+
+### Security
+
 ## [0.3.1] - 2025-09-09
 ### Added
 ### Changed
