@@ -172,6 +172,8 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
 
     iw.x = np.array([0., 1.])
     iw.y = np.array([0.])
+    
+    # single-pass velocimetry
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
@@ -187,6 +189,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     vx_1step = iw.vx 
     d_1step = iw.d
        
+    # two-passes velocimetry
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
