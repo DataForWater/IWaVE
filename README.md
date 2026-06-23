@@ -1,10 +1,11 @@
 # IWaVE
 Image Wave Velocimetry Estimation
 
-This library performs simultaneous analysis of 2D velocimetry and stream depth 
-through 2D Fourier transform methods, with a physics-based approach. 
-Unlike existing velocimetry approaches such as Particle Image Velocimetry or
+This library performs simultaneous analysis of 2D velocimetry and depth in lakes, coastlines, estuaries and
+rivers with highly complex bathymetric and wave dynamics through 2D Fourier transform methods using a physics-based
+approach. sUnlike existing velocimetry approaches such as Particle Image Velocimetry or
 Space-Time Image Velocimetry, the uniqueness of this approach lies in the following:
+
 * velocities that are advective of nature, can be distinguished from other wave forms such as wind waves. 
   This makes the approach particularly useful in estuaries or river stretches affected strongly by wind,
   or in shallow streams in the presence of standing waves.
@@ -15,7 +16,7 @@ Space-Time Image Velocimetry, the uniqueness of this approach lies in the follow
   Depth estimations are reliable only in fast and shallow flows, where wave dynamics are significantly
   affected by the finite depth.
 
-The code is meant to offer an Application Programming Interface for use within more high level applications that 
+The code is meant to offer an Application Programming Interface (API) for use within more high level applications that 
 utilize the method in conjunction with more high level functionalities such as Graphical User Interfaces, dashboards,
 or automization routines.
 
@@ -26,10 +27,14 @@ Using non-contact measurement of water surface dynamics to estimate water discha
 Water Resources Research, 58(9), e2022WR032829. 
 https://doi.org/10.1029/2022WR032829
 
-The code has been based on the original kOmega code developed by Giulio Dolcetti
+Examples and prospects of this approach are described in a recent HydroLink article, see
+https://www.iahr.org/library/infor?pid=40120
+
+The code has been based on the original kOmega Matlab code developed by Giulio Dolcetti
 (University of Trento, Italy) and released on https://doi.org/10.5281/zenodo.7998891
 
 The API of the code can:
+
 * ingest a set of frames or frames taken from a video
 * Slice these into "interrogation window" for which x- and y-directional velocities must be estimated
 * Analyze advective velocities per interrogation window using the spectral analysis.
