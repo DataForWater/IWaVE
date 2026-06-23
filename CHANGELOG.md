@@ -1,16 +1,26 @@
-## [0.3.2] - 2026-06-18
+## [0.4.0] - 2026-06-23
+
+> [!IMPORTANT]
+> A small change in the API has been made. Several parameters that are only used in the velocimetry calculation
+> have been moved to the method `iwave.velocimetry`. The parameter `twosteps` has been replaced by `pass_downsampling`.
+> Check the README for examples.
+
 ### Added
-* Added the capability to run an arbitrary number of passes with desired downsampling factors
+* Added the capability to run an arbitrary number of passes with desired downsampling factors using parameter
+  `pass_downsampling`.
+
 ### Changed
 * Made multiple pass sequential to avoid double-loading of images
-* Moved chek for blank windows before spectra calculations to avoid unnecessary calculations
+* Moved check for blank windows before spectra calculations to avoid unnecessary calculations
 * Increased default popsize to improve convergence
 * Moved definition of velocimetry parameters outside of __init__
 * Brought multiple pass calculations to a higher level
 * Modified README to reflect new changes
+
 ### Deprecated
 ### Removed
 * Removed distinct one-step and two-steps optimisation functions
+
 ### Fixed
 * Resolved bug which prevented windows with different size along x and y. 
 * Fixed wrong sign of y velocity component
