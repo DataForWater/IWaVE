@@ -8,7 +8,7 @@ import multiprocessing
 
 from scipy import optimize
 from tqdm import tqdm
-from typing import Tuple, List, Union
+from typing import Optional, Tuple, List, Union
 
 from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 
@@ -221,7 +221,7 @@ def optimise_velocity(
     chunk_size: int = 50,
     gauss_width: float=1,
     desc="Optimizing windows",
-    pass_downsampling: List[int] = None,
+    pass_downsampling: Optional[List[int]] = None,
     **kwargs
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -264,10 +264,11 @@ def optimise_velocity(
         gauss_width > 1 could be useful with very noisy spectra.
     chunk_size : int, optional
         Number of spectra to process at a time. Defaults to 50
-    pass_downsampling: List[int], optional
-        List of downsampling rates (default [1]). If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to
-        'downsample'. Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the
-        images spatially.
+    pass_downsampling: list of int, optional
+        List of downsampling rates. If None (default), this will be set to [2, 1], meaning that first
+        the optimization will occur with a trimmed spectrum of half, and after, refined with the full (1) spectrum. 
+        Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images 
+        spatially.
     **kwargs : dict
         keyword arguments to pass to `scipy.optimize.differential_evolution, see also
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
