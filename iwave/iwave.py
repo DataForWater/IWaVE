@@ -39,9 +39,9 @@ class Iwave(object):
         time_overlap: int = 0,
         fps: Optional[float] = None,
         imgs: Optional[np.ndarray] = None,
-        norm: Optional[Literal["time", "xy"]] = "time",
+        norm: Literal["time", "xy"] = "time",
         spectrum_threshold: Optional[float] = 1.0,
-        smax: Optional[float] = 4.0,
+        smax: float = 4.0,
         window_chunk_size: Optional[int] = 50,
     ):
         """Initialize an Iwave instance.
@@ -357,7 +357,7 @@ class Iwave(object):
         self.fps = fps
         self.imgs = io.get_imgs(path=path, wildcard=wildcard)
 
-    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
+    def read_video(self, file: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1, fps: Optional[float] = None):
         """Read video from start to end frame.
 
         Parameters
@@ -368,12 +368,18 @@ class Iwave(object):
             The starting frame number from which to begin reading the video.
         end_frame : int, optional
             The ending frame number until which to read the video.
+        fps : float, optional
+            frames per second (must be explicitly set if it cannot be read from the video)
         stride : int, optional
             lower the sampling rate by this factor. Default 1.
         """
         # set the FPS from the video metadata
         cap = cv2.VideoCapture(file)
         self.fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps is not None:
+            self.fps = fps
+        if self.fps is None:
+            raise ValueError("FPS could not be read from video metadata. Please provide fps explicitly with `fps=<value>`.")
 
         cap.release()
         del cap

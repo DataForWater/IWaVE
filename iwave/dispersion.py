@@ -369,14 +369,15 @@ def spectrum_downsample(
         image acquisition rate (fps)
     window_dims: [int, int, int]
         [dim_t, dim_y, dim_x] window dimensions
-    downsample: int=1
-        downsampling rate. If downsample > 1, then the spectrum is trimmed using a trimming ratio equal to 'downsample'.
-        Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially.
+    downsample: int
+        downsampling rate. If downsample > 1, then the spectrum is trimmed using a factor of `downsample`.
+        This removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially
+        using a stride equal to `downsample`.
 
     Returns
     -------
-    trimmed_spectrum : np.ndarray
-        trimmed spectrum
+    spectrum_trimmed : np.ndarray
+        spectrum, trimmed by downsample
     res : float
         resolution (unchanged)
     fps : float
