@@ -45,28 +45,19 @@ def wave_numbers(
         wave numbers of time, y and x
 
     """
-    ks = 2 * np.pi / res  # this assumes the resolution is the same in x and
-    # y-direction: TODO make variable for both directions
-    kts = 2* np.pi * fps # change frequency units to rad/s
-    dkt = kts / window_dims[-3]
-    dky = ks / window_dims[-2]
-    dkx = ks / window_dims[-1]
-    # omega wave numbers (time dim)
-    kt = np.arange(0, kts, dkt)
-    kt = kt[0:np.int64(np.ceil(len(kt) / 2))]
+    # omega wave numbers (time dim)    
+    kt = np.fft.fftfreq(window_dims[-3], d=1/fps) * 2 * np.pi  # rad/s
+    kt = kt[:int(np.ceil(len(kt)/2))]  # abbreviate to positive omega
 
-    # determine wave numbers in x-direction
-    kx = np.arange(0, ks, dkx)
-    # kx = 0:dkx: (ks - dkx)
-    ky = np.arange(0, ks, dky)
+    # determine wave numbers in x- and y-direction
+    # this assumes the resolution is the same in x and
+    # y-direction: TODO make variable for both directions
+    kx = np.fft.fftfreq(window_dims[-1], d=res) * 2 * np.pi  # rad/m
+    ky = np.fft.fftfreq(window_dims[-2], d=res) * 2 * np.pi  # rad/m
 
     # apply fftshift on determined wave numbers
     kx = np.fft.fftshift(kx)
     ky = np.fft.fftshift(ky)
-    idx_x0 = np.where(kx == 0)[0][0]
-    kx[0: idx_x0] = kx[0:idx_x0] - kx[idx_x0 - 1] - dkx
-    idx_y0 = np.where(ky == 0)[0][0]
-    ky[0: idx_y0] = ky[0:idx_y0] - ky[idx_y0 - 1] - dky
 
     return kt, ky, kx
 
@@ -123,6 +114,11 @@ def _numba_fourier_transform_multi(
     """
     spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
     for m in nb.prange(imgs.shape[0]):
+        # Skip FFT computation for zero windows (common in edge cases)
+        if not np.any(imgs[m]):
+            spectra[m] = 0.0
+            continue
+        
         spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
         for n in nb.prange(imgs.shape[1]):
             spectrum_3d[n] = fftshift_(
@@ -307,16 +303,12 @@ def spectrum_preprocessing(
 
     kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
 
-    # set all frequencies higher than the threshold frequency to 0
-    kt_reshaped = kt[:, np.newaxis, np.newaxis]  # reshape kt to be broadcastable
-    kt_threshold_bc = np.broadcast_to(kt_threshold, (kt.shape[0], kt_threshold.shape[1], kt_threshold.shape[
-        2]))  # broadcast kt_threshold to match the dimensions of kt
-    kt_bc = np.broadcast_to(kt_reshaped, kt_threshold_bc.shape)  # broadcast kt to match the dimensions of kt_threshold
-    mask = np.where(kt_bc <= kt_threshold_bc, 1, 0)  # create mask
-    mask = np.expand_dims(mask, axis=0)
+    # create mask
+    kt_bc = kt[:, None, None]  
+    mask = kt_bc <= kt_threshold 
 
-    preprocessed_spectrum = preprocessed_spectrum * mask  # apply mask
-
+    preprocessed_spectrum *= mask  # apply mask
+    
     # remove NaNs
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
     return preprocessed_spectrum

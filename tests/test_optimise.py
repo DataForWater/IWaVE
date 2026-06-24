@@ -114,8 +114,8 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         penalty_weight=0,
         gravity_waves_switch=True,
         turbulence_switch=True,
-        downsample=1,
-        popsize=10,
+        pass_downsampling=[1],
+        popsize=20,
         workers=1,
         maxiter=1000,
         # updating="deferred"
@@ -151,10 +151,6 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
         time_size=128,
         time_overlap=0,
         fps=fps,
-        dmin=depth_min,
-        dmax=depth_max,
-        gravity_waves_switch=True,
-        turbulence_switch=True,
     )
     
     kt_gw, kt_turb = dispersion.dispersion(
@@ -176,20 +172,32 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
 
     iw.x = np.array([0., 1.])
     iw.y = np.array([0.])
+    
+    # single-pass velocimetry
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
-        twosteps=False
+        popsize= 20,
+        pass_downsampling=[1],
+        dmin=depth_min,
+        dmax=depth_max,
+        gravity_waves_switch=True,
+        turbulence_switch=True,
     )
     
     vy_1step = iw.vy
     vx_1step = iw.vx 
     d_1step = iw.d
        
+    # two-passes velocimetry
     iw.velocimetry(
         alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
         depth=depth,
-        twosteps=True
+        popsize= 20,
+        dmin=depth_min,
+        dmax=depth_max,
+        gravity_waves_switch=True,
+        turbulence_switch=True,
     )
 
     vy_2steps = iw.vy
@@ -205,8 +213,7 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vy_1step - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_1step - velocity[1]) < 0.01)
     assert np.all(np.abs(d_1step - depth) < 0.05)
-    
+
     assert np.all(np.abs(vy_2steps - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_2steps - velocity[1]) < 0.01)
     assert np.all(np.abs(d_2steps - depth) < 0.05)
-    

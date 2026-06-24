@@ -18,7 +18,7 @@ def test_numpy_fft(img_windows_norm):
     windows = img_windows_norm[-1]
     spectrum = spectral._numpy_fourier_transform(windows)
     assert spectrum.shape == (
-        int(np.ceil(len(windows) / 2)),
+        int(np.ceil(len(windows)/2)),
         windows.shape[1],
         windows.shape[2]
     )

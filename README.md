@@ -1,10 +1,11 @@
 # IWaVE
 Image Wave Velocimetry Estimation
 
-This library performs simultaneous analysis of 2D velocimetry and stream depth 
-through 2D Fourier transform methods, with a physics-based approach. 
-Unlike existing velocimetry approaches such as Particle Image Velocimetry or
+This library performs simultaneous analysis of 2D velocimetry and depth in lakes, coastlines, estuaries and
+rivers with highly complex bathymetric and wave dynamics through 2D Fourier transform methods using a physics-based
+approach. Unlike existing velocimetry approaches such as Particle Image Velocimetry or
 Space-Time Image Velocimetry, the uniqueness of this approach lies in the following:
+
 * velocities that are advective of nature, can be distinguished from other wave forms such as wind waves. 
   This makes the approach particularly useful in estuaries or river stretches affected strongly by wind,
   or in shallow streams in the presence of standing waves.
@@ -15,7 +16,22 @@ Space-Time Image Velocimetry, the uniqueness of this approach lies in the follow
   Depth estimations are reliable only in fast and shallow flows, where wave dynamics are significantly
   affected by the finite depth.
 
-The code is meant to offer an Application Programming Interface for use within more high level applications that 
+## Gallery
+
+![lake_garda_iwave](https://github.com/user-attachments/assets/edbb863c-ce1c-4448-afec-c10ab479c2cd)
+
+*Image license: Creative Commons Attribution 4.0 International 
+([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). © 2026 Giulio Dolcetti.*
+
+This figure gives an example of surface current velocity distribution reconstruction with IWaVE. The 
+video was recorded by a drone on Lake Garda (Italy) during a maintenance opening of the Adige-Garda tunnel. 
+The higher-velocity higher-turbidity plume is caused by the release of water from the Adige River 
+through the 10 km-long tunnel. The background surface velocity distribution outside of the plume is 
+wind-generated. 
+
+## Purpose
+
+The code is meant to offer an Application Programming Interface (API) for use within more high level applications that 
 utilize the method in conjunction with more high level functionalities such as Graphical User Interfaces, dashboards,
 or automization routines.
 
@@ -26,10 +42,14 @@ Using non-contact measurement of water surface dynamics to estimate water discha
 Water Resources Research, 58(9), e2022WR032829. 
 https://doi.org/10.1029/2022WR032829
 
-The code has been based on the original kOmega code developed by Giulio Dolcetti
+Examples and prospects of this approach are described in a recent HydroLink article, see
+https://www.iahr.org/library/infor?pid=40120
+
+The code has been based on the original kOmega Matlab code developed by Giulio Dolcetti
 (University of Trento, Italy) and released on https://doi.org/10.5281/zenodo.7998891
 
 The API of the code can:
+
 * ingest a set of frames or frames taken from a video
 * Slice these into "interrogation window" for which x- and y-directional velocities must be estimated
 * Analyze advective velocities per interrogation window using the spectral analysis.
@@ -72,8 +92,8 @@ from iwave import Iwave
 # Initialize IWaVE object
 iw = Iwave(
     resolution=0.01,
-    window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
-    overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
+    window_size=(64, 64),  # size of interrogation windows over which velocities are estimated
+    overlap=(32, 32),  # overlap in space (y, x) used to select windows from images or frames
     time_size=250,  # amount of frames in time used for one spectral analysis
     time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of 
         # time_size implies that you use a 50% overlap in time between frame sets.
@@ -128,8 +148,8 @@ from iwave import Iwave, sample_data
 
 iw = Iwave(
     resolution=0.01,  # resolution of videos you will analyze in meters. 
-    window_size=(128, 128),  # size of interrogation windows over which velocities are estimated
-    overlap=(64, 64),  # overlap in space (y, x) used to select windows from images or frames
+    window_size=(64, 64),  # size of interrogation windows over which velocities are estimated
+    overlap=(32, 32),  # overlap in space (y, x) used to select windows from images or frames
     time_size=250,  # amount of frames used for one spectral analysis
     time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of 
         # time_size implies that you use a 50% overlap in time between frame sets.
@@ -204,8 +224,6 @@ def main():
   iw.velocimetry(
     alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
     depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-    twosteps=True # option to perform the calculation in two steps. If True, the first step is calculated based on
-                   # a reduced-dimension problem and serves as initialisation of the second step.
   )
   
   ax = plt.axes()
@@ -236,14 +254,13 @@ value for depth, even when this is not known accurately.
 
 The flow parameters are calculated by maximising the cross-correlation between the measured spectrum of the surface elevation and a synthetic spectrum generated according to linear wave theory. This is done using a differential evolution algorithm (`scipy.optimize.differential_evolution`) which maximises the chances to identify a global maximum but may converge slowly, especially when the window size is large and/or there are more parameters to be estimated (e.g., also the water depth).
 
-`twosteps = True` (default) will run the optimisation in two steps (set to `False` for single run). The first step
+`pass_downsampling = [2, 1]` (default) will run the optimisation in two steps. The first step
 employs a trimmed
-spectrum with reduced dimensions, and is used to identify an initial estimate of the flow velocity (depth effects are
+spectrum with reduced dimensions by a factor of 2, and is used to identify an initial estimate of the flow velocity (depth effects are
 neglected during the first step, even when `depth==0`). During the second step, the search of the optimum is confined
-within a region between 90% and 110% of the initial estimate. The two-steps approach can reduce the computation time
+within a region between -0.1 m/s and +0.1 m/s of the initial estimate. The two-steps approach can reduce the computation time
 by around 50% for large problems, but could be less robust if the input images are noisy or have a low resolution. In
-that case, it is recommended to run `twosteps = True` while setting `first_pass_downsample = 1` during the
-initialisation to avoid an excessive loss in resolution.
+that case, it is recommended to set `pass_downsampling = [1, 1]` to avoid an excessive loss in resolution.
 
 > [!IMPORTANT]
 > Optimization of the velocities occurs with a possibly large amount of spawned parallelized processes.
@@ -310,8 +327,6 @@ iw = Iwave(
 iw.velocimetry(
   alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
   depth=0  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
-  twosteps=True # option to perform the calculation in two steps. If True, the first step is calculated based on
-                 # a reduced-dimension problem and serves as initialisation of the second step. 
 )
 
 f, axs = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
