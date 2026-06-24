@@ -3,7 +3,7 @@ Image Wave Velocimetry Estimation
 
 This library performs simultaneous analysis of 2D velocimetry and depth in lakes, coastlines, estuaries and
 rivers with highly complex bathymetric and wave dynamics through 2D Fourier transform methods using a physics-based
-approach. sUnlike existing velocimetry approaches such as Particle Image Velocimetry or
+approach. Unlike existing velocimetry approaches such as Particle Image Velocimetry or
 Space-Time Image Velocimetry, the uniqueness of this approach lies in the following:
 
 * velocities that are advective of nature, can be distinguished from other wave forms such as wind waves. 
@@ -15,6 +15,21 @@ Space-Time Image Velocimetry, the uniqueness of this approach lies in the follow
 * If the depth is not known, it can be estimated along with the optimization of x and y-directional velocity.
   Depth estimations are reliable only in fast and shallow flows, where wave dynamics are significantly
   affected by the finite depth.
+
+## Gallery
+
+![lake_garda_iwave](https://github.com/user-attachments/assets/edbb863c-ce1c-4448-afec-c10ab479c2cd)
+
+*Image license: Creative Commons Attribution 4.0 International 
+([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). © 2026 Giulio Dolcetti.*
+
+This figure gives an example of surface current velocity distribution reconstruction with IWaVE. The 
+video was recorded by a drone on Lake Garda (Italy) during a maintenance opening of the Adige-Garda tunnel. 
+The higher-velocity higher-turbidity plume is caused by the release of water from the Adige River 
+through the 10 km-long tunnel. The background surface velocity distribution outside of the plume is 
+wind-generated. 
+
+## Purpose
 
 The code is meant to offer an Application Programming Interface (API) for use within more high level applications that 
 utilize the method in conjunction with more high level functionalities such as Graphical User Interfaces, dashboards,
