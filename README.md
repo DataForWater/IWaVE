@@ -381,3 +381,8 @@ You can now run the tests by running:
 ```commandline
 pytest ./tests
 ```
+
+Credits:
+Giulio Dolcetti 
+Hessel Winsemius
+Salvador Peña-Haro
