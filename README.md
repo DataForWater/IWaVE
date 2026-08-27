@@ -383,6 +383,9 @@ pytest ./tests
 ```
 
 Credits:
+
 Giulio Dolcetti 
+
 Hessel Winsemius
+
 Salvador Peña-Haro
