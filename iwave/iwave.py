@@ -100,6 +100,11 @@ class Iwave(object):
         self.quality = None  # quality parameter (0 < q < 1), where 1 is highest quality and 0 is lowest quality
         self.status = None  # Boolean flag indicating if the optimizer exited successfully
         self.message = None  # termination message returned by the optimiser
+        self.status_windows = None
+        self.message_windows = None
+        self.method = None
+        self.method_options = None
+        self.sampling_metadata = None  # per-window audit records; None entries for DE
                 
     def __repr__(self):
         if self.imgs is not None:
@@ -404,19 +409,21 @@ class Iwave(object):
         dmax: Optional[float] = 3.0,
         gravity_waves_switch: Optional[bool] = True,
         turbulence_switch: Optional[bool] = True,
-        penalty_weight: Optional[float] = 1,
-        **opt_kwargs # If True, the calculations are initially performed on a spectrum with reduced dimensions,
-                            # and subsequently refined during a second step using the whole spectrum. This will reduce 
-                            # computational time for large problems.
+        penalty_weight: Optional[float] = None,
+        method: Literal["differential_evolution", "hough"] = "differential_evolution",
+        de_options: Optional[dict] = None,
+        hough_options: Optional[dict] = None,
+        progress: bool = True,
+        gauss_width: Optional[float] = None,
+        **opt_kwargs
     ):
         """
         Estimate and set the velocity components u and v on the instance from the subwindowed spectra.
 
-        The optimisation is performed using the differential evolution algorithm of `scipy.optimize`. You can pass
-        arguments of this function to the optimiser. Default arguments are set as a starting point.
-
-        If you set `twosteps=True`, the optimisation is performed twice per chunk, with a reduced spectrum in the 
-        first step without optimizing depth, and a refined step with full spectrum and optimizing depth.
+        Differential evolution remains the default, with its existing effective
+        defaults. Select method='hough' for fixed-depth analytic voting; choose
+        fixed/adaptive spatial sampling inside hough_options. Hough calculates
+        neither cost nor quality (their result arrays are NaN placeholders).
 
         Parameters
         ----------
@@ -444,6 +451,29 @@ class Iwave(object):
             Outliers can be frequent if smax > 2 * flow velocity. Increase penalty_weight only if reducing smax 
             is not possible, since setting penalty_weight > 0 may introduce a bias.
         
+        method : {'differential_evolution', 'hough'}
+            Backend selection; default is differential_evolution.
+        de_options : dict, optional
+            DE-only gauss_width, penalty_weight, pass_downsampling and nested
+            scipy_options. Nested overrides merge with the existing defaults.
+        hough_options : dict, optional
+            Hough-only settings, including sampling='fixed' (default) or
+            'adaptive', filling_ratio=1.0, and optional sampling_options for
+            adaptive batch/stability settings. Requires depth > 0.
+        progress : bool, optional
+            Enable the parent progress bar (default True). False is quiet.
+        gauss_width : float, optional
+            Legacy DE Gaussian width; default 1.0. penalty_weight,
+            pass_downsampling and opt_kwargs also remain supported for DE.
+            Do not mix legacy DE settings with de_options or use them on Hough.
+
+        Notes
+        -----
+        status_windows and message_windows retain per-window outcomes; status
+        summarises all windows. method_options records resolved settings.
+        sampling_metadata holds Hough selected (iy,ix) pairs, counts and timing
+        records; its entries are None on DE. None of these is uncertainty.
+
         See also
         --------
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
@@ -453,25 +483,18 @@ class Iwave(object):
             raise AttributeError(
                 "No images available. Please set images first `iw.imgs = imgs`, where `imgs` is a numpy array "
                 "of images, or read a video file using `iw.read_video(file)`")
-        # ensure defaults are set if nothing is provided
-        if not opt_kwargs:
-            opt_kwargs = OPTIM_KWARGS_SADE
-        if not pass_downsampling:
-            pass_downsampling = [2, 1]
-        if len(pass_downsampling)==1 and penalty_weight != 0:
-            # self.penalty_weight = 0
-            print(
-                f"Velocity and especially depth estimations with the 1 step approach are biased when `penalty_weight` "
-                f"is not zero. It is recommended to use the two steps approach and/or set `first_pass_downsample=1`, "
-                f"or alternatively to set `penalty_weight = 0` and `smax` to reduce the number of outliers."
-            )
-        # decide if downsampling is applied or not
-        if len(pass_downsampling) > 1:
-            print(
-                    f"Optimization in {len(pass_downsampling)} steps with spectrum downsampling factor {pass_downsampling}"
-                )
-        else:
-            print("Optimization in one step with full resolution.")
+        # Preserve old DE calls; keep method-specific settings separate.
+        legacy = dict(opt_kwargs)
+        for key, value in (("penalty_weight", penalty_weight),
+                           ("pass_downsampling", pass_downsampling),
+                           ("gauss_width", gauss_width)):
+            if value is not None:
+                legacy[key] = value
+        de, hough = optimise.resolve_method_options(
+            method, de_options, hough_options, legacy,
+            scipy_defaults=OPTIM_KWARGS_SADE)
+        if method == "hough" and depth == 0:
+            raise ValueError("Hough currently requires fixed depth > 0; depth=0 remains DE-only.")
         # set search bounds to -/+ maximum velocity for both directions, and depth if applicable
         if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (dmin, dmax)]
@@ -486,29 +509,36 @@ class Iwave(object):
         bounds_list = [tuple(bounds) for _ in range(len(self.spectrum))]
         
         # Optimize velocities and depth for each window in the spectrum
-        output, cost, quality = optimise.optimise_velocity(
+        output, cost, quality, status, messages, metadata = optimise.optimise_velocity(
             measured_spectra=self.spectrum,
             bnds_list=bounds_list,
             vel_indx=alpha,
             window_dims=self.spectrum_dims,
             res=self.resolution,
             fps=self.fps,
-            penalty_weight=penalty_weight,
             gravity_waves_switch=gravity_waves_switch,
             turbulence_switch=turbulence_switch,
             chunk_size=self.window_chunk_size,
-            gauss_width=1,  # TODO: figure out defaults
-            pass_downsampling=pass_downsampling,
             desc="Optimizing windows",
-            **opt_kwargs
+            method=method,
+            de_options=de,
+            hough_options=hough,
+            progress=progress,
+            return_diagnostics=True,
+            return_metadata=True,
         )
         self.vy = output[:, 0].reshape(len(self.y), len(self.x))
         self.vx = output[:, 1].reshape(len(self.y), len(self.x))
         self.d = output[:, 2].reshape(len(self.y), len(self.x))
         self.cost = cost.reshape(len(self.y), len(self.x))
         self.quality = quality.reshape(len(self.y), len(self.x))
-        self.status = True
-        self.message = "Optimization terminated successfully."
+        self.status_windows = status.reshape(len(self.y), len(self.x))
+        self.message_windows = messages.reshape(len(self.y), len(self.x))
+        self.sampling_metadata = metadata.reshape(len(self.y), len(self.x))
+        self.method = method
+        self.method_options = de if de is not None else hough
+        self.status = bool(status.size and np.all(status))
+        self.message = f"{np.count_nonzero(status)}/{status.size} windows reported success ({method})."
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):

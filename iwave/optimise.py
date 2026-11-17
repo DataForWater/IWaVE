@@ -9,6 +9,8 @@ import multiprocessing
 from scipy import optimize
 from tqdm import tqdm
 from typing import Optional, Tuple, List, Union
+from copy import deepcopy
+from numbers import Real
 
 from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 
@@ -198,10 +200,79 @@ def optimize_single_spectrum_velocity(
     
     
 
-def optimize_single_spectrum_velocity_unpack(kwargs):
-    """Wrap all arguments for optimization in a single dictionary.
+DE_DEFAULTS = {"gauss_width": 1.0, "penalty_weight": 1.0,
+               "pass_downsampling": [2, 1]}
+
+
+def resolve_method_options(method="differential_evolution", de_options=None,
+                           hough_options=None, legacy=None, scipy_defaults=None):
+    """Normalise options once in the parent; preserve legacy DE-only calls.
+
+    Nested options merge defaults; a legacy nonempty SciPy kwargs dictionary
+    retains its original replace-defaults behaviour. Do not mix the two styles.
     """
-    return optimize_single_spectrum_velocity(**kwargs)
+    legacy = dict(legacy or {})
+    if method == "hough":
+        if de_options is not None or legacy:
+            raise ValueError("Hough accepts hough_options only, not DE/legacy optimisation settings.")
+        from iwave.optimise_hough import resolve_hough_options
+        return None, resolve_hough_options(hough_options)
+    if method != "differential_evolution":
+        raise ValueError("method must be 'differential_evolution' or 'hough'.")
+    if hough_options is not None:
+        raise ValueError("hough_options is only valid with method='hough'.")
+    if de_options is not None and not isinstance(de_options, dict):
+        raise ValueError("de_options must be a dictionary or None.")
+    if de_options is not None and legacy:
+        raise ValueError("Do not mix de_options with legacy top-level DE settings.")
+    unknown = set(de_options or {}) - {*DE_DEFAULTS, "scipy_options"}
+    if unknown:
+        raise ValueError("Unknown de_options: " + ", ".join(map(str, unknown)))
+    out = deepcopy(DE_DEFAULTS)
+    out.update(deepcopy(de_options or {}))
+    scipy_options = out.pop("scipy_options", {})
+    if not isinstance(scipy_options, dict):
+        raise ValueError("de_options['scipy_options'] must be a dictionary.")
+    scipy_options = {**deepcopy(scipy_defaults or {}), **scipy_options}
+    if legacy:
+        for key in DE_DEFAULTS:
+            if key in legacy:
+                out[key] = deepcopy(legacy.pop(key))
+        if not out["pass_downsampling"]:
+            out["pass_downsampling"] = [2, 1]
+        if legacy:
+            scipy_options = legacy  # historical nonempty kwargs semantics
+    for key in ("gauss_width", "penalty_weight"):
+        value = out[key]
+        if (isinstance(value, (bool, np.bool_)) or not isinstance(value, Real)
+                or not np.isfinite(value) or value < 0
+                or (key == "gauss_width" and value == 0)):
+            raise ValueError(f"Invalid DE {key}.")
+    passes = out["pass_downsampling"]
+    if (not isinstance(passes, (list, tuple)) or not passes
+            or any(isinstance(n, (bool, np.bool_)) or not isinstance(n, (int, np.integer))
+                   or n < 1 for n in passes)):
+        raise ValueError("DE pass_downsampling must be a nonempty list of positive integers.")
+    if {"func", "bounds", "args"} & set(scipy_options):
+        raise ValueError("Do not override the DE objective, bounds or objective args.")
+    out["pass_downsampling"] = list(passes)
+    out["scipy_options"] = dict(scipy_options)
+    return out, None
+
+
+def optimize_single_spectrum_velocity_unpack(kwargs):
+    """Module-level, spawn-safe dispatcher; absent method still means DE."""
+    arguments = dict(kwargs)
+    method = arguments.pop("method", "differential_evolution")
+    metadata = arguments.pop("_return_metadata", False)
+    if method == "hough":
+        from iwave.optimise_hough import optimize_single_spectrum_velocity_hough
+        return optimize_single_spectrum_velocity_hough(
+            **arguments, return_metadata=metadata)
+    if method != "differential_evolution":
+        raise ValueError("Unknown velocity estimation method.")
+    result = optimize_single_spectrum_velocity(**arguments)
+    return (*result, None) if metadata else result
 
 def silence_output():
     """Suppress output of worker functions."""
@@ -215,15 +286,21 @@ def optimise_velocity(
     window_dims: Tuple[int, int, int], 
     res: float, 
     fps: float,
-    penalty_weight: float=1,
+    penalty_weight: Optional[float]=None,
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True,
     chunk_size: int = 50,
-    gauss_width: float=1,
+    gauss_width: Optional[float]=None,
     desc="Optimizing windows",
     pass_downsampling: Optional[List[int]] = None,
+    method: str = "differential_evolution",
+    de_options: Optional[dict] = None,
+    hough_options: Optional[dict] = None,
+    progress: bool = True,
+    return_diagnostics: bool = False,
+    return_metadata: bool = False,
     **kwargs
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple:
     """
     Runs the optimisation to calculate the optimal velocity components
 
@@ -269,9 +346,23 @@ def optimise_velocity(
         the optimization will occur with a trimmed spectrum of half, and after, refined with the full (1) spectrum. 
         Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images 
         spatially.
+    method : {'differential_evolution', 'hough'}
+        Defaults to the existing DE backend. Hough requires fixed positive depth.
+    de_options, hough_options : dict, optional
+        Separate method settings; mixing namespaces is an error. DE accepts
+        gauss_width, penalty_weight, pass_downsampling and nested scipy_options.
+        Hough includes sampling ('fixed'/'adaptive') and filling_ratio.
+        Legacy top-level DE parameters/kwargs remain accepted on DE only, but
+        cannot be combined with de_options.
+    progress : bool
+        Enable the parent progress bar (default True); no worker prints.
+    return_diagnostics, return_metadata : bool
+        Default return is the original (optimal, cost, quality). Diagnostics
+        appends status/messages. Metadata additionally appends an object array
+        of per-window Hough audit records (None for DE) and requires diagnostics.
+        Hough cost/quality arrays contain NaN placeholders, not computed scores.
     **kwargs : dict
-        keyword arguments to pass to `scipy.optimize.differential_evolution, see also
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.differential_evolution.html
+        Legacy SciPy DE settings; use de_options['scipy_options'] for new code.
 
     Returns
     -------
@@ -286,41 +377,35 @@ def optimise_velocity(
         While there is no direct link with results uncertainties, higher q indicates better quality data.
     """
 
-    def generate_args(): #, vel_indx, window_dims, res, fps, penalty_weight,
-        # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
-
-        """
-        Parameters
-        ----------
-        measured_spectra : LazySpectrumArray
-            A single set of measured spectra and corresponding bounds list
-
-        bnds_list : Tuple
-            The bounds list for the measured spectra
-
-
-        Returns
-        -------
-        tuple
-            A single set of arguments for each corresponding pair in measured_spectra and bnds_list
-        """
-        args_list = [
-            dict(
-                measured_spectrum=measured_spectrum,
-                bnds=bnds,
-                vel_indx=vel_indx,
-                window_dims=window_dims,
-                res=res,
-                fps=fps,
-                penalty_weight=penalty_weight,
-                gravity_waves_switch=gravity_waves_switch,
-                turbulence_switch=turbulence_switch,
-                pass_downsampling=pass_downsampling,
-                gauss_width=gauss_width,
-                kwargs=kwargs,
-            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
-        ]
-        return args_list
+    # Resolve and reject incompatible settings before opening worker processes.
+    legacy = dict(kwargs)
+    for key, value in (("penalty_weight", penalty_weight),
+                       ("pass_downsampling", pass_downsampling),
+                       ("gauss_width", gauss_width)):
+        if value is not None:
+            legacy[key] = value
+    de, hough = resolve_method_options(method, de_options, hough_options, legacy)
+    if (isinstance(chunk_size, (bool, np.bool_))
+            or not isinstance(chunk_size, (int, np.integer)) or chunk_size < 1):
+        raise ValueError("chunk_size must be a positive integer.")
+    if not isinstance(progress, (bool, np.bool_)):
+        raise ValueError("progress must be Boolean.")
+    if return_metadata and not return_diagnostics:
+        raise ValueError("return_metadata=True requires return_diagnostics=True.")
+    if len(bnds_list) != len(measured_spectra):
+        raise ValueError("One bounds tuple is required per spectrum.")
+    if method == "hough":
+        from iwave.optimise_hough import validate_hough_setup
+        # A dummy bounds tuple validates shared settings even for empty batches.
+        for bounds in bnds_list if len(bnds_list) else [((-1, 1), (-1, 1), (1, 1))]:
+            validate_hough_setup(bounds, vel_indx, window_dims, res, fps,
+                                 gravity_waves_switch, turbulence_switch, hough)
+        backend_arguments = {"hough_options": hough}
+    else:
+        backend_arguments = dict(penalty_weight=de["penalty_weight"],
+                                 pass_downsampling=de["pass_downsampling"],
+                                 gauss_width=de["gauss_width"],
+                                 kwargs=de["scipy_options"])
 
     idxs = range(len(measured_spectra))  # Pair with indices
     # iter_args = generate_args(idxs)
@@ -331,7 +416,7 @@ def optimise_velocity(
     else:
         max_workers = None
     # Initialize progress bar before submitting tasks
-    progress_bar = tqdm(total=len(idxs), desc=desc)
+    progress_bar = tqdm(total=len(idxs), desc=desc, disable=not progress)
     
     for idx in idxs[::chunk_size]:
         # select and read the current data block in one go
@@ -349,12 +434,11 @@ def optimise_velocity(
                 window_dims=window_dims,
                 res=res,
                 fps=fps,
-                penalty_weight=penalty_weight,
                 gravity_waves_switch=gravity_waves_switch,
                 turbulence_switch=turbulence_switch,
-                pass_downsampling=pass_downsampling,
-                gauss_width=gauss_width,
-                kwargs=kwargs,
+                method=method,
+                _return_metadata=return_metadata,
+                **backend_arguments,
             ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
         ]
 
@@ -374,10 +458,18 @@ def optimise_velocity(
     # wrap results together
     optimal = np.array([
         [res[0], res[1], res[2]] if res is not None else [np.nan, np.nan, np.nan] for res in results
-    ])  # vy, vx, d
+    ]).reshape(-1, 3)  # vy, vx, d; also well-defined for empty input
     cost = np.array([res[3] if res is not None else np.nan for res in results])
     quality = np.array([res[4] if res is not None else np.nan for res in results])
 
+    if return_diagnostics:
+        status = np.array([res[5] if res is not None else False for res in results], dtype=bool)
+        messages = np.array([res[6] if res is not None else "Missing result" for res in results], dtype=object)
+        if return_metadata:
+            metadata = np.empty(len(results), dtype=object)
+            metadata[:] = [res[7] if res is not None else None for res in results]
+            return optimal, cost, quality, status, messages, metadata
+        return optimal, cost, quality, status, messages
     return optimal, cost, quality
 
 
