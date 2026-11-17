@@ -14,7 +14,7 @@ from copy import deepcopy
 
 K_MIN_BASE_BINS = 2.0 # minimum wavenumber parameter TODO: identify default
 DEFAULTS = dict(velocity_step=.01, vote_sigma=.015, k_min_factor=1.,
-                peak_height=.25, peak_prominence=.20, scale_percentile=99.5,
+                peak_height=.25, peak_prominence=.50, scale_percentile=99.5,
                 min_ridges=12, max_accumulator_mb=None)
 # Fixed design conventions, not separately fitted parameters.
 RADIAL_STRATA, ANGULAR_STRATA, CALIBRATION_COLUMNS = 4, 12, 32
@@ -273,10 +273,12 @@ class State:
         # Common a-priori calibration prefix, INCLUDED in the processing budget.
         # Adaptive can still start voting at its highest-power column, since
         # calibration uses at most a quarter of the budget, capped at 32 columns.
-        C=min(CALIBRATION_COLUMNS,max(1,self.M//4)) if self.M else 0
+        # C=min(CALIBRATION_COLUMNS,max(1,self.M//4)) if self.M else 0
+        C = self.M
         self.calibration_pairs=self.plan[:C]
         t=perf_counter()
         calibration=self.columns(self.calibration_pairs)
+        # calibration = self.spectrum
         self.scale=float(np.percentile(calibration,self.options['scale_percentile'])) if calibration.size else 0.
         if self.scale<=0 and calibration.size:
             self.scale=float(np.max(calibration))
