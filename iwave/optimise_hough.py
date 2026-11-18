@@ -6,7 +6,7 @@ from time import perf_counter
 import math
 from numbers import Real
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
 from scipy.signal import find_peaks
 from iwave import dispersion, spectral
 
@@ -314,6 +314,13 @@ class State:
         if len(self.used)+len(pairs)>self.M:
             raise ValueError('Sampler exceeded the spatial-column budget.')
         t=perf_counter(); columns=self.columns(pairs)/self.scale; rows=[]
+        # smooth spectrum frequency-wise before finding peaks
+        columns = gaussian_filter1d(
+            columns,
+            sigma=1.0,          # standard deviation in frequency bins
+            axis=0,            # columns has shape (n_frequencies, n_pairs)
+            mode="reflect",
+        )
         for column,(iy,ix) in zip(columns.T,pairs):
             peaks,props=find_peaks(column,height=self.options['peak_height'],prominence=self.options['peak_prominence'])
             for p,weight in zip(peaks,props['prominences']):
