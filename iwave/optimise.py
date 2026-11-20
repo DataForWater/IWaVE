@@ -204,23 +204,29 @@ DE_DEFAULTS = {"gauss_width": 1.0, "penalty_weight": 1.0,
                "pass_downsampling": [2, 1]}
 
 
-def resolve_method_options(method="differential_evolution", de_options=None,
-                           hough_options=None, legacy=None, scipy_defaults=None):
+def normalise_method(method):
+    """Validate the two public backend names."""
+    if isinstance(method, str) and method in ('DE', 'HNM'):
+        return method
+    raise ValueError("method must be 'DE' or 'HNM'.")
+
+
+def resolve_method_options(method="DE", de_options=None, hnm_options=None,
+                           legacy=None, scipy_defaults=None):
     """Normalise options once in the parent; preserve legacy DE-only calls.
 
     Nested options merge defaults; a legacy nonempty SciPy kwargs dictionary
     retains its original replace-defaults behaviour. Do not mix the two styles.
     """
     legacy = dict(legacy or {})
-    if method == "hough":
+    method = normalise_method(method)
+    if method == 'HNM':
         if de_options is not None or legacy:
-            raise ValueError("Hough accepts hough_options only, not DE/legacy optimisation settings.")
-        from iwave.optimise_hough import resolve_hough_options
-        return None, resolve_hough_options(hough_options)
-    if method != "differential_evolution":
-        raise ValueError("method must be 'differential_evolution' or 'hough'.")
-    if hough_options is not None:
-        raise ValueError("hough_options is only valid with method='hough'.")
+            raise ValueError('HNM accepts hnm_options only, not DE/legacy optimisation settings.')
+        from iwave.optimise_hnm import resolve_hnm_options
+        return None, resolve_hnm_options(hnm_options)
+    if hnm_options is not None:
+        raise ValueError('hnm_options is only valid with HNM.')
     if de_options is not None and not isinstance(de_options, dict):
         raise ValueError("de_options must be a dictionary or None.")
     if de_options is not None and legacy:
@@ -263,14 +269,12 @@ def resolve_method_options(method="differential_evolution", de_options=None,
 def optimize_single_spectrum_velocity_unpack(kwargs):
     """Module-level, spawn-safe dispatcher; absent method still means DE."""
     arguments = dict(kwargs)
-    method = arguments.pop("method", "differential_evolution")
+    method = normalise_method(arguments.pop("method", "DE"))
     metadata = arguments.pop("_return_metadata", False)
-    if method == "hough":
-        from iwave.optimise_hough import optimize_single_spectrum_velocity_hough
-        return optimize_single_spectrum_velocity_hough(
+    if method == 'HNM':
+        from iwave.optimise_hnm import optimize_single_spectrum_velocity_hnm
+        return optimize_single_spectrum_velocity_hnm(
             **arguments, return_metadata=metadata)
-    if method != "differential_evolution":
-        raise ValueError("Unknown velocity estimation method.")
     result = optimize_single_spectrum_velocity(**arguments)
     return (*result, None) if metadata else result
 
@@ -293,9 +297,9 @@ def optimise_velocity(
     gauss_width: Optional[float]=None,
     desc="Optimizing windows",
     pass_downsampling: Optional[List[int]] = None,
-    method: str = "differential_evolution",
+    method: str = "DE",
     de_options: Optional[dict] = None,
-    hough_options: Optional[dict] = None,
+    hnm_options: Optional[dict] = None,
     progress: bool = True,
     return_diagnostics: bool = False,
     return_metadata: bool = False,
@@ -346,12 +350,15 @@ def optimise_velocity(
         the optimization will occur with a trimmed spectrum of half, and after, refined with the full (1) spectrum. 
         Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images 
         spatially.
-    method : {'differential_evolution', 'hough'}
-        Defaults to the existing DE backend. Hough requires fixed positive depth.
-    de_options, hough_options : dict, optional
+    method : {'DE', 'HNM'}
+        DE is the default. HNM requires fixed positive depth.
+    de_options, hnm_options : dict, optional
         Separate method settings; mixing namespaces is an error. DE accepts
         gauss_width, penalty_weight, pass_downsampling and nested scipy_options.
-        Hough includes sampling ('fixed'/'adaptive') and filling_ratio.
+        HNM settings are flat, including Hough controls such as velocity_step,
+        vote_sigma, k_min_factor, peak_height and peak_prominence. Sampling,
+        filling_ratio, refine, relative_radius (default 0.8), min_radius,
+        initial_step_factor and NM controls such as maxfev use the same dictionary.
         Legacy top-level DE parameters/kwargs remain accepted on DE only, but
         cannot be combined with de_options.
     progress : bool
@@ -359,8 +366,8 @@ def optimise_velocity(
     return_diagnostics, return_metadata : bool
         Default return is the original (optimal, cost, quality). Diagnostics
         appends status/messages. Metadata additionally appends an object array
-        of per-window Hough audit records (None for DE) and requires diagnostics.
-        Hough cost/quality arrays contain NaN placeholders, not computed scores.
+        of per-window HNM audit records (None for DE) and requires diagnostics.
+        HNM cost/quality arrays contain NaN placeholders, not computed scores.
     **kwargs : dict
         Legacy SciPy DE settings; use de_options['scipy_options'] for new code.
 
@@ -384,7 +391,9 @@ def optimise_velocity(
                        ("gauss_width", gauss_width)):
         if value is not None:
             legacy[key] = value
-    de, hough = resolve_method_options(method, de_options, hough_options, legacy)
+    method = normalise_method(method)
+    de, hnm = resolve_method_options(
+        method, de_options=de_options, hnm_options=hnm_options, legacy=legacy)
     if (isinstance(chunk_size, (bool, np.bool_))
             or not isinstance(chunk_size, (int, np.integer)) or chunk_size < 1):
         raise ValueError("chunk_size must be a positive integer.")
@@ -394,13 +403,14 @@ def optimise_velocity(
         raise ValueError("return_metadata=True requires return_diagnostics=True.")
     if len(bnds_list) != len(measured_spectra):
         raise ValueError("One bounds tuple is required per spectrum.")
-    if method == "hough":
-        from iwave.optimise_hough import validate_hough_setup
+    if method == 'HNM':
+        # Validate all HNM settings before opening worker processes.
+        from iwave.optimise_hnm import validate_hnm_setup
         # A dummy bounds tuple validates shared settings even for empty batches.
         for bounds in bnds_list if len(bnds_list) else [((-1, 1), (-1, 1), (1, 1))]:
-            validate_hough_setup(bounds, vel_indx, window_dims, res, fps,
-                                 gravity_waves_switch, turbulence_switch, hough)
-        backend_arguments = {"hough_options": hough}
+            validate_hnm_setup(bounds, vel_indx, window_dims, res, fps,
+                               gravity_waves_switch, turbulence_switch, hnm)
+        backend_arguments = {'hnm_options': hnm}
     else:
         backend_arguments = dict(penalty_weight=de["penalty_weight"],
                                  pass_downsampling=de["pass_downsampling"],

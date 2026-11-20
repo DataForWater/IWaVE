@@ -5,6 +5,7 @@ import matplotlib.axes
 import matplotlib.pyplot as plt
 import numpy as np
 
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Literal
 from iwave import window, spectral, io, optimise, dispersion, LazySpectrumArray, LazyWindowArray
 
@@ -28,6 +29,56 @@ OPTIM_KWARGS_SADE = {
     "init" : 'sobol',
     "atol" : 1e-12
 }
+
+@dataclass(eq=False)
+class VelocimetryStatus:
+    """Window diagnostics for the latest fit, with a derived overall summary.
+    Status if False if estimates lie on the bounds of the search space.
+    None arrays mean that no fit has run. An empty completed fit is unsuccessful.
+    The summary is derived so it stays consistent with the window mask.
+    """
+
+    windows: Optional[np.ndarray] = field(default=None, repr=False)
+    windows_message: Optional[np.ndarray] = field(default=None, repr=False)
+    method: Optional[str] = None
+
+    def __post_init__(self):
+        if self.windows is None and self.windows_message is None:
+            return
+        if self.windows is None or self.windows_message is None:
+            raise ValueError('Window status and messages must be supplied together.')
+        self.windows = np.asarray(self.windows, dtype=bool)
+        self.windows_message = np.asarray(self.windows_message, dtype=object)
+        if self.windows.shape != self.windows_message.shape:
+            raise ValueError('Window status and messages must have the same shape.')
+
+    @property
+    def overall(self):
+        if self.windows is None:
+            return None
+        return bool(self.windows.size and np.all(self.windows))
+
+    @property
+    def overall_message(self):
+        if self.windows is None:
+            return None
+        suffix = f' ({self.method})' if self.method is not None else ''
+        return (f'{np.count_nonzero(self.windows)}/{self.windows.size} windows '
+                f'reported success{suffix}.')
+
+    @property
+    def global_message(self):
+        """Alias for overall_message; Python reserves the name global."""
+        return self.overall_message
+
+    def __bool__(self):
+        # Preserve the usual `if iw.status:` check without exposing array truth.
+        return bool(self.overall)
+
+    def __repr__(self):
+        return (f'VelocimetryStatus(overall={self.overall!r}, '
+                f'overall_message={self.overall_message!r})')
+
 
 class Iwave(object):
     def __init__(
@@ -98,14 +149,24 @@ class Iwave(object):
         self.d = None  # water depth (m)
         self.cost = None  # cost function value (float)
         self.quality = None  # quality parameter (0 < q < 1), where 1 is highest quality and 0 is lowest quality
-        self.status = None  # Boolean flag indicating if the optimizer exited successfully
-        self.message = None  # termination message returned by the optimiser
-        self.status_windows = None
-        self.message_windows = None
+        self.status = VelocimetryStatus()
         self.method = None
         self.method_options = None
         self.sampling_metadata = None  # per-window audit records; None entries for DE
                 
+    # Compatibility views of the structured status; no duplicate arrays.
+    @property
+    def status_windows(self):
+        return self.status.windows
+
+    @property
+    def message_windows(self):
+        return self.status.windows_message
+
+    @property
+    def message(self):
+        return self.status.overall_message
+
     def __repr__(self):
         if self.imgs is not None:
             no_imgs = len(self.imgs)
@@ -410,9 +471,9 @@ class Iwave(object):
         gravity_waves_switch: Optional[bool] = True,
         turbulence_switch: Optional[bool] = True,
         penalty_weight: Optional[float] = None,
-        method: Literal["differential_evolution", "hough"] = "differential_evolution",
+        method: Literal["DE", "HNM"] = "DE",
         de_options: Optional[dict] = None,
-        hough_options: Optional[dict] = None,
+        hnm_options: Optional[dict] = None,
         progress: bool = True,
         gauss_width: Optional[float] = None,
         **opt_kwargs
@@ -421,9 +482,9 @@ class Iwave(object):
         Estimate and set the velocity components u and v on the instance from the subwindowed spectra.
 
         Differential evolution remains the default, with its existing effective
-        defaults. Select method='hough' for fixed-depth analytic voting; choose
-        fixed/adaptive spatial sampling inside hough_options. Hough calculates
-        neither cost nor quality (their result arrays are NaN placeholders).
+        defaults. Select method='HNM' for Hough voting followed by
+        default-on radial-trust-region Nelder-Mead. hnm_options['refine']=False
+        disables refinement. HNM cost/quality arrays remain NaN placeholders.
 
         Parameters
         ----------
@@ -451,28 +512,39 @@ class Iwave(object):
             Outliers can be frequent if smax > 2 * flow velocity. Increase penalty_weight only if reducing smax 
             is not possible, since setting penalty_weight > 0 may introduce a bias.
         
-        method : {'differential_evolution', 'hough'}
-            Backend selection; default is differential_evolution.
+        method : {'DE', 'HNM'}
+            Backend selection; default is DE.
         de_options : dict, optional
             DE-only gauss_width, penalty_weight, pass_downsampling and nested
             scipy_options. Nested overrides merge with the existing defaults.
-        hough_options : dict, optional
-            Hough-only settings, including sampling='fixed' (default) or
-            'adaptive', filling_ratio=1.0, and optional sampling_options for
-            adaptive batch/stability settings. Requires depth > 0.
+        hnm_options : dict, optional
+            HNM settings: sampling='fixed'/'adaptive', filling_ratio=1.0,
+            refine=True, relative_radius=0.8, min_radius=None, n_candidates=1.
+            Hough controls: velocity_step=0.01 m/s,
+            vote_sigma=0.015 m/s, k_min_factor=1.0, peak_height=0.25,
+            peak_prominence=0.30, scale_percentile=99.5, min_ridges=12,
+            and max_accumulator_mb=None.
+            All detector, sampling and NM settings share this flat dictionary.
+            initial_step_factor=2 sets the initial NM step to factor*velocity_step.
+            None min_radius uses twice the actual maximum Hough grid spacing.
+            All NM restarts share a disk centred on the primary Hough estimate.
+            Requires depth > 0. No HNM penalty is implemented.
         progress : bool, optional
             Enable the parent progress bar (default True). False is quiet.
         gauss_width : float, optional
             Legacy DE Gaussian width; default 1.0. penalty_weight,
             pass_downsampling and opt_kwargs also remain supported for DE.
-            Do not mix legacy DE settings with de_options or use them on Hough.
+            Do not mix legacy DE settings with de_options or use them on HNM.
 
         Notes
         -----
-        status_windows and message_windows retain per-window outcomes; status
-        summarises all windows. method_options records resolved settings.
-        sampling_metadata holds Hough selected (iy,ix) pairs, counts and timing
-        records; its entries are None on DE. None of these is uncertainty.
+        status.windows and status.windows_message contain per-window outcomes.
+        status.overall is true only if every window succeeds; overall_message
+        gives the count. bool(status) is equivalent to bool(status.overall).
+        status_windows, message_windows and message remain read-only aliases.
+        method_options records resolved settings. sampling_metadata contains
+        HNM selected pairs and fitting diagnostics, or None on DE. These are
+        numerical diagnostics, not velocity uncertainty estimates.
 
         See also
         --------
@@ -490,11 +562,12 @@ class Iwave(object):
                            ("gauss_width", gauss_width)):
             if value is not None:
                 legacy[key] = value
-        de, hough = optimise.resolve_method_options(
-            method, de_options, hough_options, legacy,
-            scipy_defaults=OPTIM_KWARGS_SADE)
-        if method == "hough" and depth == 0:
-            raise ValueError("Hough currently requires fixed depth > 0; depth=0 remains DE-only.")
+        method = optimise.normalise_method(method)
+        de, hnm = optimise.resolve_method_options(
+            method, de_options=de_options, hnm_options=hnm_options,
+            legacy=legacy, scipy_defaults=OPTIM_KWARGS_SADE)
+        if method == 'HNM' and depth <= 0:
+            raise ValueError('HNM requires fixed depth > 0; depth=0 remains DE-only.')
         # set search bounds to -/+ maximum velocity for both directions, and depth if applicable
         if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (dmin, dmax)]
@@ -522,7 +595,7 @@ class Iwave(object):
             desc="Optimizing windows",
             method=method,
             de_options=de,
-            hough_options=hough,
+            hnm_options=hnm,
             progress=progress,
             return_diagnostics=True,
             return_metadata=True,
@@ -532,13 +605,14 @@ class Iwave(object):
         self.d = output[:, 2].reshape(len(self.y), len(self.x))
         self.cost = cost.reshape(len(self.y), len(self.x))
         self.quality = quality.reshape(len(self.y), len(self.x))
-        self.status_windows = status.reshape(len(self.y), len(self.x))
-        self.message_windows = messages.reshape(len(self.y), len(self.x))
+        self.status = VelocimetryStatus(
+            windows=status.reshape(len(self.y), len(self.x)),
+            windows_message=messages.reshape(len(self.y), len(self.x)),
+            method=method,
+        )
         self.sampling_metadata = metadata.reshape(len(self.y), len(self.x))
         self.method = method
-        self.method_options = de if de is not None else hough
-        self.status = bool(status.size and np.all(status))
-        self.message = f"{np.count_nonzero(status)}/{status.size} windows reported success ({method})."
+        self.method_options = de if de is not None else hnm
         
     
     def plot_velocimetry(self, ax: Optional[matplotlib.axes.Axes] = None, **kwargs):
