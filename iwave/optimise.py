@@ -212,7 +212,7 @@ def normalise_method(method):
 
 
 def resolve_method_options(method="DE", de_options=None, hnm_options=None,
-                           legacy=None, scipy_defaults=None):
+                           legacy=None, scipy_defaults=None, bnds=None):
     """Normalise options once in the parent; preserve legacy DE-only calls.
 
     Nested options merge defaults; a legacy nonempty SciPy kwargs dictionary
@@ -224,7 +224,7 @@ def resolve_method_options(method="DE", de_options=None, hnm_options=None,
         if de_options is not None or legacy:
             raise ValueError('HNM accepts hnm_options only, not DE/legacy optimisation settings.')
         from iwave.optimise_hnm import resolve_hnm_options
-        return None, resolve_hnm_options(hnm_options)
+        return None, resolve_hnm_options(hnm_options, bnds=bnds)
     if hnm_options is not None:
         raise ValueError('hnm_options is only valid with HNM.')
     if de_options is not None and not isinstance(de_options, dict):
@@ -351,7 +351,8 @@ def optimise_velocity(
         Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images 
         spatially.
     method : {'DE', 'HNM'}
-        DE is the default. HNM requires fixed positive depth.
+        DE is the default. HNM fits fixed depth or jointly fits velocity/log-depth
+        when the supplied positive depth bounds differ.
     de_options, hnm_options : dict, optional
         Separate method settings; mixing namespaces is an error. DE accepts
         gauss_width, penalty_weight, pass_downsampling and nested scipy_options.
@@ -359,6 +360,10 @@ def optimise_velocity(
         vote_sigma, k_min_factor, peak_height and peak_prominence. Sampling,
         filling_ratio, refine, relative_radius (default 0.8), min_radius,
         initial_step_factor and NM controls such as maxfev use the same dictionary.
+        depth_initial selects the reference depth for Hough and the NM start;
+        log_depth_step sets the fourth simplex edge when estimating depth.
+        Variable-depth defaults are n_candidates=12, maxfev=640; fixed-depth
+        defaults are 1 and 160. Explicit overrides take precedence independently.
         Legacy top-level DE parameters/kwargs remain accepted on DE only, but
         cannot be combined with de_options.
     progress : bool
@@ -367,7 +372,9 @@ def optimise_velocity(
         Default return is the original (optimal, cost, quality). Diagnostics
         appends status/messages. Metadata additionally appends an object array
         of per-window HNM audit records (None for DE) and requires diagnostics.
-        HNM cost/quality arrays contain NaN placeholders, not computed scores.
+        HNM cost is the squared unpenalised NSP; quality uses the existing
+        measured/model versus model/self NSP ratio at the final guess. Invalid
+        fits have NaN diagnostics; quality is not a depth uncertainty measure.
     **kwargs : dict
         Legacy SciPy DE settings; use de_options['scipy_options'] for new code.
 
@@ -392,7 +399,7 @@ def optimise_velocity(
         if value is not None:
             legacy[key] = value
     method = normalise_method(method)
-    de, hnm = resolve_method_options(
+    de, _ = resolve_method_options(
         method, de_options=de_options, hnm_options=hnm_options, legacy=legacy)
     if (isinstance(chunk_size, (bool, np.bool_))
             or not isinstance(chunk_size, (int, np.integer)) or chunk_size < 1):
@@ -409,8 +416,10 @@ def optimise_velocity(
         # A dummy bounds tuple validates shared settings even for empty batches.
         for bounds in bnds_list if len(bnds_list) else [((-1, 1), (-1, 1), (1, 1))]:
             validate_hnm_setup(bounds, vel_indx, window_dims, res, fps,
-                               gravity_waves_switch, turbulence_switch, hnm)
-        backend_arguments = {'hnm_options': hnm}
+                               gravity_waves_switch, turbulence_switch, hnm_options)
+        # Keep omitted keys omitted until each worker has its window bounds.
+        # Mixed fixed-/variable-depth batches must receive different defaults.
+        backend_arguments = {'hnm_options': deepcopy(hnm_options)}
     else:
         backend_arguments = dict(penalty_weight=de["penalty_weight"],
                                  pass_downsampling=de["pass_downsampling"],

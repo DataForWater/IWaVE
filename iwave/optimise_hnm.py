@@ -1,7 +1,8 @@
-"""Fixed-depth Hough/Nelder-Mead velocity estimation.
+"""Hough/Nelder-Mead velocity and optional log-depth estimation.
 
 Hough voting supplies the initial velocity. Nelder-Mead refines it within a
-fixed disk centred on that estimate, intersected with the global bounds.
+fixed velocity disk centred on that estimate, intersected with the global bounds.
+When depth is unknown, Hough uses one reference depth and only NM estimates it.
 """
 from dataclasses import dataclass
 from functools import lru_cache
@@ -30,11 +31,14 @@ ADAPTIVE_DEFAULTS = dict(
     batch_size=64, min_columns=64, stable_batches=2, convergence_tol=.01,
     exploration_every=4, min_direction_ratio=.05,
 )
+# Baseline refinement settings for fixed depth.
 REFINEMENT_DEFAULTS = dict(
     gauss_width=1., kernel_truncate=5., maxfev=160, xatol=1e-4,
     fatol=1e-6, initial_step_factor=2., n_candidates=1,
-    candidate_separation=.1,
+    candidate_separation=.1, depth_initial=None, log_depth_step=.1,
 )
+# Used only for variable-depth fits, before applying explicit user settings.
+DEPTH_SEARCH_DEFAULTS = dict(n_candidates=12, maxfev=640)
 HNM_DEFAULTS = {
     **DEFAULTS,
     **ADAPTIVE_DEFAULTS,
@@ -42,7 +46,7 @@ HNM_DEFAULTS = {
     "sampling": "fixed",
     "filling_ratio": 1.0,
     "refine": True,
-    "relative_radius": 0.8,
+    "relative_radius": 0.5,
     "min_radius": None,  # None uses twice the larger actual grid spacing.
 }
 
@@ -56,15 +60,21 @@ class Result:
     message: str
     pairs: np.ndarray                  # (iy, ix), in processing order
     metadata: dict
+    cost: float = np.nan
+    quality: float = np.nan
 
     def as_iwave_tuple(self):
-        """Return the common optimizer fields; HNM leaves cost/quality unset."""
-        return self.vy, self.vx, self.depth, np.nan, np.nan, self.success, self.message
+        """Return velocity, physical depth, squared NSP cost and fit quality."""
+        return self.vy, self.vx, self.depth, self.cost, self.quality, self.success, self.message
 
 
 
-def resolve_hnm_options(options=None):
-    """Copy and validate the flat HNM settings before starting workers."""
+def resolve_hnm_options(options=None, *, bnds=None):
+    """Resolve depth-dependent defaults, then apply and validate user settings.
+
+    Without bounds the fixed-depth defaults apply. Public entry points supply
+    the bounds before resolving options; an explicit setting always wins.
+    """
     if options is not None and not isinstance(options, dict):
         raise ValueError('hnm_options must be a dictionary or None.')
     for old_key in ('local_options', 'sampling_options'):
@@ -76,6 +86,10 @@ def resolve_hnm_options(options=None):
     if unknown:
         raise ValueError('Unknown hnm_options: ' + ', '.join(map(str, unknown)))
     out = deepcopy(HNM_DEFAULTS)
+    if bnds is not None:
+        bounds = _checked_depth_bounds(bnds)
+        if bounds[2, 0] < bounds[2, 1]:
+            out.update(DEPTH_SEARCH_DEFAULTS)
     out.update(deepcopy(options or {}))
     if out['sampling'] not in ('fixed', 'adaptive'):
         raise ValueError("sampling must be 'fixed' or 'adaptive'.")
@@ -85,14 +99,14 @@ def resolve_hnm_options(options=None):
     if not isinstance(out['refine'], (bool, np.bool_)):
         raise ValueError('refine must be Boolean.')
     out['refine'] = bool(out['refine'])
-    positive = ('gauss_width', 'kernel_truncate', 'xatol', 'fatol', 'initial_step_factor')
-    for key in (*positive, 'candidate_separation', 'relative_radius', 'min_radius'):
+    positive = ('gauss_width', 'kernel_truncate', 'xatol', 'fatol', 'initial_step_factor', 'log_depth_step')
+    for key in (*positive, 'candidate_separation', 'relative_radius', 'min_radius', 'depth_initial'):
         value = out[key]
-        if key == 'min_radius' and value is None:
+        if key in ('min_radius', 'depth_initial') and value is None:
             continue
         if (isinstance(value, (bool, np.bool_)) or not isinstance(value, Real)
                 or not np.isfinite(value) or value < 0
-                or (key in (*positive, 'min_radius') and value == 0)):
+                or (key in (*positive, 'min_radius', 'depth_initial') and value == 0)):
             raise ValueError(f'Invalid hnm_options[{key!r}].')
         out[key] = float(value)
         if not np.isfinite(out[key]):
@@ -112,10 +126,13 @@ def validate_hnm_setup(bnds, vel_indx, window_dims, res, fps,
                         gravity_waves_switch=True, turbulence_switch=True,
                         hnm_options=None):
     """Validate shared geometry without reading spectra or allocating votes."""
-    options = resolve_hnm_options(hnm_options)
-    return validate_setup(bnds, vel_indx, window_dims, res, fps,
-                          gravity_waves_switch, turbulence_switch,
-                          {key: options[key] for key in DEFAULTS})
+    options = resolve_hnm_options(hnm_options, bnds=bnds)
+    bounds, proposal_bounds, _, _ = _depth_setup(bnds, options, gravity_waves_switch)
+    validated = validate_setup(proposal_bounds, vel_indx, window_dims, res, fps,
+                                gravity_waves_switch, turbulence_switch,
+                                {key: options[key] for key in DEFAULTS})
+    # Expose the true bounds to callers, not Hough's fixed reference-depth copy.
+    return validated[0], bounds, *validated[2:]
 
 
 def optimize_single_spectrum_velocity_hnm(
@@ -125,10 +142,12 @@ def optimize_single_spectrum_velocity_hnm(
 ):
     """Estimate one velocity and optionally append per-window diagnostics."""
     started = perf_counter()
-    options = resolve_hnm_options(hnm_options)
+    options = resolve_hnm_options(hnm_options, bnds=bnds)
     validate_hnm_setup(bnds, vel_indx, window_dims, res, fps,
                        gravity_waves_switch, turbulence_switch, options)
-    arguments = dict(measured_spectrum=measured_spectrum, bnds=bnds, vel_indx=vel_indx,
+    bounds, proposal_bounds, reference_depth, free_depth = _depth_setup(
+        bnds, options, gravity_waves_switch)
+    arguments = dict(measured_spectrum=measured_spectrum, bnds=proposal_bounds, vel_indx=vel_indx,
                      window_dims=window_dims, res=res, fps=fps,
                      gravity_waves_switch=gravity_waves_switch, turbulence_switch=turbulence_switch,
                      filling_ratio=options['filling_ratio'],
@@ -154,7 +173,18 @@ def optimize_single_spectrum_velocity_hnm(
                                at_trust_boundary=False,
                                at_global_boundary=bool(state.best is not None and state.at_edge),
                                at_boundary=bool(state.best is not None and state.at_edge))
-        result.metadata['timings']['total'] = perf_counter()-started
+        result.metadata.update(depth_estimation_enabled=False, depth_estimated=False, depth_mode='fixed',
+                               reference_depth=reference_depth, depth_bounds=bounds[2].tolist(),
+                               at_depth_boundary=False, diagnostic_evaluations=0)
+        diagnostics_time = perf_counter()
+        if np.isfinite([result.vy, result.vx, result.depth]).all():
+            axes = spectral.wave_numbers(window_dims, res, fps)
+            objective = _RidgeObjective(measured_spectrum, axes, result.depth, vel_indx,
+                                        gravity_waves_switch, turbulence_switch, options)
+            result.cost, result.quality, stats = _fit_metrics(objective, [result.vy, result.vx])
+            result.metadata.update(stats, diagnostic_evaluations=1)
+        result.metadata['timings'].update(diagnostics=perf_counter()-diagnostics_time,
+                                          total=perf_counter()-started)
     output = result.as_iwave_tuple()
     return (*output, dict(result.metadata, selected_pairs=result.pairs)) if return_metadata else output
 
@@ -583,9 +613,11 @@ class _RidgeObjective:
             raise ValueError('Local fitting needs a finite nonnegative full spectrum matching (omega,ky,kx).')
         self.data = np.asarray(a, float).reshape(len(self.omega), -1)
         self.x, self.y = (v.ravel() for v in np.meshgrid(kx, ky))
-        k = np.hypot(self.x, self.y)
-        self.beta = dispersion.beta_calc(k, depth, alpha)
-        self.intrinsic = dispersion.omega_i_calc(k, depth)
+        self.k = np.hypot(self.x, self.y)
+        self.alpha = alpha
+        self.reference_depth = float(depth)
+        self.depth = None
+        self._set_depth(depth)
         self.wave, self.turb = bool(wave), bool(turb)
         self.width = options['gauss_width']
         self.dw = float(self.omega[1] - self.omega[0])
@@ -597,10 +629,34 @@ class _RidgeObjective:
         self.dense = len(self.omega) <= (self.wave + self.turb) * (2*self.radius + 2)
         self.offsets = (None if self.dense else np.arange(-self.radius, self.radius + 2)[:, None])
 
-    def __call__(self, velocity):
+    def _set_depth(self, depth):
+        # Geometry/data stay cached. Only these Nk terms depend on depth.
+        if depth != self.depth:
+            self.beta = dispersion.beta_calc(self.k, depth, self.alpha)
+            self.intrinsic = dispersion.omega_i_calc(self.k, depth)
+            self.depth = float(depth)
+
+    def __call__(self, parameters):
         self.calls += 1
+        return self._evaluate(parameters)
+
+    def statistics(self, parameters):
+        # This final diagnostic evaluation is separate from the NM budget.
+        return self._evaluate(parameters, statistics=True)
+
+    def _evaluate(self, velocity, statistics=False):
+        velocity = np.asarray(velocity, float)
+        if velocity.shape not in ((2,), (3,)) or not np.isfinite(velocity).all():
+            return (np.inf, 0., 0., 0.) if statistics else np.inf
+        depth = self.reference_depth
+        if velocity.size == 3:
+            with np.errstate(over='ignore', under='ignore'):
+                depth = float(np.exp(velocity[2]))
+            if not np.isfinite(depth) or depth <= 0:
+                return (np.inf, 0., 0., 0.) if statistics else np.inf
+        self._set_depth(depth)
         if self.zero:
-            return np.inf
+            return (np.inf, 0., 0., 0.) if statistics else np.inf
         with np.errstate(over='ignore', invalid='ignore'):
             a = self.y * velocity[0] + self.x * velocity[1]
             centres = []
@@ -609,13 +665,16 @@ class _RidgeObjective:
             if self.wave:
                 centres.append((1-self.beta)*a + np.hypot(self.beta*a, self.intrinsic))
         if not all(np.isfinite(c).all() for c in centres):
-            return np.inf
+            return (np.inf, 0., 0., 0.) if statistics else np.inf
+        model_square = 0.
         if self.dense:
             weight = np.exp(-((self.omega[:, None] - centres[0]) / self.width)**2)
             if len(centres) == 2:
                 np.maximum(weight, np.exp(-((self.omega[:, None] - centres[1]) / self.width)**2), out=weight)
             denominator = float(weight.sum())
             numerator = float(np.einsum('ij,ij->', self.data, weight))
+            if statistics:
+                model_square = float(np.einsum('ij,ij->', weight, weight))
         else:
             n = len(self.omega)
             # Clipping bases here only prevents unsafe float-to-int casts for
@@ -641,13 +700,16 @@ class _RidgeObjective:
                 sampled = self.data[np.clip(index, 0, n-1), active]
                 numerator += float(np.einsum('ij,ij->', sampled, weight))
                 denominator += float(weight.sum())
+                if statistics:
+                    model_square += float(np.einsum('ij,ij->', weight, weight))
         if denominator <= 0 or not np.isfinite(numerator + denominator):
-            return np.inf
-        return -numerator / denominator
+            return (np.inf, 0., 0., 0.) if statistics else np.inf
+        value = -numerator / denominator
+        return (value, denominator, model_square, numerator) if statistics else value
 
 
 class _TrustRegionObjective:
-    """Hard disk/box feasibility gate; never changes the in-region objective.
+    """Hard velocity disk and parameter-box gate; no in-region penalty.
 
     Infeasible proposals return infinity without evaluating the spectrum. This
     is a constraint, not a velocity penalty. A feasible initial simplex keeps
@@ -662,10 +724,10 @@ class _TrustRegionObjective:
 
     def feasible(self, velocity):
         v = np.asarray(velocity, float)
-        return bool(v.shape == (2,) and np.isfinite(v).all()
+        return bool(v.shape == (len(self.bounds),) and np.isfinite(v).all()
                     and np.all(v >= self.bounds[:, 0])
                     and np.all(v <= self.bounds[:, 1])
-                    and np.hypot(*(v-self.centre)) <= self.radius)
+                    and np.hypot(*(v[:2]-self.centre)) <= self.radius)
 
     def __call__(self, velocity):
         self.calls += 1
@@ -733,8 +795,92 @@ def _boundary_flags(velocity, centre, radius, bounds, xatol):
     return distance, trust_boundary, global_boundary
 
 
+def _checked_depth_bounds(bnds):
+    """Validate the shape and depth interval before selecting defaults."""
+    try:
+        bounds = np.asarray(bnds, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError('Invalid velocity/depth bounds.') from error
+    if (bounds.shape != (3, 2) or not np.isfinite(bounds).all()
+            or bounds[2, 0] <= 0 or bounds[2, 1] < bounds[2, 0]):
+        raise ValueError('Depth bounds must be finite, positive and ordered.')
+    return bounds
+
+
+def _depth_setup(bnds, options, wave):
+    """Keep Hough at one reference depth; return the original NM depth bounds."""
+    bounds = _checked_depth_bounds(bnds)
+    free = bool(bounds[2, 0] < bounds[2, 1])
+    if free and not options['refine']:
+        raise ValueError('Depth estimation requires refine=True.')
+    if free and not wave:
+        raise ValueError('Depth estimation requires the gravity-wave branch; turbulence alone is depth-independent.')
+    if free and options['maxfev'] < 4:
+        raise ValueError('Joint velocity/depth NM needs maxfev >= 4.')
+    reference = float(bounds[2, 0])
+    if free:
+        logs = np.log(bounds[2])
+        if logs[0] >= logs[1]:
+            raise ValueError('Depth bounds are indistinguishable in log coordinates.')
+        reference = options['depth_initial']
+        if reference is None:
+            reference = float(np.exp(.5*logs[0] + .5*logs[1]))
+        if not bounds[2, 0] <= reference <= bounds[2, 1]:
+            raise ValueError('depth_initial must lie within the depth bounds.')
+    proposal_bounds = bounds.copy()
+    proposal_bounds[2] = reference
+    return bounds, proposal_bounds, reference, free
+
+
+def _joint_simplex(seed, centre, radius, bounds, step, log_depth, log_bounds, log_step):
+    """Add one feasible log-depth vertex to the velocity triangle."""
+    triangle = _trust_simplex(seed, centre, radius, bounds, step)
+    simplex = np.empty((4, 3))
+    simplex[:3, :2] = triangle
+    simplex[:3, 2] = log_depth
+    simplex[3] = simplex[0]
+    above, below = log_bounds[1]-log_depth, log_depth-log_bounds[0]
+    direction, room = (1., above) if above >= below else (-1., below)
+    simplex[3, 2] += direction*min(log_step, .5*room)
+    if np.linalg.matrix_rank(simplex[1:]-simplex[0]) != 3:
+        raise ValueError('Joint simplex is degenerate; check depth bounds/log_depth_step.')
+    return simplex
+
+
+def _depth_boundary(log_depth, log_bounds, xatol):
+    span = log_bounds[1]-log_bounds[0]
+    tolerance = min(.01*span, max(xatol, 1e-10*span))
+    return bool(log_depth-log_bounds[0] <= tolerance or log_bounds[1]-log_depth <= tolerance)
+
+
+def _fit_metrics(objective, parameters):
+    """Recover the existing NSP-based cost/quality from final model statistics.
+
+    The NM scalar supplies measured/model overlap per unit model mass, but
+    quality additionally needs the model self-overlap. Accumulate it once at
+    the final guess, using the same narrow-band model as the objective.
+    """
+    value, model_mass, model_square, overlap = objective.statistics(parameters)
+    measured_mass = float(np.sum(objective.data))
+    stats = dict(fit_objective=float(value), measured_mass=measured_mass,
+                 model_mass=float(model_mass), model_square=float(model_square),
+                 measured_model_overlap=float(overlap))
+    values = np.array([measured_mass, model_mass, model_square, overlap])
+    if not np.isfinite(values).all() or np.any(values <= 0):
+        return np.nan, np.nan, stats
+    log_cost = np.log(measured_mass) + np.log(model_mass) - np.log(overlap)
+    log_ideal = 2*np.log(model_mass) - np.log(model_square)
+    quality = 1 - .2*(log_cost-log_ideal)/np.log(10.)
+    with np.errstate(over='ignore'):
+        cost = float(np.exp(2*log_cost))
+        stats.update(nsp_cost=float(np.exp(log_cost)), ideal_nsp_cost=float(np.exp(log_ideal)))
+    # DE returns its final objective squared. HNM has no penalty factor.
+    return cost, float(quality), stats
+
+
 def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                      options, proposal, state, started):
+    bounds, proposal_bounds, reference_depth, free_depth = _depth_setup(bnds, options, wave)
     metadata = deepcopy(proposal.metadata)
     metadata.update(sampling=metadata.get('method'), method='HNM', solver='HNM',
                     refinement_enabled=True, refinement_attempted=False, refined=False,
@@ -743,18 +889,22 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                     initial_step_factor=options['initial_step_factor'],
                     hough_velocity_step=options['velocity_step'], local_runs=[], n_local_runs=0,
                     objective_evaluations=0, nm_evaluations=0, rejected_proposals=0,
+                    diagnostic_evaluations=0, depth_estimation_enabled=free_depth,
+                    depth_estimated=False,
+                    depth_mode='joint_log' if free_depth else 'fixed',
+                    reference_depth=reference_depth, depth_bounds=bounds[2].tolist(),
+                    parameter_names=['vy','vx','log_depth'] if free_depth else ['vy','vx'],
                     trust_region=None, at_trust_boundary=False, at_global_boundary=False,
-                    at_boundary=False)
+                    at_depth_boundary=False, at_boundary=False)
     # There is no defensible trust centre if the detector produced no candidate.
     if state.best is None or not np.isfinite([proposal.vy, proposal.vx]).all():
-        metadata['timings'].update(objective_setup=0., local_fit=0., total=perf_counter()-started)
-        return Result(proposal.vy, proposal.vx, proposal.depth, False,
+        metadata['timings'].update(objective_setup=0., local_fit=0., diagnostics=0., total=perf_counter()-started)
+        depth = np.nan if free_depth else reference_depth
+        return Result(proposal.vy, proposal.vx, depth, False,
                       'HNM: no usable Hough proposal; refinement skipped', proposal.pairs, metadata)
     core = {key: options[key] for key in DEFAULTS}
-    _, bounds, axes, _, _ = validate_setup(bnds, alpha, window_dims, res, fps,
-                                         wave, turb, core, check_grid=False)
-    # The requested Hough spacing defines the initial NM scale. Feasibility
-    # may shorten individual edges; it does not change the trust radius.
+    _, _, axes, _, _ = validate_setup(proposal_bounds, alpha, window_dims, res, fps,
+                                      wave, turb, core, check_grid=False)
     initial_step = options['initial_step_factor'] * options['velocity_step']
     centre = state.best.copy()
     minimum = options['min_radius']
@@ -771,40 +921,62 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                                    relative_radius=options['relative_radius'],
                                    min_radius=float(minimum), min_radius_source=minimum_source,
                                    clipped_box=box.tolist())
+    log_bounds = np.log(bounds[2])
+    search_bounds = np.vstack((bounds[:2], log_bounds)) if free_depth else bounds[:2]
+    if free_depth:
+        box = np.vstack((box, log_bounds))
     setup_time = perf_counter()
-    objective = _RidgeObjective(spectrum, axes, bounds[2, 0], alpha, wave, turb, options)
-    constrained = _TrustRegionObjective(objective, centre, radius, bounds[:2])
+    objective = _RidgeObjective(spectrum, axes, reference_depth, alpha, wave, turb, options)
+    constrained = _TrustRegionObjective(objective, centre, radius, search_bounds)
     setup_time = perf_counter()-setup_time
     seeds = _hough_candidates(state, options['n_candidates'], options['candidate_separation'], centre, radius)
     runs, best, best_value, best_result = [], None, np.inf, None
     fitting_time = perf_counter()
     if not objective.zero:
         for candidate in seeds:
-            simplex = _trust_simplex(candidate, centre, radius, bounds[:2], initial_step)
+            if free_depth:
+                simplex = _joint_simplex(candidate, centre, radius, bounds[:2], initial_step,
+                                         np.log(reference_depth), log_bounds, options['log_depth_step'])
+            else:
+                simplex = _trust_simplex(candidate, centre, radius, bounds[:2], initial_step)
             if not all(constrained.feasible(vertex) for vertex in simplex):
                 raise ValueError('Could not construct a feasible trust-region simplex.')
             before_calls, before_rejected = objective.calls, constrained.rejected
             result = minimize(constrained, simplex[0], method='Nelder-Mead', bounds=box,
                               options=dict(maxfev=options['maxfev'], xatol=options['xatol'],
                                            fatol=options['fatol'], initial_simplex=simplex))
-            distance, at_trust, at_global = _boundary_flags(result.x, centre, radius, bounds[:2], options['xatol'])
-            record = dict(candidate_velocity=candidate.tolist(), initial_velocity=simplex[0].tolist(),
+            distance, at_trust, at_global = _boundary_flags(result.x[:2], centre, radius, bounds[:2], options['xatol'])
+            at_depth = free_depth and _depth_boundary(result.x[2], log_bounds, options['xatol'])
+            depth = float(np.clip(np.exp(result.x[2]), *bounds[2])) if free_depth else reference_depth
+            record = dict(candidate_velocity=candidate.tolist(), initial_velocity=simplex[0,:2].tolist(),
                           initial_simplex=simplex.tolist(),
-                          velocity=np.asarray(result.x).tolist(), nfev=int(result.nfev), nit=int(result.nit),
+                          velocity=np.asarray(result.x[:2]).tolist(), depth=depth,
+                          log_depth=float(result.x[2]) if free_depth else float(np.log(reference_depth)),
+                          nfev=int(result.nfev), nit=int(result.nit),
                           objective_evaluations=objective.calls-before_calls,
                           rejected_proposals=constrained.rejected-before_rejected,
                           correction_norm=distance, at_trust_boundary=at_trust, at_global_boundary=at_global,
-                          converged=bool(result.success), message=str(result.message))
+                          at_depth_boundary=bool(at_depth), converged=bool(result.success), message=str(result.message))
             runs.append(record)
             if constrained.feasible(result.x) and np.isfinite(result.fun) and result.fun < best_value:
                 best, best_value, best_result = result.x.copy(), float(result.fun), result
     fitting_time = perf_counter()-fitting_time
-    distance, at_trust, at_global = (None, False, False)
+    distance, at_trust, at_global, at_depth = None, False, False, False
+    cost = quality = np.nan
+    diagnostics_time = 0.
     if best is not None:
-        distance, at_trust, at_global = _boundary_flags(best, centre, radius, bounds[:2], options['xatol'])
-    ok = bool(best_result is not None and best_result.success and best_value < 0 and not (at_trust or at_global))
+        distance, at_trust, at_global = _boundary_flags(best[:2], centre, radius, bounds[:2], options['xatol'])
+        at_depth = free_depth and _depth_boundary(best[2], log_bounds, options['xatol'])
+        depth = float(np.clip(np.exp(best[2]), *bounds[2])) if free_depth else reference_depth
+        diagnostics_time = perf_counter()
+        cost, quality, stats = _fit_metrics(objective, best)
+        diagnostics_time = perf_counter()-diagnostics_time
+        metadata.update(stats, diagnostic_evaluations=1)
+    ok = bool(best_result is not None and best_result.success and best_value < 0
+              and not (at_trust or at_global or at_depth))
     if best is None:
         best = np.array([np.nan, np.nan])
+        depth = np.nan if free_depth else reference_depth
         reason = 'zero spectrum' if objective.zero else 'no finite feasible local fit'
     else:
         reason = str(best_result.message)
@@ -812,7 +984,10 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
             reason += '; trust-region boundary reached (not expanded)'
         if at_global:
             reason += '; global velocity boundary reached'
+        if at_depth:
+            reason += '; depth boundary reached'
     metadata.update(refinement_attempted=bool(runs), refined=best_result is not None,
+                    depth_estimated=bool(free_depth and best_result is not None),
                     local_runs=runs, n_local_runs=len(runs), objective_evaluations=objective.calls,
                     nm_evaluations=constrained.calls, rejected_proposals=constrained.rejected,
                     objective_columns=int(objective.data.shape[1]),
@@ -820,7 +995,8 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                     objective_evaluator='dense_broadcast' if objective.dense else 'narrow_band',
                     kernel_tail_weight_bound=float(np.exp(-options['kernel_truncate']*options['kernel_truncate'])),
                     correction_norm=distance, at_trust_boundary=at_trust, at_global_boundary=at_global,
-                    at_boundary=bool(at_trust or at_global))
-    metadata['timings'].update(objective_setup=setup_time, local_fit=fitting_time, total=perf_counter()-started)
-    return Result(float(best[0]), float(best[1]), float(bounds[2, 0]), ok,
-                  'HNM: '+reason, proposal.pairs, metadata)
+                    at_depth_boundary=bool(at_depth), at_boundary=bool(at_trust or at_global or at_depth))
+    metadata['timings'].update(objective_setup=setup_time, local_fit=fitting_time,
+                               diagnostics=diagnostics_time, total=perf_counter()-started)
+    return Result(float(best[0]), float(best[1]), float(depth), ok,
+                  'HNM: '+reason, proposal.pairs, metadata, cost, quality)

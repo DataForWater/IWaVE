@@ -484,7 +484,8 @@ class Iwave(object):
         Differential evolution remains the default, with its existing effective
         defaults. Select method='HNM' for Hough voting followed by
         default-on radial-trust-region Nelder-Mead. hnm_options['refine']=False
-        disables refinement. HNM cost/quality arrays remain NaN placeholders.
+        disables refinement for fixed-depth fits. With depth=0, NM jointly fits
+        velocity and log(depth). HNM also reports the existing NSP-based quality.
 
         Parameters
         ----------
@@ -519,7 +520,8 @@ class Iwave(object):
             scipy_options. Nested overrides merge with the existing defaults.
         hnm_options : dict, optional
             HNM settings: sampling='fixed'/'adaptive', filling_ratio=1.0,
-            refine=True, relative_radius=0.8, min_radius=None, n_candidates=1.
+            refine=True, relative_radius=0.5, min_radius=None.
+            Fixed-depth n_candidates=1; variable-depth n_candidates=12.
             Hough controls: velocity_step=0.01 m/s,
             vote_sigma=0.015 m/s, k_min_factor=1.0, peak_height=0.25,
             peak_prominence=0.30, scale_percentile=99.5, min_ridges=12,
@@ -528,7 +530,16 @@ class Iwave(object):
             initial_step_factor=2 sets the initial NM step to factor*velocity_step.
             None min_radius uses twice the actual maximum Hough grid spacing.
             All NM restarts share a disk centred on the primary Hough estimate.
-            Requires depth > 0. No HNM penalty is implemented.
+            depth=0 enables joint velocity/log-depth fitting within dmin/dmax.
+            depth_initial=None uses their geometric midpoint as Hough's reference
+            and NM's depth start; a positive in-bounds value overrides it.
+            log_depth_step=0.1 sets the fourth simplex vertex in natural-log units.
+            xatol applies to velocity coordinates and log(depth).
+            When estimating depth, n_candidates defaults to 12 and maxfev to 640;
+            fixed-depth defaults remain 1 and 160. Explicit overrides win for
+            each key independently. maxfev is the budget per candidate.
+            Depth estimation requires refine=True and gravity_waves_switch=True.
+            No HNM penalty is implemented.
         progress : bool, optional
             Enable the parent progress bar (default True). False is quiet.
         gauss_width : float, optional
@@ -563,17 +574,17 @@ class Iwave(object):
             if value is not None:
                 legacy[key] = value
         method = optimise.normalise_method(method)
-        de, hnm = optimise.resolve_method_options(
-            method, de_options=de_options, hnm_options=hnm_options,
-            legacy=legacy, scipy_defaults=OPTIM_KWARGS_SADE)
-        if method == 'HNM' and depth <= 0:
-            raise ValueError('HNM requires fixed depth > 0; depth=0 remains DE-only.')
         # set search bounds to -/+ maximum velocity for both directions, and depth if applicable
         if depth == 0:  # If depth = 0, then the water depth is estimated.
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (dmin, dmax)]
         else:
             bounds = [(-self.smax, self.smax), (-self.smax, self.smax), (depth, depth)]
         
+        # Resolve defaults only after the actual depth interval is known.
+        de, hnm = optimise.resolve_method_options(
+            method, de_options=de_options, hnm_options=hnm_options,
+            legacy=legacy, scipy_defaults=OPTIM_KWARGS_SADE, bnds=bounds)
+
         # bounds = [(-self.smax, self.smax), (-self.smax, self.smax)]
         # if depth == 0:
         #     # also estimate water depth, set bounds
