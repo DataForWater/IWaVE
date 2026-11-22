@@ -137,7 +137,9 @@ def optimize_single_spectrum_velocity(
     turbulence_switch: bool,
     pass_downsampling: List[int],
     gauss_width: float,
-    kwargs: dict
+    kwargs: dict,
+    *,
+    _return_search_context: bool = False,
 ) -> Tuple[float, float, float, float, float, bool, str]:
     """
     Returns:
@@ -145,7 +147,8 @@ def optimize_single_spectrum_velocity(
     """
     # Zero spectra were skipped during FFT, skip optimization for them too
     if not np.any(measured_spectrum):
-        return np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero"
+        result = (np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero")
+        return (*result, None) if _return_search_context else result
     
     # assume very large depth for initial passes
     pass_kwargs = kwargs.copy()
@@ -196,7 +199,14 @@ def optimize_single_spectrum_velocity(
     pass_opt.x[2] = np.exp(pass_opt.x[2])  # transforms back optimised depth into linear scale
     
     vy, vx, d = pass_opt.x
-    return vy, vx, d, cost, quality, status, message
+    result = (vy, vx, d, cost, quality, status, message)
+    if _return_search_context:
+        context = dict(velocity_bounds=np.asarray(pass_bnds[:2], float).tolist(),
+                       log_depth_bounds=list(pass_bnds[2]),
+                       final_downsampling=int(pass_downsampling[-1]),
+                       final_penalty_weight=float(penalty_weight))
+        return (*result, context)
+    return result
     
     
 
@@ -271,12 +281,73 @@ def optimize_single_spectrum_velocity_unpack(kwargs):
     arguments = dict(kwargs)
     method = normalise_method(arguments.pop("method", "DE"))
     metadata = arguments.pop("_return_metadata", False)
+    spectral_flag = arguments.pop('calculate_spectral_uncertainty', False)
+    mode_flag = arguments.pop('calculate_mode_ambiguity', False)
+    from iwave.spectral import resolve_spectral_request
+    from iwave.optimise_hnm import resolve_mode_request
+    spectral_options = resolve_spectral_request(spectral_flag, arguments.pop('spectral_uncertainty_options', None))
+    mode_options = resolve_mode_request(mode_flag, arguments.pop('mode_ambiguity_options', None))
+    need_context = spectral_options is not None or mode_options is not None
+    spectral_context = arguments.pop('_spectral_context', None)
+    if need_context and not metadata:
+        raise ValueError('Enabled uncertainty diagnostics require return_metadata=True.')
+    reject_removed_uncertainty_options(arguments)
     if method == 'HNM':
-        from iwave.optimise_hnm import optimize_single_spectrum_velocity_hnm
-        return optimize_single_spectrum_velocity_hnm(
-            **arguments, return_metadata=metadata)
-    result = optimize_single_spectrum_velocity(**arguments)
-    return (*result, None) if metadata else result
+        from iwave.optimise_hnm import optimize_single_spectrum_velocity_hnm, resolve_hnm_options
+        result = optimize_single_spectrum_velocity_hnm(**arguments, return_metadata=metadata)
+        if need_context:
+            fit_options = resolve_hnm_options(arguments.get('hnm_options'), bnds=arguments['bnds'])
+            width = fit_options['gauss_width']
+            record = dict(result[7])
+            trust = record.get('trust_region')
+            constraints = {'velocity_disk': trust} if trust is not None else None
+            context = None
+    else:
+        result = optimize_single_spectrum_velocity(
+            **arguments, _return_search_context=need_context)
+        fit_options = None
+        if need_context:
+            context = result[7]
+            result = result[:7]
+            width = arguments['gauss_width']
+            constraints = context
+            record = dict(method='DE', solver='DE', search_context=context)
+        elif metadata:
+            result = (*result, None)
+    if spectral_options is not None:
+        from iwave.spectral import estimate_spectral_uncertainty
+        bounds = np.asarray(arguments['bnds'], float)
+        diagnostic = estimate_spectral_uncertainty(
+            arguments['measured_spectrum'], result[:2], result[2], bool(bounds[2,0]<bounds[2,1]),
+            arguments['window_dims'], arguments['res'], arguments['fps'], arguments['vel_indx'],
+            spectral_context, arguments['gravity_waves_switch'], arguments['turbulence_switch'],
+            width, bounds, constraints, spectral_options, optimizer_success=bool(result[5]),
+            penalized_fit=context is not None and context['final_penalty_weight']!=0)
+        diagnostic['solver'] = method
+        if method == 'HNM' and fit_options['kernel_truncate'] != spectral_options['kernel_truncate']:
+            diagnostic['flags'].append('model_kernel_mismatch')
+            diagnostic['valid'] = False
+            diagnostic['parameter_valid'] = dict.fromkeys(('vy','vx','depth'),False)
+            diagnostic['accepted_intervals'] = dict.fromkeys(('vy','vx','depth'),None)
+        record['spectral_uncertainty'] = diagnostic
+        result = (*result[:7], record)
+    if mode_options is not None:
+        from iwave.optimise_hnm import estimate_mode_ambiguity
+        record['mode_ambiguity'] = estimate_mode_ambiguity(
+            arguments['measured_spectrum'],result[:2],result[2],arguments['bnds'],
+            arguments['window_dims'],arguments['res'],arguments['fps'],arguments['vel_indx'],
+            spectral_context,record,fit_options,arguments['gravity_waves_switch'],arguments['turbulence_switch'],
+            mode_options,optimizer_success=bool(result[5]),method=method)
+        result = (*result[:7],record)
+    return result
+
+def reject_removed_uncertainty_options(arguments):
+    removed=set(arguments)&{'calculate_uncertainty','uncertainty_options',
+                            'calculate_hough_uncertainty','hough_uncertainty_options'}
+    if removed:
+        raise TypeError('Removed uncertainty API: '+', '.join(sorted(removed))+
+                        '. Use calculate_spectral_uncertainty or calculate_mode_ambiguity.')
+
 
 def silence_output():
     """Suppress output of worker functions."""
@@ -303,10 +374,24 @@ def optimise_velocity(
     progress: bool = True,
     return_diagnostics: bool = False,
     return_metadata: bool = False,
+    calculate_spectral_uncertainty: bool = False,
+    calculate_mode_ambiguity: bool = False,
+    spectral_uncertainty_options: Optional[dict] = None,
+    mode_ambiguity_options: Optional[dict] = None,
+    spectral_contexts = None,
     **kwargs
 ) -> tuple:
     """
-    Runs the optimisation to calculate the optimal velocity components
+    Runs the optimisation to calculate the optimal velocity components.
+
+    calculate_spectral_uncertainty=True enables noise-scaled local sensitivity
+    using complete pre-threshold normalized spectra and averaging metadata.
+    calculate_mode_ambiguity=True compares existing successful interior HNM
+    multistart endpoints. No searches are added. Both diagnostics require metadata.
+    spectral_contexts supplies one context per array spectrum; lazy spectra retain
+    this information automatically in the same FFT pass.
+
+    The former fixed-loss uncertainty API has been removed.
 
     Parameters
     ----------
@@ -358,7 +443,7 @@ def optimise_velocity(
         gauss_width, penalty_weight, pass_downsampling and nested scipy_options.
         HNM settings are flat, including Hough controls such as velocity_step,
         vote_sigma, k_min_factor, peak_height and peak_prominence. Sampling,
-        filling_ratio, refine, relative_radius (default 0.8), min_radius,
+        filling_ratio, refine, relative_radius (default 0.5), min_radius,
         initial_step_factor and NM controls such as maxfev use the same dictionary.
         depth_initial selects the reference depth for Hough and the NM start;
         log_depth_step sets the fourth simplex edge when estimating depth.
@@ -391,6 +476,28 @@ def optimise_velocity(
         While there is no direct link with results uncertainties, higher q indicates better quality data.
     """
 
+    # Independent explicit gates; options never enable calculations by themselves.
+    from iwave.spectral import resolve_spectral_request, validate_spectral_context
+    from iwave.optimise_hnm import resolve_mode_request
+    reject_removed_uncertainty_options(kwargs)
+    method = normalise_method(method)
+    spectral_options = resolve_spectral_request(calculate_spectral_uncertainty, spectral_uncertainty_options)
+    mode_options = resolve_mode_request(calculate_mode_ambiguity, mode_ambiguity_options)
+    noise_options = [o for o in (spectral_options,mode_options) if o is not None]
+    if noise_options and not return_metadata:
+        raise ValueError('Enabled uncertainty diagnostics require return_metadata=True.')
+    if noise_options:
+        shape = (int(np.ceil(window_dims[0]/2)), window_dims[1], window_dims[2])
+        if spectral_contexts is not None:
+            if len(spectral_contexts)!=len(measured_spectra):raise ValueError('One spectral context is required per window.')
+            for item in spectral_contexts:
+                for options in noise_options:validate_spectral_context(item, shape, options)
+        elif len(measured_spectra) and not hasattr(measured_spectra,'get_with_spectral_context'):
+            raise ValueError('Supply spectral_contexts for precomputed/array spectra; full pre-threshold normalized power and averaging metadata are required.')
+        for options,key in ((spectral_options,'parameter_scales'),(mode_options,'merge_tolerances')):
+            scales = options[key] if options is not None else None
+            if scales is not None and len(scales)<3 and any(np.asarray(b)[2,0]<np.asarray(b)[2,1] for b in bnds_list):
+                raise ValueError('Joint diagnostics require three '+key+'.')
     # Resolve and reject incompatible settings before opening worker processes.
     legacy = dict(kwargs)
     for key, value in (("penalty_weight", penalty_weight),
@@ -440,7 +547,11 @@ def optimise_velocity(
     for idx in idxs[::chunk_size]:
         # select and read the current data block in one go
         idx_sel = idxs[idx:idx + chunk_size]
-        spectra_sel = measured_spectra[idx: idx + chunk_size]
+        if noise_options and spectral_contexts is None:
+            spectra_sel, contexts_sel = measured_spectra.get_with_spectral_context(slice(idx, idx+chunk_size))
+        else:
+            spectra_sel = measured_spectra[idx: idx + chunk_size]
+            contexts_sel = spectral_contexts[idx:idx+chunk_size] if noise_options else [None]*len(spectra_sel)
         # get bounds for this chunk (nonzero check now done in worker)
         bnds_sel = bnds_list[idx: idx + chunk_size]
 
@@ -457,8 +568,13 @@ def optimise_velocity(
                 turbulence_switch=turbulence_switch,
                 method=method,
                 _return_metadata=return_metadata,
+                calculate_spectral_uncertainty=bool(calculate_spectral_uncertainty),
+                calculate_mode_ambiguity=bool(calculate_mode_ambiguity),
+                spectral_uncertainty_options=spectral_options,
+                mode_ambiguity_options=mode_options,
+                _spectral_context=spectral_context,
                 **backend_arguments,
-            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
+            ) for measured_spectrum, bnds, spectral_context in zip(spectra_sel, bnds_sel, contexts_sel)
         ]
 
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:

@@ -3,6 +3,8 @@
 Hough voting supplies the initial velocity. Nelder-Mead refines it within a
 fixed velocity disk centred on that estimate, intersected with the global bounds.
 When depth is unknown, Hough uses one reference depth and only NM estimates it.
+The final section optionally compares already-found endpoints using shared
+spectral noise; it does not start another search or assign basin probabilities.
 """
 from dataclasses import dataclass
 from functools import lru_cache
@@ -14,6 +16,7 @@ from scipy.ndimage import gaussian_filter, gaussian_filter1d, maximum_filter
 from scipy.optimize import minimize
 from scipy.signal import find_peaks
 from iwave import dispersion, spectral
+from iwave.spectral import SpectralOverlapObjective as _RidgeObjective
 
 from copy import deepcopy
 
@@ -140,7 +143,7 @@ def optimize_single_spectrum_velocity_hnm(
     gravity_waves_switch=True, turbulence_switch=True,
     hnm_options=None, return_metadata=False,
 ):
-    """Estimate one velocity and optionally append per-window diagnostics."""
+    """Estimate one velocity and optionally return fit/search audit metadata."""
     started = perf_counter()
     options = resolve_hnm_options(hnm_options, bnds=bnds)
     validate_hnm_setup(bnds, vel_indx, window_dims, res, fps,
@@ -593,121 +596,6 @@ def adaptive_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
 
 # Local forward-model refinement.
 
-class _RidgeObjective:
-    """Original max-of-Gaussians forward score, evaluated in narrow bands.
-
-    Minimises -sum(M*T)/sum(T), with no velocity penalty. A band extends at
-    least kernel_truncate*gauss_width from each predicted branch. Outside the
-    union, omitted kernel weights are <= exp(-kernel_truncate**2).
-    Overlapping branch bands are counted once and use max(), not addition.
-    Predictions just outside the observed frequency interval retain their
-    observable Gaussian tails; neither model support nor data are reflected.
-    """
-    def __init__(self, spectrum, axes, depth, alpha, wave, turb, options):
-        self.omega, ky, kx = axes
-        a = np.asarray(spectrum)
-        expected = (len(self.omega), len(ky), len(kx))
-        if (a.shape != expected or not np.issubdtype(a.dtype, np.number)
-                or np.iscomplexobj(a) or not np.isfinite(a).all()
-                or np.any(a < 0)):
-            raise ValueError('Local fitting needs a finite nonnegative full spectrum matching (omega,ky,kx).')
-        self.data = np.asarray(a, float).reshape(len(self.omega), -1)
-        self.x, self.y = (v.ravel() for v in np.meshgrid(kx, ky))
-        self.k = np.hypot(self.x, self.y)
-        self.alpha = alpha
-        self.reference_depth = float(depth)
-        self.depth = None
-        self._set_depth(depth)
-        self.wave, self.turb = bool(wave), bool(turb)
-        self.width = options['gauss_width']
-        self.dw = float(self.omega[1] - self.omega[0])
-        extent = options['kernel_truncate'] * self.width / self.dw
-        self.radius = int(math.ceil(min(extent, len(self.omega))))
-        self.calls = 0
-        self.zero = not np.any(self.data)
-        # Avoid making a "narrow" workspace larger than a dense broadcast.
-        self.dense = len(self.omega) <= (self.wave + self.turb) * (2*self.radius + 2)
-        self.offsets = (None if self.dense else np.arange(-self.radius, self.radius + 2)[:, None])
-
-    def _set_depth(self, depth):
-        # Geometry/data stay cached. Only these Nk terms depend on depth.
-        if depth != self.depth:
-            self.beta = dispersion.beta_calc(self.k, depth, self.alpha)
-            self.intrinsic = dispersion.omega_i_calc(self.k, depth)
-            self.depth = float(depth)
-
-    def __call__(self, parameters):
-        self.calls += 1
-        return self._evaluate(parameters)
-
-    def statistics(self, parameters):
-        # This final diagnostic evaluation is separate from the NM budget.
-        return self._evaluate(parameters, statistics=True)
-
-    def _evaluate(self, velocity, statistics=False):
-        velocity = np.asarray(velocity, float)
-        if velocity.shape not in ((2,), (3,)) or not np.isfinite(velocity).all():
-            return (np.inf, 0., 0., 0.) if statistics else np.inf
-        depth = self.reference_depth
-        if velocity.size == 3:
-            with np.errstate(over='ignore', under='ignore'):
-                depth = float(np.exp(velocity[2]))
-            if not np.isfinite(depth) or depth <= 0:
-                return (np.inf, 0., 0., 0.) if statistics else np.inf
-        self._set_depth(depth)
-        if self.zero:
-            return (np.inf, 0., 0., 0.) if statistics else np.inf
-        with np.errstate(over='ignore', invalid='ignore'):
-            a = self.y * velocity[0] + self.x * velocity[1]
-            centres = []
-            if self.turb:
-                centres.append(a)
-            if self.wave:
-                centres.append((1-self.beta)*a + np.hypot(self.beta*a, self.intrinsic))
-        if not all(np.isfinite(c).all() for c in centres):
-            return (np.inf, 0., 0., 0.) if statistics else np.inf
-        model_square = 0.
-        if self.dense:
-            weight = np.exp(-((self.omega[:, None] - centres[0]) / self.width)**2)
-            if len(centres) == 2:
-                np.maximum(weight, np.exp(-((self.omega[:, None] - centres[1]) / self.width)**2), out=weight)
-            denominator = float(weight.sum())
-            numerator = float(np.einsum('ij,ij->', self.data, weight))
-            if statistics:
-                model_square = float(np.einsum('ij,ij->', weight, weight))
-        else:
-            n = len(self.omega)
-            # Clipping bases here only prevents unsafe float-to-int casts for
-            # distant predictions. Such branches contribute no observed bins.
-            bases = [np.floor(np.clip((c-self.omega[0])/self.dw,
-                     -self.radius-2, n+self.radius+2)).astype(np.int64) for c in centres]
-            numerator = denominator = 0.
-            for branch, centre in enumerate(centres):
-                active = np.flatnonzero((centre >= self.omega[0]-(self.radius+2)*self.dw)
-                                        & (centre <= self.omega[-1]+(self.radius+2)*self.dw))
-                if not len(active):
-                    continue
-                index = bases[branch][active] + self.offsets
-                valid = (index >= 0) & (index < n)
-                if branch:
-                    previous = bases[0][active]
-                    valid &= ~((index >= previous-self.radius) & (index <= previous+self.radius+1))
-                frequency = self.omega[0] + self.dw*index
-                weight = np.exp(-((frequency-centres[0][active])/self.width)**2)
-                if len(centres) == 2:
-                    np.maximum(weight, np.exp(-((frequency-centres[1][active])/self.width)**2), out=weight)
-                weight *= valid
-                sampled = self.data[np.clip(index, 0, n-1), active]
-                numerator += float(np.einsum('ij,ij->', sampled, weight))
-                denominator += float(weight.sum())
-                if statistics:
-                    model_square += float(np.einsum('ij,ij->', weight, weight))
-        if denominator <= 0 or not np.isfinite(numerator + denominator):
-            return (np.inf, 0., 0., 0.) if statistics else np.inf
-        value = -numerator / denominator
-        return (value, denominator, model_square, numerator) if statistics else value
-
-
 class _TrustRegionObjective:
     """Hard velocity disk and parameter-box gate; no in-region penalty.
 
@@ -931,6 +819,7 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
     setup_time = perf_counter()-setup_time
     seeds = _hough_candidates(state, options['n_candidates'], options['candidate_separation'], centre, radius)
     runs, best, best_value, best_result = [], None, np.inf, None
+    selected_run_index = None
     fitting_time = perf_counter()
     if not objective.zero:
         for candidate in seeds:
@@ -952,14 +841,16 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                           initial_simplex=simplex.tolist(),
                           velocity=np.asarray(result.x[:2]).tolist(), depth=depth,
                           log_depth=float(result.x[2]) if free_depth else float(np.log(reference_depth)),
+                          objective_value=float(result.fun), feasible=bool(constrained.feasible(result.x)),
                           nfev=int(result.nfev), nit=int(result.nit),
                           objective_evaluations=objective.calls-before_calls,
                           rejected_proposals=constrained.rejected-before_rejected,
                           correction_norm=distance, at_trust_boundary=at_trust, at_global_boundary=at_global,
                           at_depth_boundary=bool(at_depth), converged=bool(result.success), message=str(result.message))
             runs.append(record)
-            if constrained.feasible(result.x) and np.isfinite(result.fun) and result.fun < best_value:
+            if record['feasible'] and np.isfinite(result.fun) and result.fun < best_value:
                 best, best_value, best_result = result.x.copy(), float(result.fun), result
+                selected_run_index = len(runs)-1
     fitting_time = perf_counter()-fitting_time
     distance, at_trust, at_global, at_depth = None, False, False, False
     cost = quality = np.nan
@@ -988,7 +879,8 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
             reason += '; depth boundary reached'
     metadata.update(refinement_attempted=bool(runs), refined=best_result is not None,
                     depth_estimated=bool(free_depth and best_result is not None),
-                    local_runs=runs, n_local_runs=len(runs), objective_evaluations=objective.calls,
+                    local_runs=runs, n_local_runs=len(runs), selected_run_index=selected_run_index,
+                    objective_evaluations=objective.calls,
                     nm_evaluations=constrained.calls, rejected_proposals=constrained.rejected,
                     objective_columns=int(objective.data.shape[1]),
                     objective_frequency_bins=int(objective.data.shape[0]),
@@ -1000,3 +892,182 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                                diagnostics=diagnostics_time, total=perf_counter()-started)
     return Result(float(best[0]), float(best[1]), float(depth), ok,
                   'HNM: '+reason, proposal.pairs, metadata, cost, quality)
+
+
+# === Optional comparisons of existing HNM endpoints; no extra searches ===
+# These comparisons describe observed endpoints only, never global coverage.
+from scipy.stats import norm
+from iwave.spectral import SpectralOverlapObjective
+from iwave.spectral import (boolean,resolve_spectral_request,
+    prepare_spectral_data,normalization_jacobian)
+from iwave.io import _constraints
+
+MODE_AMBIGUITY_DEFAULTS=dict(confidence=.95,variance_estimator='plugin',n_effective=None,merge_tolerances=None)
+
+
+def resolve_mode_request(enabled=False,options=None):
+    enabled=boolean(enabled,'calculate_mode_ambiguity')
+    if options is not None and not isinstance(options,dict):raise ValueError('mode_ambiguity_options must be a dictionary or None.')
+    if set(options or {})-set(MODE_AMBIGUITY_DEFAULTS):raise ValueError('Unknown mode_ambiguity_options.')
+    out=deepcopy(MODE_AMBIGUITY_DEFAULTS);out.update(deepcopy(options or {}))
+    noise=resolve_spectral_request(True,{k:out[k] for k in ('confidence','variance_estimator','n_effective')})
+    for key in ('confidence','variance_estimator','n_effective'):out[key]=noise[key]
+    if out['merge_tolerances'] is not None:
+        a=np.asarray(out['merge_tolerances'])
+        if a.shape not in ((2,),(3,)) or not np.issubdtype(a.dtype,np.number) or np.iscomplexobj(a) or not np.isfinite(a).all() or np.any(a<=0):
+            raise ValueError('merge_tolerances needs two or three positive finite numbers.')
+        out['merge_tolerances']=a.astype(float).tolist()
+    return out if enabled else None
+
+
+def _score_statistics(weights,M,full,active,variance):
+    if weights is None:return None
+    overlap=float(np.sum(weights*M))
+    if not np.isfinite(overlap) or overlap<=0:return None
+    gradient=normalization_jacobian((-weights/overlap)[None],full,active)[0]
+    noise_variance=float(np.sum(gradient*gradient*variance))
+    if not np.isfinite(noise_variance):return None
+    return dict(overlap=overlap,log_score=float(-np.log(overlap)),gradient=gradient,variance=noise_variance)
+
+
+def _contrast(reference,alternative,variance,multiplier):
+    """Stable shared-data contrast variance, including normalization covariance."""
+    gap=float(alternative['log_score']-reference['log_score'])
+    difference=alternative['gradient']-reference['gradient']
+    v=float(np.sum(difference*difference*variance))
+    covariance=float(np.sum(reference['gradient']*alternative['gradient']*variance))
+    out=dict(valid=False,score_gap=gap,reference_variance=reference['variance'],
+        alternative_variance=alternative['variance'],score_covariance=covariance,
+        difference_variance=v,standard_error=None,standardized_gap=None,
+        noise_threshold=None,competitive=None,reason=None)
+    if not np.isfinite([gap,v,covariance]).all() or v<0:
+        out['reason']='nonfinite_score_contrast';return out
+    tolerance=32*np.finfo(float).eps*max(1.,abs(reference['log_score']),abs(alternative['log_score']))
+    if v==0:
+        if abs(gap)<=tolerance:
+            out.update(valid=True,standard_error=0.,noise_threshold=0.,competitive=True,
+                       reason='indistinguishable_zero_contrast')
+        else:out['reason']='unresolved_zero_noise_contrast'
+        return out
+    se=float(np.sqrt(v));threshold=float(multiplier*se)
+    out.update(valid=True,standard_error=se,standardized_gap=float(gap/se),noise_threshold=threshold,
+               competitive=bool(gap<=threshold),reason='within_noise_scale' if gap<=threshold else 'score_gap_resolved')
+    if gap < -tolerance:out['reason']='alternative_has_better_score'
+    return out
+
+
+def estimate_mode_ambiguity(spectrum,velocity,depth,bounds,window_dims,res,fps,vel_indx,
+        spectral_context,metadata,fit_options,gravity_waves_switch=True,turbulence_switch=True,
+        options=None,optimizer_success=None,method='HNM'):
+    """Compare distinct interior endpoints from existing NM starts.
+
+    A false ambiguous flag applies ONLY to the explored endpoints. Selection and
+    multiple-comparison effects are not calibrated. The estimator is untouched.
+    """
+    started=perf_counter();opts=resolve_mode_request(True,options)
+    M,full,active,k,source=prepare_spectral_data(spectrum,spectral_context,opts)
+    b=np.asarray(bounds,float)
+    if b.shape!=(3,2) or not np.isfinite(b).all() or np.any(b[:,0]>b[:,1]) or b[2,0]<=0:
+        raise ValueError('bounds must be ordered (vy,vx,positive depth) intervals.')
+    free=bool(b[2,0]<b[2,1]);p=3 if free else 2
+    runs=metadata.get('local_runs',[]) if isinstance(metadata,dict) else []
+    if not isinstance(runs,list):raise ValueError('local_runs must be a list.')
+    out=dict(kind='spectral_mode_ambiguity',status='not_assessed',assessed=False,valid=False,
+        reason=None,ambiguous=None,flags=[],options=opts,solver=method,
+        message=('Ambiguity cannot be assessed if n_candidates = 1.'
+                 if method=='HNM' and isinstance(fit_options,dict)
+                 and fit_options.get('n_candidates')==1 else None),
+        confidence_level=opts['confidence'],threshold_multiplier=float(norm.ppf((1+opts['confidence'])/2)),
+        calibrated_confidence=False,selection_adjusted=False,global_uniqueness_claim=False,
+        parameter_names=['vy','vx']+(['log_depth'] if free else []),
+        parameter_units=['m/s','m/s']+(['log(d/1m)'] if free else []),
+        n_effective=k,effective_averages_source=source,variance_estimator=opts['variance_estimator'],
+        n_starts_requested=fit_options.get('n_candidates') if isinstance(fit_options,dict) else None,
+        n_starts_attempted=len(runs),n_valid_runs=None,n_distinct_modes=None,
+        excluded_runs=[],modes=[],comparisons=[],merge_tolerances=None,
+        extra_searches=0,model_evaluations=0,
+        scope='Existing converged, feasible, interior endpoints only; no search outside the existing region.')
+    def finish(reason=None):
+        if reason is not None:out['reason']=reason
+        out['elapsed_seconds']=perf_counter()-started
+        return out
+    if method!='HNM':return finish('solver_has_no_reusable_multistart')
+    if not isinstance(metadata,dict):return finish('no_refinement_metadata')
+    if not metadata.get('refinement_enabled',False):return finish('refinement_disabled')
+    if not optimizer_success or metadata.get('at_boundary',False):return finish('selected_fit_invalid')
+    if len(runs)<2:return finish('single_start' if len(runs)==1 else 'no_local_runs')
+    if not np.isfinite(depth) or depth<=0:return finish('selected_fit_invalid')
+    q0=np.r_[velocity,np.log(depth)] if free else np.asarray(velocity,float)
+    if q0.shape!=(p,) or not np.isfinite(q0).all():return finish('selected_fit_invalid')
+    constraints={'velocity_disk':metadata['trust_region']} if metadata.get('trust_region') is not None else None
+    box,disk,feasible=_constraints(bounds,constraints,free)
+    out['search_bounds']=box.tolist();out['velocity_disk']=deepcopy(metadata.get('trust_region'))
+    if not feasible(q0):return finish('selected_fit_outside_search_region')
+    tolerances=opts['merge_tolerances']
+    if tolerances is None:tolerances=np.full(p,10*fit_options['xatol'])
+    elif len(tolerances)<p:raise ValueError('Joint mode ambiguity requires three merge_tolerances.')
+    else:tolerances=np.asarray(tolerances[:p],float)
+    out['merge_tolerances']=np.asarray(tolerances).tolist()
+    qualified=[]
+    for i,run in enumerate(runs):
+        reason=None;q=None
+        if not isinstance(run,dict):reason='invalid_run_record'
+        elif not run.get('converged',False):reason='optimizer_failed'
+        elif any(run.get(key,False) for key in ('at_trust_boundary','at_global_boundary','at_depth_boundary')):reason='boundary_limited'
+        elif not run.get('feasible',False):reason='infeasible_endpoint'
+        else:
+            try:
+                d=float(run['depth']);v=np.asarray(run['velocity'],float);value=float(run['objective_value'])
+                q=np.r_[v,np.log(d)] if free and d>0 else v
+                if v.shape!=(2,) or q.shape!=(p,) or not np.isfinite(q).all() or d<=0 or not np.isfinite(value) or value>=0:
+                    reason='invalid_endpoint'
+                elif not free and d!=depth:reason='inconsistent_fixed_depth'
+                elif not feasible(q):reason='infeasible_endpoint'
+            except (KeyError,TypeError,ValueError):reason='invalid_run_record'
+        if reason is not None:out['excluded_runs'].append(dict(run_index=i,reason=reason))
+        else:qualified.append(dict(run_index=i,point=q,value=value,depth=d))
+    out['n_valid_runs']=len(qualified)
+    if len(qualified)<2:return finish('insufficient_valid_runs')
+    selected=metadata.get('selected_run_index')
+    chosen=[r for r in qualified if r['run_index']==selected]
+    if not chosen or np.max(abs(chosen[0]['point']-q0)/tolerances)>1:
+        return finish('selected_run_unavailable')
+    # Complete-link merging avoids chaining many nearly adjacent endpoints.
+    groups=[dict(point=q0.copy(),depth=float(depth),members=[chosen[0]],selected=True)]
+    for run in sorted(qualified,key=lambda r:(r['value'],r['run_index'])):
+        if run['run_index']==selected:continue
+        group=next((g for g in groups if all(np.max(abs(run['point']-member['point'])/tolerances)<=1 for member in g['members'])),None)
+        if group is None:groups.append(dict(point=run['point'],depth=run['depth'],members=[run],selected=False))
+        else:group['members'].append(run)
+    out['n_distinct_modes']=len(groups)
+    for i,g in enumerate(groups):
+        out['modes'].append(dict(mode_index=i,selected=g['selected'],velocity=g['point'][:2].tolist(),depth=g['depth'],
+            parameters=g['point'].tolist(),run_indices=sorted(r['run_index'] for r in g['members']),
+            n_runs=len(g['members']),
+            fitted_objective_value=float(chosen[0]['value'] if g['selected'] else g['members'][0]['value']),
+            log_score=float(-np.log(-(chosen[0]['value'] if g['selected'] else g['members'][0]['value'])))))
+    if len(groups)==1:
+        out.update(status='assessed',assessed=True,valid=True,ambiguous=False)
+        return finish('one_observed_basin')
+    variance=full**2/(k if opts['variance_estimator']=='plugin' else k+1)
+    evaluator=SpectralOverlapObjective(M,spectral.wave_numbers(window_dims,res,fps),depth,vel_indx,
+        gravity_waves_switch,turbulence_switch,fit_options)
+    reference=_score_statistics(evaluator.normalized_weights(q0),M,full,active,variance)
+    out['model_evaluations']+=1
+    if reference is None:return finish('invalid_reference_score')
+    out['modes'][0]['log_score']=reference['log_score']
+    for i,g in enumerate(groups[1:],1):
+        alternative=_score_statistics(evaluator.normalized_weights(g['point']),M,full,active,variance)
+        out['model_evaluations']+=1
+        if alternative is None:
+            comparison=dict(mode_index=i,valid=False,competitive=None,reason='invalid_alternative_score')
+        else:
+            out['modes'][i]['log_score']=alternative['log_score']
+            comparison=dict(_contrast(reference,alternative,variance,out['threshold_multiplier']),mode_index=i)
+            if comparison['reason']=='alternative_has_better_score':out['flags'].append('alternative_has_better_score')
+        out['comparisons'].append(comparison)
+    valid=all(c['valid'] for c in out['comparisons'])
+    competitive=any(c['competitive'] is True for c in out['comparisons'])
+    out.update(status='assessed' if valid else 'partial',assessed=valid,valid=valid,
+               ambiguous=True if competitive else False if valid else None)
+    return finish('competitive_alternative' if competitive else 'alternatives_resolved_on_noise_scale' if valid else 'invalid_score_comparison')

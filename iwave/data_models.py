@@ -136,6 +136,29 @@ class LazySpectrumArray(object):
         else:
             raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
 
+    def get_with_spectral_context(self, idx):
+        """One FFT pass, retaining full normalized power before censoring.
+
+        Ordinary __getitem__ is unchanged. Contexts exist only for an explicitly
+        enabled spectral diagnostic; no raw-cube cache persists on this object.
+        """
+        windows_sel = self.windows[idx] if isinstance(idx, slice) else self.windows[idx:idx+1]
+        length = int(self.time_size)
+        overlap = int(self.time_overlap)
+        if length < 1 or not 0 <= overlap < length or windows_sel.shape[1] < length:
+            raise ValueError('Invalid temporal segmentation for spectral uncertainty.')
+        raw = spectral.sliding_window_spectrum(windows_sel[:,:,::-1,:], length, overlap)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            normalized = raw / np.mean(raw, axis=(2,3), keepdims=True)
+        normalized = np.nan_to_num(normalized)
+        processed = spectral.spectrum_preprocessing(raw, self.kt, self.ky, self.kx,
+                              self.smax*3, spectrum_threshold=self.threshold)
+        count = (windows_sel.shape[1]-length)//(length-overlap)+1
+        contexts = [dict(normalized_spectrum=normalized[i], n_averages=count,
+                         time_size=length, time_overlap=overlap,
+                         source='lazy_full_normalized_before_threshold') for i in range(len(processed))]
+        return (processed, contexts) if isinstance(idx, slice) else (processed[0], contexts[0])
+
     def __len__(self):
         """
         Return the total number of windows of spectram
