@@ -1,145 +1,129 @@
-"""Lazy data models for memory intensive processing."""
+"""Lazy preprocessing of one requested window batch at a time.
+
+Image windows and power spectra are never cached here. Only the small metadata
+needed to extract rectangles and the bounded complex FFT workspace are retained.
+Every returned spectrum owns data independent of that FFT workspace.
+"""
+import operator
+from typing import Optional
+
 import numpy as np
-
-from typing import Optional, Union
-
 from iwave import window, spectral
 
 
-class LazyWindowArray:
-    def __init__(self, imgs, sliding_window_func, win_x, win_y, norm):
-        """Initialize a lazy array-like object for subwindows.
+def _selection(idx, length):
+    """Convert an integer to a one-window slice; leave slices unchanged.
 
-        Parameters
-        ----------
-        imgs : np.ndarray
-            Images (3D numpy array)
-        sliding_window_func : callable
-            Function that extracts subwindows
-        win_x : np.ndarray
-            Sampling indexes for window extraction in x direction
-        win_y : np.ndarray
-            Sampling indexes for window extraction in y direction
-        norm : {'xy', 'time', None}
-            Whether to normalize the windows and in what way
-        """
+    Retaining a window axis through preprocessing gives integers and slices
+    the same numerical path. Remove it only when returning an integer result.
+    """
+    if isinstance(idx, slice):
+        return idx, False
+    try:
+        i = operator.index(idx)
+    except TypeError as exc:
+        raise TypeError('Only an integer or slice is supported.') from exc
+    if i < 0:
+        i += length
+    if not 0 <= i < length:
+        raise IndexError('Window index out of range.')
+    return slice(i, i + 1), True
+
+
+class LazyWindowArray:
+    """Extract requested windows into owned (window, time, y, x) float64 data."""
+
+    def __init__(self, imgs, sliding_window_func, win_x, win_y, norm):
         self.imgs = imgs
         self.sliding_window_func = sliding_window_func
-        self.win_x = win_x
-        self.win_y = win_y
-        self.norm = norm  # Optional: normalization parameter
+        self.win_x, self.win_y = win_x, win_y
+        if norm not in ('xy', 'time', None):
+            raise ValueError("norm must be 'xy', 'time' or None.")
+        self.norm = norm
+        # Standard rectangular windows can be copied with basic slicing instead
+        # of a frame-by-frame advanced-index gather followed by np.stack.
+        # Detect this once, not on every batch. Custom callbacks and arbitrary
+        # pixel-index windows retain their original extraction path.
+        self._origins = (
+            window.rectangular_window_origins(win_x, win_y, imgs.shape)
+            if sliding_window_func is window.multi_sliding_window_array else None
+        )
 
     def __repr__(self):
-        return f"Interrogation windows dimensions (windows, time, y, x): {self.shape}"
+        return f'Interrogation windows dimensions (windows, time, y, x): {self.shape}'
 
     def __getitem__(self, idx):
-        """
-        On-the-fly generation of subwindows for the requested index or slice.
-        """
-        if isinstance(idx, slice):
-            # Generate windows for a range of indices
-            start, stop, step = idx.indices(len(self.win_x))
-            win_x_sel = self.win_x[start:stop:step]
-            win_y_sel = self.win_y[start:stop:step]
-            # indexed_imgs = self.imgs[start:stop:step]
-        elif isinstance(idx, Union[int, np.integer]):
-            # Generate windows for a single index
-            win_x_sel = self.win_x[idx : idx + 1]
-            win_y_sel = self.win_y[idx : idx + 1]
+        selected, scalar = _selection(idx, len(self))
+        if self._origins is not None:
+            windows = window.extract_rectangular_windows(
+                self.imgs, self._origins[selected], self.win_x.shape[-2:]
+            )
         else:
-            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
-
-        # Use the sliding_window_func to generate the windows
-        windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True).astype(np.float64)
-
-        # Apply normalization if needed
-        if self.norm is not None:
-            # find relevant windows with mean != 0. Only those require normalization
-            nonzero_idx = np.where(np.mean(windows, axis=(1, 2, 3)) != 0)[0]
-            if self.norm == "xy":
-                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="xy")
-            elif self.norm == "time":
-                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="time")
-        if isinstance(idx, slice):
-            return windows
-        elif isinstance(idx, int):
-            return windows[0]
-        else:
-            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
+            # A custom callback may return a view into the original images.
+            # Own the buffer before normalising it in place.
+            windows = np.array(
+                self.sliding_window_func(
+                    self.imgs, self.win_x[selected], self.win_y[selected],
+                    swap_time_dim=True,
+                ),
+                dtype=np.float64, order='C', copy=True,
+            )
+        if self.norm is not None and len(windows):
+            # Preserve the original per-window mean!=0 gate, even for signed
+            # inputs. Normalisation still spans the entire clip, NOT each FFT
+            # segment. Only its allocation/layout strategy has changed.
+            nonzero = windows.mean(axis=(1, 2, 3)) != 0
+            window.normalize_owned_windows(windows, self.norm, nonzero)
+        return windows[0] if scalar else windows
 
     def __len__(self):
-        """
-        Return the total number of windows (or equivalent slices).
-        """
         return len(self.win_x)
 
     @property
     def shape(self):
-        return len(self), self.imgs.shape[0], self.win_x.shape[1], self.win_x.shape[2]
+        return len(self), self.imgs.shape[0], *self.win_x.shape[-2:]
 
 
-class LazySpectrumArray(object):
-    def __init__(
-        self,
-        windows: LazyWindowArray,
-        time_size: int,
-        time_overlap: int,
-        kt: np.ndarray,
-        kx: np.ndarray,
-        ky: np.ndarray,
-        smax: Optional[float] = 4.0,
-        threshold: Optional[float] = 1.0
-    ):
+class LazySpectrumArray:
+    """Produce the original full-grid processed power on demand.
+
+    Only complex FFT scratch is retained between requests, never outputs.
+    A short final batch reuses it without overwriting a spectrum from an
+    earlier batch. No fitting method or uncertainty interface is added here.
+    """
+
+    def __init__(self, windows, time_size: int, time_overlap: int,
+                 kt: np.ndarray, kx: np.ndarray, ky: np.ndarray,
+                 smax: Optional[float] = 4., threshold: Optional[float] = 1.):
         self.windows = windows
-        self.time_size = time_size
-        self.time_overlap = time_overlap
-        self.kt = kt
-        self.kx = kx
-        self.ky = ky
-        self.smax = smax
-        self.threshold = threshold
+        self.time_size, self.time_overlap = time_size, time_overlap
+        self.kt, self.kx, self.ky = kt, kx, ky
+        self.smax, self.threshold = smax, threshold
+        self._fft_workspace = spectral._FFTWorkspace()  # Allocates on first use.
 
     def __repr__(self):
-        """Return string representation showing spectrum dimensions."""
-        return f"Spectrum dimensions (windows, ft, fy, fx): {self.shape}"
+        return f'Spectrum dimensions (windows, ft, fy, fx): {self.shape}'
 
     def __getitem__(self, idx):
-        """
-        Generate on-the-fly spectra for subwindows for the requested index or slice.
-        """
-
-        # Use the sliding_window_func to generate the windows
-        if isinstance(idx, slice):
-            windows_sel = self.windows[idx]
-        else:
-            windows_sel = self.windows[idx : idx + 1]
-        # now apply spectra on windows, reverse y-direction to positive upwards
-        spectrum = spectral.sliding_window_spectrum(
-            windows_sel[:,:,::-1,:],  # reverse y-direction
-            self.time_size,
-            self.time_overlap,
+        selected, scalar = _selection(idx, len(self))
+        windows = self.windows[selected]
+        power = spectral.sliding_window_spectrum(
+            windows[:, :, ::-1, :], self.time_size, self.time_overlap,
+            _workspace=self._fft_workspace,
         )
-
-        # preprocess
-        spectrum = spectral.spectrum_preprocessing(
-            spectrum,
-            self.kt,
-            self.ky,
-            self.kx,
-            self.smax*3,
-            spectrum_threshold=self.threshold
+        # Keep main's y reversal/sign convention. The FFT result owns its data,
+        # so release the large image batch before normalisation/thresholding.
+        del windows
+        # This buffer is private to this request: normalise and threshold it
+        # in place instead of allocating additional full spectral cubes.
+        normalized = spectral.normalize_power(power, copy=False)
+        processed = spectral.preprocess_normalized_spectrum(
+            normalized, self.kt, self.ky, self.kx, self.smax * 3,
+            self.threshold, copy=False,
         )
-        if isinstance(idx, slice):
-            return spectrum
-        elif isinstance(idx, Union[int, np.integer]):
-            return spectrum[0]
-        else:
-            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
+        return processed[0] if scalar else processed
 
     def __len__(self):
-        """
-        Return the total number of windows of spectram
-        """
         return len(self.windows)
 
     @property

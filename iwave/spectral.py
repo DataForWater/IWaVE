@@ -1,25 +1,25 @@
+"""Full-grid image power spectra with bounded reusable real-FFT scratch.
+
+Preprocessing preserves the original spatial-FFT / temporal-IFFT power, but
+computes the real temporal transform first. The separable transforms commute;
+using its positive-time sign avoids an explicit conjugation pass. Keep the
+original 1/T**2 power scale and ceil(T/2) bins (no even-length Nyquist bin).
+
+Each lazy spectral array retains bounded complex scratch, NOT power spectra.
+One owned power accumulator receives every temporal segment in order; returned
+spectra remain independent of scratch reused by later calls.
+Only preprocessing is implemented here; fitting stays in the main optimiser.
+"""
+from threading import Lock
 import numba as nb
 import numpy as np
+from rocket_fft import r2c, c2c
 
 
-@nb.njit(cache=True)
-def fft_x(x):
-    return np.fft.fft(x, axis=-1)
-
-
-@nb.njit(cache=True)
-def fft_y(x):
-    return np.fft.fft(x, axis=-2)
-
-
-@nb.njit(cache=True)
-def ifft_(x):
-    return np.fft.ifft(x, axis=0)
-
-
-@nb.njit(cache=True)
-def fftshift_(x):
-    return np.fft.fftshift(x)
+# Low-level Rocket-FFT calls take explicit integer axis arrays and output
+# buffers. Keep them outside the hot loop; only time is reduced to a half-grid.
+_FFT_TIME_AXES = np.array([0], dtype=np.int64)
+_FFT_SPACE_AXES = np.array([1, 2], dtype=np.int64)
 
 
 def wave_numbers(
@@ -63,77 +63,100 @@ def wave_numbers(
 
 
 @nb.njit(parallel=True, cache=True, nogil=True)
-def _numba_fourier_transform(
-    windows: np.ndarray
-) -> np.ndarray:
+def _workspace_power(imgs, work, output, win_t, step):
+    """Reuse disjoint complex slots; sum segments in their original order.
+
+    One native FFT thread per slot avoids nesting an FFT thread pool inside
+    the Numba window-parallel loop. A slot can serve several windows when the
+    batch exceeds the Numba thread count; workspace memory follows concurrency,
+    not the number of windows in a long batch/video.
     """
-    Perform 3D spectral analysis with numba jitted code.
+    n, nt, ny, nx = imgs.shape
+    nf = (win_t + 1)//2
+    segments = (nt - win_t)//step + 1
+    slots = min(n, work.shape[0])
+    for slot in nb.prange(slots):
+        z = work[slot]
+        for m in range(slot, n, slots):
+            for segment in range(segments):
+                start = segment*step
+                source = imgs[m, start:start + win_t]
+                if not np.any(source):
+                    if segment == 0:
+                        output[m] = 0.
+                    continue
+                # The positive-time sign matches main's temporal IFFT.
+                # Write directly to z, without a separate conjugation pass.
+                r2c(source, z, _FFT_TIME_AXES, False, 1.0, 1)
+                # Spatial FFT overwrites z: no second complex window array.
+                c2c(z, z, _FFT_SPACE_AXES, True, 1.0, 1)
+                for f in range(nf):
+                    for y in range(ny):
+                        yy = (y + (ny + 1)//2) % ny
+                        for x in range(nx):
+                            xx = (x + (nx + 1)//2) % nx
+                            v = z[f, yy, xx]
+                            # The unscaled +time FFT replaces an IFFT. Apply
+                            # its 1/T amplitude scale here as 1/T**2 power.
+                            power = (v.real*v.real + v.imag*v.imag)/(win_t*win_t)
+                            if segment == 0:
+                                output[m, f, y, x] = power
+                            else:
+                                output[m, f, y, x] += power
+            output[m] /= segments
 
-    Parameters
-    ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
 
-    Returns
-    -------
-    spectrum : np.ndarray
-        3D power spectrum of 3D fourier transform
+class _FFTWorkspace:
+    """Transient, per-owner complex scratch; never a cached spectrum.
 
+    Keep the largest concurrency needed for the current transform geometry.
+    A shorter final batch reuses slots. A larger thread/batch request grows
+    the buffer; changed FFT geometry replaces it instead of retaining a cache
+    of shapes. Native Rocket/PocketFFT may still allocate internal scratch.
     """
-    spectrum_2d = np.empty(windows.shape, dtype=np.complex128)
-    for n in nb.prange(windows.shape[0]):
-        spectrum_2d[n] = fftshift_(
-        fft_y(
-            fft_x(windows[n])
-        )
-    )
-    spectrum_3d = ifft_(spectrum_2d)
-    # return spectrum_3d
-    power = np.abs(spectrum_3d) ** 2
-    # abbreviate to positive omega
-    return power[:int(np.ceil(len(power)/2))]
+    def __init__(self):
+        self._buffer = None
+        self._lock = Lock()
+
+    def __getstate__(self):
+        # Scratch and locks are not scientific state. Pickled IWaVE/lazy arrays
+        # remain portable and allocate fresh scratch after deserialization.
+        return {}
+
+    def __setstate__(self, state):
+        self.__init__()
+
+    def _power(self, imgs, win_t, overlap):
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError('The same FFT workspace cannot be used concurrently.')
+        try:
+            n, _, ny, nx = imgs.shape
+            result = np.empty((n, (win_t + 1)//2, ny, nx), dtype=np.float64)
+            if not n:
+                return result
+            slots = min(n, nb.get_num_threads())
+            geometry = (win_t//2 + 1, ny, nx)
+            if (self._buffer is None or self._buffer.shape[1:] != geometry
+                    or self._buffer.shape[0] < slots):
+                # Drop the previous allocation BEFORE reserving the new one.
+                self._buffer = None
+                self._buffer = np.empty((slots, *geometry), dtype=np.complex128)
+            _workspace_power(imgs, self._buffer, result, win_t, win_t - overlap)
+            # No returned array/view references scratch. Callers can retain
+            # this power after every later batch overwrites the scratch.
+            return result
+        finally:
+            self._lock.release()
 
 
-@nb.njit(parallel=True, cache=True, nogil=True)
-def _numba_fourier_transform_multi(
-    imgs: np.ndarray
-) -> np.ndarray:
-    """
-    Perform 3D spectral analysis for multiple windows at once with numba jitted code.
+def _numba_fourier_transform_multi(imgs):
+    """Keep the original batched entry point, now using real-input scratch."""
+    return sliding_window_spectrum(imgs, imgs.shape[1], 0)
 
-    Parameters
-    ----------
-    imgs : np.ndarray
-        n x time x Y x X windows with intensities
 
-    Returns
-    -------
-    spectra : np.ndarray
-        n x 3D power spectrum of 3D fourier transform of all imgs
-
-    """
-    spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
-    for m in nb.prange(imgs.shape[0]):
-        # Skip FFT computation for zero windows (common in edge cases)
-        if not np.any(imgs[m]):
-            spectra[m] = 0.0
-            continue
-        
-        spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
-        for n in nb.prange(imgs.shape[1]):
-            spectrum_3d[n] = fftshift_(
-                fft_y(
-                    fft_x(imgs[m, n])
-                )
-            )
-        for y in nb.prange(spectrum_3d.shape[1]):
-            for x in nb.prange(spectrum_3d.shape[2]):
-                spectrum_3d[:, y, x] = ifft_(spectrum_3d[:, y, x])
-        # return spectrum_3d
-        power = np.abs(spectrum_3d) ** 2
-        # abbreviate to positive omega
-        spectra[m] = power[:int(np.ceil(len(power)/2))]
-    return spectra
+def _numba_fourier_transform(windows):
+    """Single-window wrapper around the same batched real-input kernel."""
+    return _numba_fourier_transform_multi(windows[None])[0]
 
 
 def _numpy_fourier_transform(
@@ -174,80 +197,63 @@ def _numpy_fourier_transform(
     return spectrum
 
 
-def spectral_imgs(
-    imgs: np.ndarray,
-    **kwargs
-) -> np.ndarray:
+def spectral_imgs(imgs: np.ndarray) -> np.ndarray:
+    """Return full spatial power for real (window, time, y, x) images.
+
+    Output shape is (window, ceil(time/2), y, x). Input is not modified.
+    This convenience entry point transforms the complete clip as one segment;
+    sliding_window_spectrum averages shorter, possibly overlapping segments.
     """
-    Perform 3D spectral analysis.
-
-    Parameters
-    ----------
-    imgs : np.ndarray
-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in
-        subwindows of Y * X pixels
-    engine : str, optional
-        "numpy" or "numba", compute method to use, typically numba (default) is
-        a lot faster. Numpy function is easier to read.
-    kwargs : dict with additional keyword arguments for processing
-
-    Returns
-    -------
-    spectra : np.ndarray
-        wave spectra for all image window sequences
-
-    """
-    n, t, y, x = imgs.shape
-    t_out = int(np.ceil(t / 2))  # Reduced time dimension
-    spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
-    return spectra
+    if imgs.ndim != 4 or np.iscomplexobj(imgs):
+        raise ValueError('FFT input must be real (window,time,y,x) images.')
+    return _numba_fourier_transform_multi(imgs)
 
 
 def sliding_window_spectrum(
     imgs: np.ndarray,
     win_t: int,
     overlap: int,
-    **kwargs
+    *,
+    _workspace=None,
 ) -> np.ndarray:
-    """
-    Splits the video into shorter segments and calculates the average 3D spectrum.
+    """Average full-grid power over the complete temporal segments of imgs.
 
     Parameters
     ----------
     imgs : np.ndarray
-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in 
-        subwindows of Y * X pixels
+        Real (window, time, y, x) images, already normalised if required.
     win_t : int
-        number of frames per segment
+        Frames per FFT segment.
     overlap : int
-        overlap (frames)
-    kwargs : dict with additional keyword arguments for processing
+        Shared frames between adjacent segments; 0 <= overlap < win_t.
 
     Returns
     -------
-    spectra : np.ndarray
-        average wave spectra for all image window sequences
+    np.ndarray
+        Owned float64 power, shape (window, ceil(win_t/2), y, x).
 
+    Notes
+    -----
+    Segments are summed in order, then divided by their count. Normalisation
+    of the image clip and the later power thresholding remain separate steps.
+    The private _workspace argument lets LazySpectrumArray reuse complex
+    buffers between batches. Standalone calls create temporary scratch.
     """
-    
-    # Check for division by zero
-    if win_t == overlap:
-        raise ValueError("win_t and overlap should not be equal.")
-    
-    # number of segments
-    num_segments = (imgs.shape[1] - win_t) // (win_t - overlap)+ 1
-    
-    # sum of individual segments
-    spectrum_sum = sum(
-        spectral_imgs(
-            imgs[:, segment_t0:(segment_t0 + win_t), :, :],
-            **kwargs
-        ) for segment_t0 in range(0, imgs.shape[1] - win_t + 1, win_t - overlap)
-    )
-    
-    # renormalisation
-    spectra = spectrum_sum / num_segments
-    return spectra
+    if imgs.ndim != 4 or np.iscomplexobj(imgs):
+        raise ValueError('FFT input must be real (window,time,y,x) images.')
+    for value in (win_t, overlap):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+            raise ValueError('Temporal length and overlap must be integers.')
+    if win_t < 1 or not 0 <= overlap < win_t or imgs.shape[1] < win_t:
+        raise ValueError('Need 0 <= overlap < win_t <= available frames.')
+    if min(imgs.shape[-2:]) < 1:
+        raise ValueError('Spatial FFT dimensions must be positive.')
+    # Normal lazy windows are already float64: no copy. Converting other real
+    # public inputs avoids low-level FFT dtype mismatches, without changing
+    # image ownership or forcing a copy of reversed/strided float64 views.
+    imgs = np.asarray(imgs, dtype=np.float64)
+    workspace = _FFTWorkspace() if _workspace is None else _workspace
+    return workspace._power(imgs, win_t, overlap)
 
 
 def spectrum_preprocessing(
@@ -290,28 +296,38 @@ def spectrum_preprocessing(
         pre-processed and normalised measured 3D spectrum
 
     """
-    # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
+    normalized = normalize_power(measured_spectrum)
+    return preprocess_normalized_spectrum(normalized, kt, ky, kx,
+                                          velocity_threshold, spectrum_threshold, copy=False)
+
+
+def normalize_power(power, *, copy=True):
+    """Divide each frequency slice by its spatial mean, once.
+
+    copy=False is used for owned FFT power. Do not clean zero-slice NaNs here:
+    the original threshold rule uses them in the subsequent frequency mean.
+    """
+    result = np.array(power, dtype=np.float64, copy=True) if copy else power
+    denominator = result.mean(axis=(-2, -1), keepdims=True)
     with np.errstate(divide='ignore', invalid='ignore'):
-        preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
+        np.divide(result, denominator, out=result)
+    return result
 
-    # apply threshold
-    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
-    preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
 
-    # set the first slice (frequency=0) to 0
-    preprocessed_spectrum[:, 0, :, :] = 0
+def preprocess_normalized_spectrum(normalized, kt, ky, kx,
+                                   velocity_threshold, spectrum_threshold=1., *, copy=True):
+    """Apply the original thresholds to already spatial-normalised power.
 
-    kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
-
-    # create mask
-    kt_bc = kt[:, None, None]  
-    mask = kt_bc <= kt_threshold 
-
-    preprocessed_spectrum *= mask  # apply mask
-    
-    # remove NaNs
-    preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
-    return preprocessed_spectrum
+    The public wrapper protects caller input. LazySpectrumArray owns its
+    power buffer and uses copy=False to avoid another spectral allocation.
+    Threshold order and NaN cleanup are unchanged from main.
+    """
+    result = normalized.copy() if copy else normalized
+    threshold = spectrum_threshold * result.mean(axis=1, keepdims=True)
+    result[result < threshold] = 0
+    result[:, 0] = 0
+    result *= kt[:, None, None] <= dispersion_threshold(ky, kx, velocity_threshold)
+    return np.nan_to_num(result, copy=False)
 
 
 def dispersion_threshold(
@@ -351,4 +367,3 @@ def dispersion_threshold(
     k_mod = np.sqrt(ky ** 2 + kx ** 2)
 
     return k_mod * velocity_threshold
-

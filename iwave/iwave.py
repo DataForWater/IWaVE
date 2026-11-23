@@ -69,7 +69,9 @@ class Iwave(object):
         smax : float, optional
             Maximum velocity expected in the scene. Defaults to 4 m/s
         window_chunk_size : int, optional
-            Number of windows to process at a time. Defaults to 50.
+            Maximum windows extracted and fitted per batch (default 50).
+            Use smaller batches for long clips or large spatial windows.
+            All spectra use the real-input FFT and the complete spatial grid.
         """
         self.window_chunk_size = window_chunk_size
         self.resolution = resolution
@@ -87,12 +89,14 @@ class Iwave(object):
         self.spectrum_threshold = spectrum_threshold
         self.smax = smax
         self.fps = fps
+        # Initialise before the image setter creates the sampling coordinates.
+        # Otherwise passing imgs= directly would immediately erase them again.
+        self.win_x = None
+        self.win_y = None
         if imgs is not None:
             self.imgs = imgs
         else:
             self.imgs = None
-        self.win_x = None
-        self.win_y = None
         self.vy = None  # y velocity component (m/s)
         self.vx = None  # x velocity component (m/s)
         self.d = None  # water depth (m)
@@ -387,6 +391,30 @@ class Iwave(object):
         self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame, stride=stride)
 
 
+
+    def warmup(self):
+        """Prepare parent-process normalisation/FFT kernels using tiny data.
+
+        Optional: call before timing a run to move JIT/cache/thread startup out
+        of the first timed batch. This does not remove that cost or start solver
+        workers. No supplied images, spectra or fitting results are changed.
+        Returns normalisation, FFT and total seconds spent in this warmup.
+        """
+        from time import perf_counter
+
+        started = perf_counter()
+        # Numba specialises on dtype/layout, not these tiny synthetic sizes.
+        # Match the reversed-y view used in normal spectral preprocessing.
+        dummy = np.arange(8 * 4 * 4, dtype=np.float64).reshape(1, 8, 4, 4)
+        window.normalize_owned_windows(dummy, self.norm, np.ones(1, dtype=bool))
+        normalized = perf_counter()
+        spectral.spectral_imgs(dummy[:, :, ::-1, :])
+        finished = perf_counter()
+        return dict(
+            normalization_seconds=normalized - started,
+            fft_seconds=finished - normalized,
+            total_seconds=finished - started,
+        )
 
     def save_frames(self, dst: str):
         raise NotImplementedError

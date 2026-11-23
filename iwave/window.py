@@ -1,5 +1,13 @@
-import numpy as np
+"""Window geometry and image normalisation.
+
+The public indexing helpers remain available. LazyWindowArray additionally
+uses owned rectangular copies and blocked temporal normalisation to avoid
+frame-stack and variance temporaries for each requested window batch.
+"""
 from typing import Tuple, Literal
+
+import numpy as np
+import numba as nb
 
 
 def sliding_window_idx(
@@ -224,49 +232,153 @@ def get_rect_coordinates(
 
     return x, y
 
+
 def normalize(
     imgs: np.ndarray,
-    mode: Literal["xy", "time"] = "time"
+    mode: Literal["xy", "time"] = "time",
+    *,
+    copy: bool = True,
 ):
-    """
-    normalizes images assuming the last two dimensions contain the x/y image
-    intensities
+    """Normalise images along time or within each spatial image.
 
     Parameters
     ----------
-    imgs : np.ndarray (n x Y x X) or (n x m x Y x X)
-        input images, organized in at least one stack
+    imgs : np.ndarray
+        Image stack with trailing (time, y, x) dimensions; a leading window
+        axis is allowed. Time statistics span the complete supplied clip.
+    mode : {'xy', 'time'}
+        Axes over which to subtract the mean and divide by population std.
+    copy : bool, optional
+        True (default) protects caller data with a float64 copy. False is for
+        owned writable floating buffers, allowing subtraction/division in place.
+
     Returns
     -------
-
-    imgs_norm : np.ndarray (n x Y x X) or (n x m x Y x X)
-        output normalized images, organized in at least one stack, 
-        similar to imgs
+    np.ndarray
+        Normalised images with unchanged shape; non-finite results are cleaned
+        as before, including zero-contrast pixels.
     """
-    # compute means and stds
-    if mode == "xy":
-        imgs_std = np.expand_dims(
-            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).std(axis=-1),
-            axis=(-1, -2)
-        )
-        imgs_mean = np.expand_dims(
-            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).mean(axis=-1),
-            axis=(-1, -2)
-        )
-    elif mode == "time":
-        imgs_std = np.expand_dims(
-            imgs.std(axis=-3),
-            axis=-3
-        )
-        imgs_mean = np.expand_dims(
-            imgs.mean(axis=-3),
-            axis=-3
-        )
+    # copy=False is only used for a private, floating-point extraction buffer.
+    # The public default does not mutate images supplied by a caller.
+    imgs = np.array(imgs, dtype=np.float64, copy=True) if copy else np.asarray(imgs)
+    if not np.issubdtype(imgs.dtype, np.floating) or not imgs.flags.writeable:
+        raise ValueError('In-place normalization needs a writable floating array.')
+    if imgs.ndim < 3:
+        raise ValueError('Images must have time, y and x dimensions.')
+    if mode == 'xy':
+        axes = (-2, -1)
+    elif mode == 'time':
+        axes = -3
     else:
         raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
-    # this step takes a lot of memory, consider doing a stepwise replacement through numba instead of numpy in one go
+    # Compute both statistics BEFORE overwriting the intensities. Keep ddof=0
+    # and the original whole-clip time interval, not individual FFT segments.
+    std = imgs.std(axis=axes, keepdims=True)
+    mean = imgs.mean(axis=axes, keepdims=True)
+    np.subtract(imgs, mean, out=imgs)
     with np.errstate(divide='ignore', invalid='ignore'):
-        imgs = (imgs - imgs_mean) / imgs_std
-    imgs = np.nan_to_num(imgs)
-    return imgs
+        np.divide(imgs, std, out=imgs)
+    return np.nan_to_num(imgs, copy=False)
+
+
+def rectangular_window_origins(win_x, win_y, image_shape):
+    """Return rectangle origins, or None for arbitrary pixel-index windows.
+
+    Checking once when constructing a lazy array retains the general indexing
+    API without repeating a whole grid comparison for every window batch.
+    """
+    x, y = np.asarray(win_x), np.asarray(win_y)
+    if x.ndim != 3 or x.shape != y.shape:
+        return None
+    ny, nx = x.shape[-2:]
+    x0, y0 = x[:, 0, 0], y[:, 0, 0]
+    if (np.any(x0 < 0) or np.any(y0 < 0)
+            or np.any(x0 + nx > image_shape[-1])
+            or np.any(y0 + ny > image_shape[-2])):
+        return None
+    if (not np.array_equal(x, np.broadcast_to(x0[:, None, None] + np.arange(nx), x.shape))
+            or not np.array_equal(y, np.broadcast_to(y0[:, None, None] + np.arange(ny)[:, None], y.shape))):
+        return None
+    return np.column_stack((y0, x0)).astype(np.intp)
+
+
+def extract_rectangular_windows(imgs, origins, window_shape):
+    """Copy only one requested batch into owned (window,time,y,x) float64 data.
+
+    A loop over rectangles avoids frame-by-frame advanced-index gathers and
+    np.stack temporaries. The source may be a non-contiguous ROI or memmap;
+    it is never modified and no full-video window view is materialised.
+    """
+    ny, nx = window_shape
+    result = np.empty((len(origins), len(imgs), ny, nx), dtype=np.float64)
+    for i, (y0, x0) in enumerate(origins):
+        result[i] = imgs[:, y0:y0 + ny, x0:x0 + nx]
+    return result
+
+
+@nb.njit(parallel=True, cache=True, nogil=True, error_model='numpy')
+def _normalize_time_owned(windows, nonzero):
+    """Stable two-pass variance in small spatial blocks, without a video temp.
+
+    Time is traversed in the original order; nearby pixels are processed
+    together for contiguous memory access. Parallel blocks work even when the
+    spatial-window batch contains fewer windows than there are CPU cores.
+    No fastmath or E[x*x]-E[x]**2 approximation is used.
+    """
+    n, nt, ny, nx = windows.shape
+    # Small per-task mean/variance arrays replace NumPy std's clip-sized
+    # centred temporary. Adjacent pixels stay together for cache locality.
+    pixels, block = ny*nx, 128
+    blocks = (pixels + block - 1)//block
+    for task in nb.prange(n*blocks):
+        m = task//blocks
+        if not nonzero[m]:
+            continue
+        start = (task % blocks)*block
+        size = min(block, pixels - start)
+        data = windows[m].reshape(nt, pixels)
+        mean, variance = np.zeros(size), np.zeros(size)
+        for t in range(nt):
+            for j in range(size):
+                mean[j] += data[t, start+j]
+        mean /= nt
+        for t in range(nt):
+            for j in range(size):
+                delta = data[t, start+j] - mean[j]
+                variance[j] += delta*delta
+        # Reuse the variance accumulator for population standard deviation.
+        for j in range(size):
+            variance[j] = np.sqrt(variance[j]/nt)
+        for t in range(nt):
+            for j in range(size):
+                value = (data[t, start+j] - mean[j])/variance[j]
+                # Match nan_to_num, including zero-contrast windows. The
+                # numpy error model above makes division by zero non-raising.
+                if np.isnan(value):
+                    value = 0.
+                elif value == np.inf:
+                    value = np.finfo(np.float64).max
+                elif value == -np.inf:
+                    value = -np.finfo(np.float64).max
+                data[t, start+j] = value
+
+
+def normalize_owned_windows(windows, mode, nonzero):
+    """Internal batch normalizer; only private float64 C buffers are allowed."""
+    if (windows.ndim != 4 or windows.dtype != np.float64
+            or not windows.flags.c_contiguous or not windows.flags.writeable):
+        raise ValueError('Owned normalization requires writable contiguous float64 windows.')
+    if not len(windows) or mode is None:
+        return windows
+    if mode == 'time':
+        _normalize_time_owned(windows, nonzero)
+    elif mode == 'xy':
+        if nonzero.all():
+            normalize(windows, mode, copy=False)
+        else:
+            for i in np.flatnonzero(nonzero):
+                normalize(windows[i], mode, copy=False)
+    else:
+        raise ValueError("mode must be 'time', 'xy' or None.")
+    return windows
 

@@ -4,7 +4,6 @@ import os
 import sys
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
 
 from scipy import optimize
 from tqdm import tqdm
@@ -286,90 +285,57 @@ def optimise_velocity(
         While there is no direct link with results uncertainties, higher q indicates better quality data.
     """
 
-    def generate_args(): #, vel_indx, window_dims, res, fps, penalty_weight,
-        # gravity_waves_switch, turbulence_switch, downsample, gauss_width, kwargs
+    if isinstance(chunk_size, (bool, np.bool_)) or not isinstance(chunk_size, (int, np.integer)) or chunk_size < 1:
+        raise ValueError('chunk_size must be a positive integer.')
+    idxs = range(len(measured_spectra))
+    results = [None] * len(idxs)
+    available_workers = os.cpu_count() or 1
+    requested_workers = CONCURRENCY if CONCURRENCY is not None else available_workers
+    # No batch can use more workers than it has windows. Do not start an idle
+    # interpreter/JIT instance for every CPU when the selected batch is small.
+    max_workers = max(1, min(
+        requested_workers, available_workers, chunk_size, len(idxs) or 1,
+    ))
 
-        """
-        Parameters
-        ----------
-        measured_spectra : LazySpectrumArray
-            A single set of measured spectra and corresponding bounds list
-
-        bnds_list : Tuple
-            The bounds list for the measured spectra
-
-
-        Returns
-        -------
-        tuple
-            A single set of arguments for each corresponding pair in measured_spectra and bnds_list
-        """
-        args_list = [
-            dict(
-                measured_spectrum=measured_spectrum,
-                bnds=bnds,
-                vel_indx=vel_indx,
-                window_dims=window_dims,
-                res=res,
-                fps=fps,
-                penalty_weight=penalty_weight,
-                gravity_waves_switch=gravity_waves_switch,
-                turbulence_switch=turbulence_switch,
-                pass_downsampling=pass_downsampling,
-                gauss_width=gauss_width,
-                kwargs=kwargs,
-            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
-        ]
-        return args_list
-
-    idxs = range(len(measured_spectra))  # Pair with indices
-    # iter_args = generate_args(idxs)
-
-    results = [None] * len(idxs)  # Placeholder for results
-    if CONCURRENCY is not None:
-        max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
-    else:
-        max_workers = None
-    # Initialize progress bar before submitting tasks
-    progress_bar = tqdm(total=len(idxs), desc=desc)
-    
-    for idx in idxs[::chunk_size]:
-        # select and read the current data block in one go
-        idx_sel = idxs[idx:idx + chunk_size]
-        spectra_sel = measured_spectra[idx: idx + chunk_size]
-        # get bounds for this chunk (nonzero check now done in worker)
-        bnds_sel = bnds_list[idx: idx + chunk_size]
-
-        # Generate args for this chunk (handles both one-step and two-step via two_step_downsample parameter)
-        args_sel = [
-            dict(
-                measured_spectrum=measured_spectrum,
-                bnds=bnds,
-                vel_indx=vel_indx,
-                window_dims=window_dims,
-                res=res,
-                fps=fps,
-                penalty_weight=penalty_weight,
-                gravity_waves_switch=gravity_waves_switch,
-                turbulence_switch=turbulence_switch,
-                pass_downsampling=pass_downsampling,
-                gauss_width=gauss_width,
-                kwargs=kwargs,
-            ) for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
-        ]
-
-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
-            futures = {
-                executor.submit(
-                    optimize_single_spectrum_velocity_unpack, input_args
-                ): idx for idx, input_args in zip(idx_sel, args_sel)
-            }
-            # collect futures
-            for future in as_completed(futures):
-                idx = futures[future]
-                results[idx] = future.result()  # Store result in the correct position
-                progress_bar.update(1)  # increase
-    progress_bar.close()
+    # Keep the pool outside the batch loop: spawned interpreters are reused
+    # for this fit. The worker function, solver options and return arrays are
+    # exactly main's; no HNM strategy or diagnostics are introduced here.
+    with tqdm(total=len(idxs), desc=desc) as progress_bar:
+        with ProcessPoolExecutor(
+            mp_context=ctx, max_workers=max_workers, initializer=silence_output,
+        ) as executor:
+            for start in idxs[::chunk_size]:
+                # Deliberately no prefetch or full-spectrum cache. Extract one
+                # requested batch, finish it and release it before the next.
+                selection = slice(start, start + chunk_size)
+                idx_sel = idxs[selection]
+                spectra_sel = measured_spectra[selection]
+                bnds_sel = bnds_list[selection]
+                args_sel = [
+                    dict(
+                        measured_spectrum=measured_spectrum,
+                        bnds=bnds,
+                        vel_indx=vel_indx,
+                        window_dims=window_dims,
+                        res=res,
+                        fps=fps,
+                        penalty_weight=penalty_weight,
+                        gravity_waves_switch=gravity_waves_switch,
+                        turbulence_switch=turbulence_switch,
+                        pass_downsampling=pass_downsampling,
+                        gauss_width=gauss_width,
+                        kwargs=kwargs,
+                    )
+                    for measured_spectrum, bnds in zip(spectra_sel, bnds_sel)
+                ]
+                futures = {
+                    executor.submit(optimize_single_spectrum_velocity_unpack, item): i
+                    for i, item in zip(idx_sel, args_sel)
+                }
+                for future in as_completed(futures):
+                    results[futures[future]] = future.result()
+                    progress_bar.update(1)
+                del futures, args_sel, spectra_sel
 
     # wrap results together
     optimal = np.array([
