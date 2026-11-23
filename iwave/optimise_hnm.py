@@ -11,6 +11,7 @@ from functools import lru_cache
 from time import perf_counter
 import math
 from numbers import Real
+import numba as nb
 import numpy as np
 from scipy.ndimage import gaussian_filter, gaussian_filter1d, maximum_filter
 from scipy.optimize import minimize
@@ -333,6 +334,48 @@ def validate_setup(bnds, vel_indx, window_dims, res, fps,
     return options, b, axes, counts, estimated_mb
 
 
+@nb.njit(cache=True, nogil=True, fastmath=False, error_model='numpy')
+def _accumulate_votes(acc, points, beta, intrinsic, vy, vx, dy, dx, wave, turb):
+    """Rasterise already detected/interpolated peaks, without changing votes.
+
+    SciPy smoothing/find_peaks and physical dispersion arrays stay outside.
+    Retain peak order, branch order, the sensitive-axis choice and the two-bin
+    linear split. Different 'other' coordinates touch disjoint cells, so both
+    adjacent deposits can be made together without changing addition order at
+    any cell. Serial updates avoid atomics, races and a per-thread grid copy.
+    """
+    for p in range(len(points)):
+        x, y, w, weight = points[p]
+        b, oi = beta[p], intrinsic[p]
+        swap = abs(y*dy) < abs(x*dx)
+        for branch in range(int(turb) + int(wave)):
+            if turb and branch == 0:
+                a = w
+            else:
+                a = ((1-b)*w - np.sqrt(b*b*w*w + (1-2*b)*oi*oi))/(1-2*b)
+            count = len(vy) if swap else len(vx)
+            limit = len(vx) if swap else len(vy)
+            for other in range(count):
+                pos = (((a-y*vy[other])/x-vx[0])/dx if swap
+                       else ((a-x*vx[other])/y-vy[0])/dy)
+                # Outside this interval neither adjacent cell is in the grid.
+                # Check before int conversion; no clipped edge vote is created.
+                if not -1. <= pos < limit:
+                    continue
+                low = int(np.floor(pos))
+                frac = pos-low
+                if 0 <= low < limit:
+                    if swap:
+                        acc[other, low] += weight*(1-frac)
+                    else:
+                        acc[low, other] += weight*(1-frac)
+                if 0 <= low+1 < limit:
+                    if swap:
+                        acc[other, low+1] += weight*frac
+                    else:
+                        acc[low+1, other] += weight*frac
+
+
 class State:
     """Accumulate Hough votes and retain the sampler's per-window state."""
 
@@ -423,21 +466,8 @@ class State:
         if len(points):
             k=np.hypot(points[:,0],points[:,1]); beta=dispersion.beta_calc(k,self.depth,self.alpha)
             intrinsic=dispersion.omega_i_calc(k,self.depth)
-            for (x,y,w,weight),b,oi in zip(points,beta,intrinsic):
-                branches=[]
-                if self.turb: branches.append(w)
-                if self.wave: branches.append(((1-b)*w-np.sqrt(b*b*w*w+(1-2*b)*oi*oi))/(1-2*b))
-                # Each branch constrains ky*vy + kx*vx to one value.
-                for a in branches:
-                    # Rasterise along the more sensitive axis and split adjacent bins.
-                    swap=abs(y*self.dy)<abs(x*self.dx)
-                    pos=((a-y*self.vy)/x-self.vx[0])/self.dx if swap else ((a-x*self.vx)/y-self.vy[0])/self.dy
-                    low=np.floor(pos).astype(np.int64); frac=pos-low
-                    for shift,weights in ((0,1-frac),(1,frac)):
-                        dest=low+shift; limit=len(self.vx) if swap else len(self.vy)
-                        valid=(dest>=0)&(dest<limit); other=np.flatnonzero(valid)
-                        index=(other,dest[valid]) if swap else (dest[valid],other)
-                        np.add.at(self.acc,index,weight*weights[valid])
+            _accumulate_votes(self.acc, points, beta, intrinsic, self.vy, self.vx,
+                              self.dy, self.dx, self.wave, self.turb)
         self.times['voting']+=perf_counter()-t
 
     def score(self):
