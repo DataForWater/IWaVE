@@ -22,6 +22,31 @@ def test_de_default_and_separate_backend_options(flow, inline_pool):
     with pytest.raises(ValueError): optimise.normalise_method('Hough')
 
 
+def test_compiled_votes_match_original_rasterisation():
+    """Keep both physical branches, axial cases and adjacent-bin deposits."""
+    vy, vx = np.linspace(-.8, .8, 17), np.linspace(-1.2, 1.2, 25)
+    dy, dx = vy[1]-vy[0], vx[1]-vx[0]
+    points = np.array([[1.5, 0., .25, .7], [0., 2., .35, 1.],
+                       [-2., 1., 1.8, .4], [1., -2., 2.4, .2]])
+    k = np.hypot(points[:, 0], points[:, 1])
+    beta, intrinsic = dispersion.beta_calc(k, .15, .85), dispersion.omega_i_calc(k, .15)
+    expected = np.zeros((len(vy), len(vx)))
+    for (x, y, w, weight), b, oi in zip(points, beta, intrinsic):
+        branches = [w, ((1-b)*w-np.sqrt(b*b*w*w+(1-2*b)*oi*oi))/(1-2*b)]
+        for a in branches:
+            swap = abs(y*dy) < abs(x*dx)
+            pos = ((a-y*vy)/x-vx[0])/dx if swap else ((a-x*vx)/y-vy[0])/dy
+            low = np.floor(pos).astype(np.int64); frac = pos-low
+            for shift, weights in ((0, 1-frac), (1, frac)):
+                dest = low+shift; limit = len(vx) if swap else len(vy)
+                valid = (dest >= 0) & (dest < limit); other = np.flatnonzero(valid)
+                index = (other, dest[valid]) if swap else (dest[valid], other)
+                np.add.at(expected, index, weight*weights[valid])
+    actual = np.zeros_like(expected)
+    hnm._accumulate_votes(actual, points, beta, intrinsic, vy, vx, dy, dx, True, True)
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_hough_fixed_adaptive_sampling_and_window_scaled_cutoff(flow):
     """Both sampling plans recover the ridge without exceeding their k-pair budget."""
     bounds = [(-1, 1), (-1, 1), (flow.depth, flow.depth)]
@@ -71,3 +96,23 @@ def test_fast_overlap_matches_original_dense_model(flow):
         expected = -np.sum(flow.measured*model)/model.sum()
         assert np.isclose(objective(velocity), expected, rtol=1e-9, atol=1e-11)
     np.testing.assert_array_equal(flow.measured, before)
+
+
+def test_fused_overlap_statistics_match_model_weights(flow):
+    """Preserve dense/narrow support, log-depth and final fit statistics."""
+    q = np.array([.17, .43, np.log(.19)])
+    for width in (1., 8.):
+        objective = spectral.SpectralOverlapObjective(flow.measured, flow.axes,
+            flow.depth, .85, True, True, dict(gauss_width=width, kernel_truncate=5.))
+        model = dispersion.intensity(q[:2], np.exp(q[2]), .85, flow.dims,
+                                     flow.res, flow.fps, width, True, True)
+        # The diagnostic weights use the original support convention, including
+        # sparse-band truncation and counting overlapping branches only once.
+        model *= objective.normalized_weights(q) > 0
+        mass, square = model.sum(), np.sum(model*model)
+        overlap = np.sum(model*flow.measured)
+        expected = (-overlap/mass, mass, square, overlap)
+        np.testing.assert_allclose(objective.statistics(q), expected, rtol=1e-11, atol=1e-11)
+        assert objective.calls == 0
+        assert np.isclose(objective(q), expected[0], rtol=1e-11, atol=1e-11)
+        assert objective.calls == 1
