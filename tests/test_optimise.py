@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 import time
-from iwave import spectral, dispersion, optimise, Iwave
+from iwave import spectral, dispersion, optimise, window, Iwave
 
 
 def test_preprocessing():
@@ -217,3 +217,34 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vy_2steps - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_2steps - velocity[1]) < 0.01)
     assert np.all(np.abs(d_2steps - depth) < 0.05)
+
+
+def test_window_batches_reuse_one_worker_pool(monkeypatch):
+    """The main DE pipeline extracts bounded batches and retains one pool."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    imgs = np.random.default_rng(6).integers(0, 255, (64, 8, 24), dtype=np.uint8)
+    iw = Iwave(.1, window_size=(8, 8), time_size=32, time_overlap=16,
+               fps=20., imgs=imgs, smax=1., window_chunk_size=2)
+    batches, pools = [], []
+    extract = window.extract_rectangular_windows
+
+    def tracked_extract(images, origins, shape):
+        batches.append(len(origins))
+        return extract(images, origins, shape)
+
+    class CountPool(ThreadPoolExecutor):
+        def __init__(self, **kwargs):
+            pools.append(kwargs['max_workers'])
+            # Exercise the real DE worker without spawning interpreters in
+            # this small unit test or redirecting process-global stdout.
+            super().__init__(max_workers=kwargs['max_workers'])
+
+    monkeypatch.setattr(window, 'extract_rectangular_windows', tracked_extract)
+    monkeypatch.setattr(optimise, 'ProcessPoolExecutor', CountPool)
+    iw.velocimetry(depth=.3, pass_downsampling=[1], popsize=2,
+                   maxiter=1, seed=0, polish=False)
+    assert batches == [2, 1]
+    assert len(pools) == 1
+    assert pools[0] <= 2
+    assert iw.vx.shape == (1, 3)

@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from iwave import window
+from iwave import window, LazyWindowArray
 
 
 def test_get_axis_shape(imgs):
@@ -94,3 +94,23 @@ def test_normalize(img_windows):
     # check if random single time slice has mean / std of 0. / 1.
     assert np.isclose(img_norm[1, :, 1, 1].std(), 1.)
     assert np.isclose(img_norm[1, :, 1, 1].mean(), 0.)
+
+
+def test_lazy_windows_match_original_extraction():
+    """Fast extraction/normalisation keeps values and protects source images."""
+    imgs = np.random.default_rng(3).integers(0, 255, (24, 12, 16), dtype=np.uint8)
+    original = imgs.copy()
+    imgs.setflags(write=False)
+    win_x, win_y = window.sliding_window_idx(imgs[0], (6, 8), (0, 0))
+    for mode in ('time', 'xy', None):
+        lazy = LazyWindowArray(imgs, window.multi_sliding_window_array, win_x, win_y, mode)
+        expected = window.multi_sliding_window_array(
+            imgs, win_x[:2], win_y[:2], swap_time_dim=True,
+        ).astype(float)
+        if mode is not None:
+            expected = window.normalize(expected, mode)
+        actual = lazy[:2]
+        assert np.allclose(actual, expected)
+        assert actual.flags.c_contiguous
+        assert not np.shares_memory(actual, imgs)
+    assert np.array_equal(imgs, original)

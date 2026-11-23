@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from iwave import spectral
+from iwave import spectral, LazySpectrumArray
 
 
 def test_get_wave_numbers(img_windows, res=0.02, fps=25):
@@ -42,7 +42,40 @@ def test_numba_fft_multi(img_windows_norm):
 
 
 def test_sliding_window_spectrum(img_windows_norm):
-    """Check shape of average of multiple spectra over several time slices."""
-    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10)
-    # test if the spectra have the desired size
-    assert spectrum.shape[-3] == int(np.ceil(20 / 2))
+    """Compare segment averaging with the original NumPy transform."""
+    imgs = img_windows_norm[:2]
+    spectrum = spectral.sliding_window_spectrum(imgs, 20, 10)
+    starts = range(0, imgs.shape[1] - 20 + 1, 10)
+    expected = sum(
+        np.stack([spectral._numpy_fourier_transform(w[start:start+20]) for w in imgs])
+        for start in starts
+    ) / len(starts)
+    assert spectrum.shape[-3] == 10
+    assert np.allclose(spectrum, expected)
+
+
+def test_real_fft_matches_numpy_for_odd_and_even_lengths():
+    """Keep original signs, scaling and bins, including reversed input views."""
+    for length in (15, 16):
+        imgs = np.random.default_rng(4).normal(size=(2, length, 7, 10))[:, :, ::-1, :]
+        imgs[0] = 0
+        imgs.setflags(write=False)
+        expected = np.stack([spectral._numpy_fourier_transform(w) for w in imgs])
+        actual = spectral.spectral_imgs(imgs)
+        assert actual.shape == (2, (length + 1)//2, 7, 10)
+        assert np.allclose(actual, expected)
+
+
+def test_lazy_spectra_reuse_scratch_without_overwriting_results():
+    """A final short batch reuses scratch but cannot change previous outputs."""
+    windows = np.random.default_rng(5).normal(size=(3, 32, 6, 8))
+    kt, ky, kx = spectral.wave_numbers((16, 6, 8), .1, 20.)
+    lazy = LazySpectrumArray(windows, 16, 8, kt, kx, ky)
+    first = lazy[:2]
+    scratch = lazy._fft_workspace._buffer
+    saved = first.copy()
+    last = lazy[2:]
+    assert lazy._fft_workspace._buffer is scratch
+    assert last.shape == (1, 8, 6, 8)
+    assert np.array_equal(first, saved)
+    assert not np.shares_memory(first, scratch)
