@@ -420,6 +420,7 @@ class State:
         self.visited=np.zeros((len(self.ky),len(self.kx)),bool)
         self.used=[]; self.point_blocks=[]
         self.best=None; self.at_edge=True; self.n_points=0
+        self._candidate_field=None
         self.X,self.Y=np.meshgrid(self.kx,self.ky)
         self.kmax=max(float(np.max(np.hypot(self.X,self.Y))),1e-12)
         self.G=np.eye(2)*1e-3
@@ -462,6 +463,8 @@ class State:
         self.visited[pairs[:,0],pairs[:,1]]=True
         self.used.extend(map(tuple,pairs.tolist())); self.point_blocks.append(points)
         self.n_points+=len(points)
+        # Any new votes invalidate the one-state scoring/candidate hand-off.
+        self._candidate_field=None
         t=perf_counter()
         if len(points):
             k=np.hypot(points[:,0],points[:,1]); beta=dispersion.beta_calc(k,self.depth,self.alpha)
@@ -474,6 +477,8 @@ class State:
         """Locate the vote maximum and update adaptive directional information."""
         t=perf_counter()
         sigma=self.options['vote_sigma']
+        # Release an earlier adaptive score before allocating the next field.
+        self._candidate_field=None
         smoothed=gaussian_filter(self.acc,(sigma/self.dy,sigma/self.dx)) if sigma else self.acc
         self.G=np.eye(2)*1e-3
         if self.n_points>=self.options['min_ridges'] and np.max(smoothed)>0:
@@ -493,6 +498,9 @@ class State:
             self.G+=(features.T*weights[inside])@features
         else:
             self.best=None; self.at_edge=True
+        # Candidate selection consumes this exact field once; do not smooth it
+        # a second time. This is bounded per-state scratch, not a window cache.
+        self._candidate_field=smoothed if self.best is not None else None
         self.history.append(None if self.best is None else self.best.tolist())
         self.times['scoring']+=perf_counter()-t
         return None if self.best is None else self.best.copy()
@@ -679,16 +687,27 @@ def _trust_simplex(seed, centre, radius, bounds, step):
 
 
 def _hough_candidates(state, count, separation, centre, radius):
+    # Consume the scoring hand-off even on early return, so the extra field is
+    # not retained during local fitting. A repeated call recomputes as before.
+    field=state._candidate_field
+    state._candidate_field=None
     if state.best is None:
         return []
     candidates = [state.best.copy()]
     if count == 1:
         return candidates
     sigma = state.options['vote_sigma']
-    field = gaussian_filter(state.acc, (sigma/state.dy, sigma/state.dx)) if sigma else state.acc
+    if field is None:
+        field = gaussian_filter(state.acc, (sigma/state.dy, sigma/state.dx)) if sigma else state.acc
     peaks = (field == maximum_filter(field, size=3, mode='nearest')) & (field > 0)
     indices = np.argwhere(peaks)
-    order = np.argsort(-field[peaks], kind='stable')
+    # Necessary bounding-square test only: retain the original scalar hypot
+    # disk test below, including its boundary rounding. Filter before sorting,
+    # preserving row-major peak order and stable ties among retained maxima.
+    inside = ((np.abs(state.vy[indices[:,0]]-centre[0]) <= radius)
+              & (np.abs(state.vx[indices[:,1]]-centre[1]) <= radius))
+    indices = indices[inside]
+    order = np.argsort(-field[indices[:,0],indices[:,1]], kind='stable')
     for index in order:
         iy, ix = indices[index]
         v = np.array([state.vy[iy], state.vx[ix]])

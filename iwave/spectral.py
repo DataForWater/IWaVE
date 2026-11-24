@@ -366,69 +366,92 @@ from iwave import dispersion
 
 
 @nb.njit(cache=True, nogil=True, fastmath=False, error_model='numpy')
-def _overlap_sums(data, omega, first, second, two_branches, width,
-                  radius, dw, dense, statistics):
-    """Fuse Gaussian weights, support selection, data gathering and reductions.
+def _dense_overlap_sums(data, omega, first, second, two_branches, width, statistics):
+    """Retain contiguous dense rows and the previous dense reduction order.
 
-    Geometry and depth-dependent dispersion stay in the existing NumPy path.
-    No frequency-by-column weights/index/mask arrays are allocated here. Keep
-    both the original dense grid and its sparse union of branch intervals:
-    sparse bins use omega[0] + dw*i, and overlapping intervals count once.
-    max(exp(-u*u), exp(-v*v)) is exp(-min(u*u, v*v)): evaluate one
-    exponential, not a second (often extremely small) discarded Gaussian.
-    This is an algebraic identity, not extra truncation or peak selection.
-    Reductions are serial, with fastmath disabled and no shared sums. Their
-    order differs from NumPy's reductions, so last-bit roundoff can differ.
+    max(exp(-u*u), exp(-v*v)) = exp(-min(u*u, v*v)); no extra truncation.
+    The column-fused layout below is useful for sparse bands, not dense rows.
     """
     numerator = denominator = model_square = 0.
     n, columns = data.shape
-    if dense:
-        for i in range(n):
-            frequency = omega[i]
-            for j in range(columns):
-                z = (frequency - first[j]) / width
+    for i in range(n):
+        frequency = omega[i]
+        for j in range(columns):
+            z = (frequency-first[j])/width
+            distance = z*z
+            if two_branches:
+                z = (frequency-second[j])/width
+                distance = min(distance, z*z)
+            weight = math.exp(-distance)
+            numerator += data[i,j]*weight
+            denominator += weight
+            if statistics:
+                model_square += weight*weight
+    return numerator, denominator, model_square
+
+
+@nb.njit(cache=True, nogil=True, fastmath=False, error_model='numpy')
+def _depth_terms(k, depth, alpha, gravity, capillary):
+    """Same dispersion terms, one tanh per k; keep the existing depth cache."""
+    beta = np.empty_like(k)
+    intrinsic = np.empty_like(k)
+    m = 2*(1-alpha)
+    for j in range(len(k)):
+        kd = k[j]*depth
+        t = math.tanh(kd)
+        beta[j] = (m/2)*t/kd if k[j] != 0 else 0.
+        intrinsic[j] = math.sqrt((gravity + capillary*k[j]**2)*k[j]*t)
+    return beta, intrinsic
+
+
+@nb.njit(cache=True, nogil=True, fastmath=False, error_model='numpy')
+def _physical_overlap_sums(data, omega, x, y, beta, intrinsic, vy, vx,
+                           wave, turb, width, radius, dw, statistics):
+    """Fuse sparse centres/overlap, preserving the existing support union.
+
+    Centres are computed once per column without temporary centre arrays.
+    Sparse bins use omega[0]+dw*i, including overlapping/out-of-band cases.
+    Reductions are serial, with no fastmath, but their order differs from the
+    earlier branch-major implementation and can change last-bit roundoff.
+    """
+    numerator = denominator = model_square = 0.
+    n, columns = data.shape
+    lower = omega[0] - (radius+2)*dw
+    upper = omega[-1] + (radius+2)*dw
+    for j in range(columns):
+        a = y[j]*vy + x[j]*vx
+        first = a
+        second = (1-beta[j])*a + math.hypot(beta[j]*a, intrinsic[j]) if wave else a
+        if not turb:
+            first = second
+        if not math.isfinite(first) or not math.isfinite(second):
+            return np.nan, 0., 0.
+        two = wave and turb
+        previous = int(math.floor(min(max((first-omega[0])/dw,
+                                          -radius-2), n+radius+2)))
+        for branch in range(2 if two else 1):
+            centre = first if branch == 0 else second
+            if centre < lower or centre > upper:
+                continue
+            base = int(math.floor(min(max((centre-omega[0])/dw,
+                                         -radius-2), n+radius+2)))
+            for offset in range(-radius, radius+2):
+                i = base+offset
+                if i < 0 or i >= n:
+                    continue
+                if branch and previous-radius <= i <= previous+radius+1:
+                    continue
+                frequency = omega[0]+dw*i
+                z = (frequency-first)/width
                 distance = z*z
-                if two_branches:
-                    z = (frequency - second[j]) / width
+                if two:
+                    z = (frequency-second)/width
                     distance = min(distance, z*z)
                 weight = math.exp(-distance)
-                numerator += data[i, j] * weight
+                numerator += data[i,j]*weight
                 denominator += weight
                 if statistics:
-                    model_square += weight * weight
-    else:
-        lower = omega[0] - (radius + 2)*dw
-        upper = omega[-1] + (radius + 2)*dw
-        for branch in range(2 if two_branches else 1):
-            centres = first if branch == 0 else second
-            for j in range(columns):
-                centre = centres[j]
-                if centre < lower or centre > upper:
-                    continue
-                # Preserve clipping before floor/int, including distant models.
-                base = int(math.floor(min(max((centre-omega[0])/dw,
-                                             -radius-2), n+radius+2)))
-                previous = 0
-                if branch:
-                    previous = int(math.floor(min(max((first[j]-omega[0])/dw,
-                                                     -radius-2), n+radius+2)))
-                for offset in range(-radius, radius + 2):
-                    i = base + offset
-                    if i < 0 or i >= n:
-                        continue
-                    if branch and previous-radius <= i <= previous+radius+1:
-                        continue
-                    frequency = omega[0] + dw*i
-                    z = (frequency - first[j]) / width
-                    distance = z*z
-                    if two_branches:
-                        z = (frequency - second[j]) / width
-                        distance = min(distance, z*z)
-                    weight = math.exp(-distance)
-                    numerator += data[i, j] * weight
-                    denominator += weight
-                    if statistics:
-                        model_square += weight * weight
+                    model_square += weight*weight
     return numerator, denominator, model_square
 
 
@@ -503,8 +526,10 @@ class SpectralOverlapObjective:
     def _set_depth(self, depth):
         # Geometry/data stay cached. Only these Nk terms depend on depth.
         if depth != self.depth:
-            self.beta = dispersion.beta_calc(self.k, depth, self.alpha)
-            self.intrinsic = dispersion.omega_i_calc(self.k, depth)
+            self.beta, self.intrinsic = _depth_terms(
+                self.k, depth, self.alpha, dispersion.const.g,
+                dispersion.const.surf_tens/dispersion.const.density,
+            )
             self.depth = float(depth)
 
     def __call__(self, parameters):
@@ -528,22 +553,29 @@ class SpectralOverlapObjective:
         self._set_depth(depth)
         if self.zero:
             return (np.inf, 0., 0., 0.) if statistics else np.inf
-        with np.errstate(over='ignore', invalid='ignore'):
-            a = self.y * velocity[0] + self.x * velocity[1]
-            centres = []
-            if self.turb:
-                centres.append(a)
-            if self.wave:
-                centres.append((1-self.beta)*a + np.hypot(self.beta*a, self.intrinsic))
-        if not all(np.isfinite(c).all() for c in centres):
-            return (np.inf, 0., 0., 0.) if statistics else np.inf
-        # Retain validation, depth caching and the physical centres above.
-        # Only repeated array construction/gather/reduction is fused. The
-        # diagnostic weights method and evaluation-counter semantics stay as-is.
-        numerator, denominator, model_square = _overlap_sums(
-            self.data, self.omega, centres[0], centres[-1], len(centres) == 2,
-            self.width, self.radius, self.dw, self.dense, statistics,
-        )
+        # Dense evaluation benefits from contiguous frequency rows; keep its
+        # existing NumPy centres and reduction order. Sparse evaluation fuses
+        # centres per column, avoiding their temporary arrays.
+        if self.dense:
+            with np.errstate(over='ignore', invalid='ignore'):
+                a = self.y*velocity[0] + self.x*velocity[1]
+                centres = []
+                if self.turb:
+                    centres.append(a)
+                if self.wave:
+                    centres.append((1-self.beta)*a + np.hypot(self.beta*a, self.intrinsic))
+            if not all(np.isfinite(c).all() for c in centres):
+                return (np.inf, 0., 0., 0.) if statistics else np.inf
+            numerator, denominator, model_square = _dense_overlap_sums(
+                self.data, self.omega, centres[0], centres[-1], len(centres) == 2,
+                self.width, statistics,
+            )
+        else:
+            numerator, denominator, model_square = _physical_overlap_sums(
+                self.data, self.omega, self.x, self.y, self.beta, self.intrinsic,
+                velocity[0], velocity[1], self.wave, self.turb, self.width,
+                self.radius, self.dw, statistics,
+            )
         if denominator <= 0 or not np.isfinite(numerator + denominator):
             return (np.inf, 0., 0., 0.) if statistics else np.inf
         value = -numerator / denominator
