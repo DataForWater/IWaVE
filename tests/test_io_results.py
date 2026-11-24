@@ -69,4 +69,3 @@ def test_vector_validation_units_and_known_ambiguity(plot_field):
     assert len(all_vectors.U) == 3
     plt.close('all')
 
-
