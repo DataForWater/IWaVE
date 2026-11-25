@@ -79,3 +79,46 @@ def test_lazy_spectra_reuse_scratch_without_overwriting_results():
     assert last.shape == (1, 8, 6, 8)
     assert np.array_equal(first, saved)
     assert not np.shares_memory(first, scratch)
+
+
+def test_uint8_rectangles_use_bounded_inputs_without_changing_spectra():
+    import pickle
+    import numba as nb
+    from iwave import window, LazyWindowArray
+    imgs = np.random.default_rng(6).integers(0, 256, (33, 8, 30), dtype=np.uint8)
+    imgs[:, :4, :5] = 0
+    saved = imgs.copy(); imgs.setflags(write=False)
+    wx, wy = window.sliding_window_idx(imgs[0], (4,5), (0,0))
+    windows = LazyWindowArray(imgs, window.multi_sliding_window_array, wx, wy, 'time')
+    kt, ky, kx = spectral.wave_numbers((15,4,5), .1, 20.)
+    lazy = LazySpectrumArray(windows, 15, 7, kt, kx, ky)
+    expected = LazySpectrumArray(windows[:], 15, 7, kt, kx, ky)[:]
+    actual = lazy[:]; retained = actual.copy()
+    np.testing.assert_array_equal(actual, expected)
+    scratch = lazy._fft_workspace._input_buffer
+    assert scratch.shape == (min(len(windows), nb.get_num_threads()),33,4,5)
+    np.testing.assert_array_equal(lazy[-1], expected[-1])
+    np.testing.assert_array_equal(lazy[::-1], expected[::-1])
+    np.testing.assert_array_equal(actual, retained)
+    np.testing.assert_array_equal(imgs, saved)
+    assert lazy[:0].shape[0] == 0
+    assert lazy._fft_workspace._input_buffer is scratch
+    assert not np.shares_memory(actual, scratch)
+    restored = pickle.loads(pickle.dumps(lazy))
+    assert restored._fft_workspace._input_buffer is None
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_other_dtypes_and_normalisation_modes_keep_original_path():
+    from iwave import window, LazyWindowArray
+    original = np.resize(np.array([-1.,1.]), (16,8,12))
+    wx, wy = window.sliding_window_idx(original[0], (4,4), (0,0))
+    kt, ky, kx = spectral.wave_numbers((8,4,4), .1, 20.)
+    for imgs in (original, (original+1).astype(np.uint16), (original+1).astype(np.uint8)):
+        for norm in ('time','xy',None):
+            windows = LazyWindowArray(imgs, window.multi_sliding_window_array, wx, wy, norm)
+            lazy = LazySpectrumArray(windows, 8, 4, kt, kx, ky)
+            expected = LazySpectrumArray(windows[:], 8, 4, kt, kx, ky)[:]
+            np.testing.assert_array_equal(lazy[:], expected)
+            if norm != 'time' or imgs.dtype != np.uint8:
+                assert lazy._fft_workspace._input_buffer is None

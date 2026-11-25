@@ -227,11 +227,11 @@ def test_window_batches_reuse_one_worker_pool(monkeypatch):
     iw = Iwave(.1, window_size=(8, 8), time_size=32, time_overlap=16,
                fps=20., imgs=imgs, smax=1., window_chunk_size=2)
     batches, pools = [], []
-    extract = window.extract_rectangular_windows
+    extract = spectral._FFTWorkspace._power_rectangular
 
-    def tracked_extract(images, origins, shape):
+    def tracked_extract(workspace, images, origins, shape, win_t, overlap):
         batches.append(len(origins))
-        return extract(images, origins, shape)
+        return extract(workspace, images, origins, shape, win_t, overlap)
 
     class CountPool(ThreadPoolExecutor):
         def __init__(self, **kwargs):
@@ -240,7 +240,7 @@ def test_window_batches_reuse_one_worker_pool(monkeypatch):
             # this small unit test or redirecting process-global stdout.
             super().__init__(max_workers=kwargs['max_workers'])
 
-    monkeypatch.setattr(window, 'extract_rectangular_windows', tracked_extract)
+    monkeypatch.setattr(spectral._FFTWorkspace, '_power_rectangular', tracked_extract)
     monkeypatch.setattr(optimise, 'ProcessPoolExecutor', CountPool)
     iw.velocimetry(depth=.3, pass_downsampling=[1], popsize=2,
                    maxiter=1, seed=0, polish=False)
