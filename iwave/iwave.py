@@ -409,6 +409,14 @@ class Iwave(object):
         window.normalize_owned_windows(dummy, self.norm, np.ones(1, dtype=bool))
         normalized = perf_counter()
         spectral.spectral_imgs(dummy[:, :, ::-1, :])
+        if self.norm == 'time':
+            # Exercise uint8 full-video and strided-ROI specialisations too.
+            # These tiny inputs never refer to supplied video or owner scratch.
+            clip = np.arange(8*4*4, dtype=np.uint8).reshape(8, 4, 4)
+            for source in (clip, clip[:, :, :3]):
+                spectral._FFTWorkspace()._power_rectangular(
+                    source, np.array([[0, 0]], dtype=np.intp), source.shape[1:], 8, 0,
+                )
         finished = perf_counter()
         return dict(
             normalization_seconds=normalized - started,

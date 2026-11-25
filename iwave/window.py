@@ -316,6 +316,48 @@ def extract_rectangular_windows(imgs, origins, window_shape):
     return result
 
 
+@nb.njit(cache=True, nogil=True, error_model='numpy')
+def _gather_normalize_time_uint8(imgs, origin, output):
+    """Gather one uint8 rectangle, fusing the first time-mean pass.
+
+    Preserve the original two-pass population variance and temporal order.
+    With finite nonnegative uint8 pixels the whole-window mean gate can only
+    skip an all-zero rectangle, whose normalised result is also all zeros.
+    Signed/floating images must use the original path, not this shortcut.
+    """
+    nt, ny, nx = output.shape
+    data = output.reshape(nt, ny*nx)
+    for start in range(0, ny*nx, 128):
+        size = min(128, ny*nx-start)
+        mean, variance = np.zeros(size), np.zeros(size)
+        ys, xs = np.empty(size, np.intp), np.empty(size, np.intp)
+        for j in range(size):
+            ys[j] = origin[0] + (start+j)//nx
+            xs[j] = origin[1] + (start+j)%nx
+        for t in range(nt):
+            for j in range(size):
+                value = float(imgs[t, ys[j], xs[j]])
+                data[t, start+j] = value
+                mean[j] += value
+        mean /= nt
+        for t in range(nt):
+            for j in range(size):
+                delta = data[t, start+j] - mean[j]
+                variance[j] += delta*delta
+        for j in range(size):
+            variance[j] = np.sqrt(variance[j]/nt)
+        for t in range(nt):
+            for j in range(size):
+                value = (data[t, start+j] - mean[j])/variance[j]
+                if np.isnan(value):
+                    value = 0.
+                elif value == np.inf:
+                    value = np.finfo(np.float64).max
+                elif value == -np.inf:
+                    value = -np.finfo(np.float64).max
+                data[t, start+j] = value
+
+
 @nb.njit(parallel=True, cache=True, nogil=True, error_model='numpy')
 def _normalize_time_owned(windows, nonzero):
     """Stable two-pass variance in small spatial blocks, without a video temp.

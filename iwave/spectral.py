@@ -5,15 +5,17 @@ computes the real temporal transform first. The separable transforms commute;
 using its positive-time sign avoids an explicit conjugation pass. Keep the
 original 1/T**2 power scale and ceil(T/2) bins (no even-length Nyquist bin).
 
-Each lazy spectral array retains bounded complex scratch, NOT power spectra.
-One owned power accumulator receives every temporal segment in order; returned
-spectra remain independent of scratch reused by later calls.
+Each lazy array retains bounded FFT/input scratch, NOT cached power spectra.
+Uint8 time-normalised rectangles are gathered into one full-clip slot per
+concurrent FFT task, rather than a batch-sized image array. Every temporal
+segment is summed in order; returned spectra remain independent of scratch.
 Only preprocessing is implemented here; fitting stays in the main optimiser.
 """
 from threading import Lock
 import numba as nb
 import numpy as np
 from rocket_fft import r2c, c2c
+from iwave import window
 
 
 # Low-level Rocket-FFT calls take explicit integer axis arrays and output
@@ -62,52 +64,59 @@ def wave_numbers(
     return kt, ky, kx
 
 
-@nb.njit(parallel=True, cache=True, nogil=True)
-def _workspace_power(imgs, work, output, win_t, step):
-    """Reuse disjoint complex slots; sum segments in their original order.
-
-    One native FFT thread per slot avoids nesting an FFT thread pool inside
-    the Numba window-parallel loop. A slot can serve several windows when the
-    batch exceeds the Numba thread count; workspace memory follows concurrency,
-    not the number of windows in a long batch/video.
-    """
-    n, nt, ny, nx = imgs.shape
+@nb.njit(cache=True, nogil=True)
+def _window_power(img, z, output, win_t, step):
+    """Original transform/sign/segment arithmetic, shared by both input paths."""
+    nt, ny, nx = img.shape
     nf = (win_t + 1)//2
     segments = (nt - win_t)//step + 1
+    for segment in range(segments):
+        start = segment*step
+        source = img[start:start + win_t]
+        if not np.any(source):
+            if segment == 0:
+                output[:] = 0.
+            continue
+        # Positive-time RFFT replaces the IFFT; retain its 1/T**2 power scale.
+        r2c(source, z, _FFT_TIME_AXES, False, 1.0, 1)
+        c2c(z, z, _FFT_SPACE_AXES, True, 1.0, 1)
+        for f in range(nf):
+            for y in range(ny):
+                yy = (y + (ny + 1)//2) % ny
+                for x in range(nx):
+                    xx = (x + (nx + 1)//2) % nx
+                    v = z[f, yy, xx]
+                    power = (v.real*v.real + v.imag*v.imag)/(win_t*win_t)
+                    if segment == 0:
+                        output[f, y, x] = power
+                    else:
+                        output[f, y, x] += power
+    output /= segments
+
+
+@nb.njit(parallel=True, cache=True, nogil=True)
+def _workspace_power(imgs, work, output, win_t, step):
+    """Reuse disjoint complex slots, with one FFT thread per slot."""
+    n = len(imgs)
     slots = min(n, work.shape[0])
     for slot in nb.prange(slots):
-        z = work[slot]
         for m in range(slot, n, slots):
-            for segment in range(segments):
-                start = segment*step
-                source = imgs[m, start:start + win_t]
-                if not np.any(source):
-                    if segment == 0:
-                        output[m] = 0.
-                    continue
-                # The positive-time sign matches main's temporal IFFT.
-                # Write directly to z, without a separate conjugation pass.
-                r2c(source, z, _FFT_TIME_AXES, False, 1.0, 1)
-                # Spatial FFT overwrites z: no second complex window array.
-                c2c(z, z, _FFT_SPACE_AXES, True, 1.0, 1)
-                for f in range(nf):
-                    for y in range(ny):
-                        yy = (y + (ny + 1)//2) % ny
-                        for x in range(nx):
-                            xx = (x + (nx + 1)//2) % nx
-                            v = z[f, yy, xx]
-                            # The unscaled +time FFT replaces an IFFT. Apply
-                            # its 1/T amplitude scale here as 1/T**2 power.
-                            power = (v.real*v.real + v.imag*v.imag)/(win_t*win_t)
-                            if segment == 0:
-                                output[m, f, y, x] = power
-                            else:
-                                output[m, f, y, x] += power
-            output[m] /= segments
+            _window_power(imgs[m], work[slot], output[m], win_t, step)
+
+
+@nb.njit(parallel=True, cache=True, nogil=True)
+def _workspace_rectangular_power(imgs, origins, clips, work, output, win_t, step):
+    """Normalise the WHOLE clip in bounded input slots, then average segments."""
+    n = len(origins)
+    slots = min(n, clips.shape[0], work.shape[0])
+    for slot in nb.prange(slots):
+        for m in range(slot, n, slots):
+            window._gather_normalize_time_uint8(imgs, origins[m], clips[slot])
+            _window_power(clips[slot, :, ::-1, :], work[slot], output[m], win_t, step)
 
 
 class _FFTWorkspace:
-    """Transient, per-owner complex scratch; never a cached spectrum.
+    """Transient, per-owner FFT/input scratch; never a cached spectrum.
 
     Keep the largest concurrency needed for the current transform geometry.
     A shorter final batch reuses slots. A larger thread/batch request grows
@@ -116,6 +125,7 @@ class _FFTWorkspace:
     """
     def __init__(self):
         self._buffer = None
+        self._input_buffer = None
         self._lock = Lock()
 
     def __getstate__(self):
@@ -144,6 +154,38 @@ class _FFTWorkspace:
             _workspace_power(imgs, self._buffer, result, win_t, win_t - overlap)
             # No returned array/view references scratch. Callers can retain
             # this power after every later batch overwrites the scratch.
+            return result
+        finally:
+            self._lock.release()
+
+    def _power_rectangular(self, imgs, origins, window_shape, win_t, overlap):
+        """Private uint8/time-normalised path; no batch-sized image array."""
+        for value in (win_t, overlap):
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+                raise ValueError('Temporal length and overlap must be integers.')
+        if not 0 <= overlap < win_t <= len(imgs) or min(window_shape) < 1:
+            raise ValueError('Need positive spatial sizes and 0 <= overlap < win_t <= frames.')
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError('The same FFT workspace cannot be used concurrently.')
+        try:
+            n = len(origins)
+            ny, nx = window_shape
+            result = np.empty((n, (win_t + 1)//2, ny, nx), dtype=np.float64)
+            if not n:
+                return result
+            slots = min(n, nb.get_num_threads())
+            geometry = (win_t//2 + 1, ny, nx)
+            if (self._buffer is None or self._buffer.shape[1:] != geometry
+                    or self._buffer.shape[0] < slots):
+                self._buffer = None
+                self._buffer = np.empty((slots, *geometry), dtype=np.complex128)
+            clip_shape = (len(imgs), ny, nx)
+            if (self._input_buffer is None or self._input_buffer.shape[1:] != clip_shape
+                    or self._input_buffer.shape[0] < slots):
+                self._input_buffer = None
+                self._input_buffer = np.empty((slots, *clip_shape), dtype=np.float64)
+            _workspace_rectangular_power(imgs, origins, self._input_buffer,
+                self._buffer, result, win_t, win_t-overlap)
             return result
         finally:
             self._lock.release()

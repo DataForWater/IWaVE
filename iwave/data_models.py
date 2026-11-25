@@ -1,7 +1,7 @@
 """Lazy preprocessing of one requested window batch at a time.
 
 Image windows and power spectra are never cached here. Only the small metadata
-needed to extract rectangles and the bounded complex FFT workspace are retained.
+needed to extract rectangles and bounded reusable FFT/input scratch are retained.
 Every returned spectrum owns data independent of that FFT workspace.
 """
 import operator
@@ -87,7 +87,7 @@ class LazyWindowArray:
 class LazySpectrumArray:
     """Produce the original full-grid processed power on demand.
 
-    Only complex FFT scratch is retained between requests, never outputs.
+    Only bounded FFT/input scratch is retained between requests, never outputs.
     A short final batch reuses it without overwriting a spectrum from an
     earlier batch. No fitting method or uncertainty interface is added here.
     """
@@ -104,16 +104,26 @@ class LazySpectrumArray:
     def __repr__(self):
         return f'Spectrum dimensions (windows, ft, fy, fx): {self.shape}'
 
-    def __getitem__(self, idx):
-        selected, scalar = _selection(idx, len(self))
-        windows = self.windows[selected]
-        power = spectral.sliding_window_spectrum(
-            windows[:, :, ::-1, :], self.time_size, self.time_overlap,
+    def _power(self, selected):
+        windows = self.windows
+        if (type(windows) is LazyWindowArray and windows._origins is not None
+                and (type(windows.imgs) is np.ndarray or isinstance(windows.imgs, np.memmap))
+                and windows.norm == 'time' and windows.imgs.dtype == np.uint8):
+            return self._fft_workspace._power_rectangular(
+                windows.imgs, windows._origins[selected], windows.win_x.shape[-2:],
+                self.time_size, self.time_overlap,
+            )
+        # Arbitrary indexing, callbacks, signed/floating data and other modes
+        # retain their original extraction and whole-window mean-gate rules.
+        owned = windows[selected]
+        return spectral.sliding_window_spectrum(
+            owned[:, :, ::-1, :], self.time_size, self.time_overlap,
             _workspace=self._fft_workspace,
         )
-        # Keep main's y reversal/sign convention. The FFT result owns its data,
-        # so release the large image batch before normalisation/thresholding.
-        del windows
+
+    def __getitem__(self, idx):
+        selected, scalar = _selection(idx, len(self))
+        power = self._power(selected)
         # This buffer is private to this request: normalise and threshold it
         # in place instead of allocating additional full spectral cubes.
         normalized = spectral.normalize_power(power, copy=False)
