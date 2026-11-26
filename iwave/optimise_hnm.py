@@ -376,6 +376,77 @@ def _accumulate_votes(acc, points, beta, intrinsic, vy, vx, dy, dx, wave, turb):
                         acc[low+1, other] += weight*frac
 
 
+@nb.njit(cache=True, nogil=True, error_model='numpy')
+def _ridge_points_finite(columns, pairs, omega, ky, kx, height, prominence):
+    """SciPy-compatible finite-column peaks, prominence and point ordering.
+
+    No distance/width/wlen rules are requested by HNM. Plateaus use their
+    rounded-down midpoint; equal-height peaks do not stop prominence scans.
+    Work is serial inside each existing process, with fastmath disabled.
+    """
+    nf, count = columns.shape
+    scratch = np.empty((count*(nf//2), 4), dtype=np.float64)
+    used = 0
+    for column in range(count):
+        i = 1
+        while i < nf-1:
+            if columns[i-1, column] < columns[i, column]:
+                right = i
+                while right < nf-1 and columns[right+1, column] == columns[i, column]:
+                    right += 1
+                if right < nf-1 and columns[right+1, column] < columns[i, column]:
+                    peak = (i+right)//2
+                    value = columns[peak, column]
+                    if value >= height:
+                        left_min = right_min = value
+                        j = peak
+                        while j >= 0 and columns[j, column] <= value:
+                            if columns[j, column] < left_min:
+                                left_min = columns[j, column]
+                            j -= 1
+                        j = peak
+                        while j < nf and columns[j, column] <= value:
+                            if columns[j, column] < right_min:
+                                right_min = columns[j, column]
+                            j += 1
+                        weight = value-max(left_min, right_min)
+                        if weight >= prominence:
+                            l, c, r = columns[peak-1, column], value, columns[peak+1, column]
+                            denominator = l-2*c+r
+                            off = 0. if denominator == 0 else .5*(l-r)/denominator
+                            if off < -.5:
+                                off = -.5
+                            elif off > .5:
+                                off = .5
+                            frequency = omega[peak]+off*(omega[1]-omega[0])
+                            iy, ix = pairs[column, 0], pairs[column, 1]
+                            scratch[used, 0] = kx[ix]
+                            scratch[used, 1] = ky[iy]
+                            scratch[used, 2] = frequency
+                            scratch[used, 3] = min(weight, 1.)
+                            used += 1
+                i = right+1
+            else:
+                i += 1
+    # Do not retain the worst-case capacity behind a small returned view.
+    return scratch[:used].copy()
+
+
+def _ridge_points(columns, pairs, omega, ky, kx, height, prominence):
+    """Fast ordinary finite data; preserve SciPy's nonfinite fallback."""
+    if np.isfinite(columns).all():
+        return _ridge_points_finite(columns, pairs, omega, ky, kx, height, prominence)
+    rows = []
+    for column, (iy, ix) in zip(columns.T, pairs):
+        peaks, props = find_peaks(column, height=height, prominence=prominence)
+        for p, weight in zip(peaks, props['prominences']):
+            l, c, r = column[p-1:p+2]; denominator = l-2*c+r
+            off = 0. if denominator == 0 else .5*(l-r)/denominator
+            w = omega[p]+np.clip(off, -.5, .5)*(omega[1]-omega[0])
+            rows.append((kx[ix], ky[iy], w, min(float(weight), 1.)))
+    return np.asarray(rows, float).reshape(-1, 4)
+
+
 class State:
     """Accumulate Hough votes and retain the sampler's per-window state."""
 
@@ -441,7 +512,7 @@ class State:
             raise ValueError('Sampler attempted duplicate columns.')
         if len(self.used)+len(pairs)>self.M:
             raise ValueError('Sampler exceeded the spatial-column budget.')
-        t=perf_counter(); columns=self.columns(pairs)/self.scale; rows=[]
+        t=perf_counter(); columns=self.columns(pairs)/self.scale
         # Smooth only along frequency before detecting ridge peaks.
         columns = gaussian_filter1d(
             columns,
@@ -449,15 +520,8 @@ class State:
             axis=0,            # columns has shape (n_frequencies, n_pairs)
             mode="reflect",
         )
-        for column,(iy,ix) in zip(columns.T,pairs):
-            peaks,props=find_peaks(column,height=self.options['peak_height'],prominence=self.options['peak_prominence'])
-            for p,weight in zip(peaks,props['prominences']):
-                # Parabolic interpolation locates the peak between bins.
-                l,c,r=column[p-1:p+2]; denominator=l-2*c+r
-                off=0. if denominator==0 else .5*(l-r)/denominator
-                w=self.omega[p]+np.clip(off,-.5,.5)*(self.omega[1]-self.omega[0])
-                rows.append((self.kx[ix],self.ky[iy],w,min(float(weight),1.)))
-        points=np.asarray(rows,float).reshape(-1,4)
+        points = _ridge_points(columns, pairs, self.omega, self.ky, self.kx,
+                               self.options['peak_height'], self.options['peak_prominence'])
         self.times['extraction']+=perf_counter()-t
         self.visited[pairs[:,0],pairs[:,1]]=True
         self.used.extend(map(tuple,pairs.tolist())); self.point_blocks.append(points)

@@ -288,6 +288,33 @@ def theoretical_spectrum(
 
     """
 
+    # Normal float64 models need no dense coordinate tiles. Since exp is
+    # monotone, max(exp(-a), exp(-b)) = exp(-min(a, b)): evaluate ONE Gaussian
+    # per bin, with the original NumExpr exponent arithmetic and full tails.
+    # This is stateless: no geometry/data cache, reusable output, or diagnostic
+    # sharing. Keep a general fallback for other dtypes/shapes and extreme or
+    # nonfinite inputs, including legacy NaN propagation / overflow behaviour.
+    if (isinstance(kt, np.ndarray) and kt.ndim == 1 and kt.size
+            and isinstance(kt_gw, np.ndarray) and kt_gw.ndim == 3
+            and isinstance(kt_turb, np.ndarray) and kt_turb.shape == kt_gw.shape
+            and kt_gw.shape[0] == 1 and min(kt_gw.shape[1:]) > 0
+            and kt.dtype == kt_gw.dtype == kt_turb.dtype == np.float64
+            and isinstance(gauss_width, (float, np.float64))
+            and 1e-150 <= gauss_width <= 1e150
+            and all(np.isfinite(a).all() and np.max(np.abs(a)) < 1e150
+                    for a in (kt, kt_gw, kt_turb))):
+        frequency = kt[:, None, None]
+        if gravity_waves_switch and turbulence_switch:
+            return ne.evaluate(
+                'exp(-where((frequency-kt_gw)**2 <= (frequency-kt_turb)**2, '
+                '(frequency-kt_gw)**2, (frequency-kt_turb)**2) / gauss_width**2)',
+                order='C')
+        if gravity_waves_switch:
+            return ne.evaluate('exp(-(frequency-kt_gw)**2 / gauss_width**2)', order='C')
+        if turbulence_switch:
+            return ne.evaluate('exp(-(frequency-kt_turb)**2 / gauss_width**2)', order='C')
+        return np.zeros((len(kt), *kt_gw.shape[1:]), dtype=np.float64)
+
     # build 3D kt_gw matrix with dimensions N_t x N_y x N_x
     kt_gw = np.tile(kt_gw, (len(kt), 1, 1))
     
