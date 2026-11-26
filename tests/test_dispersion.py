@@ -30,3 +30,17 @@ def test_downsample(img_windows_norm):
     downsampled_img = img_single_window[:, ::2, ::2]
     downsampled_spectrum = spectral._numpy_fourier_transform(downsampled_img)
     assert trimmed_spectrum.shape == downsampled_spectrum.shape
+
+
+def test_theoretical_spectrum_matches_tiled_branches():
+    """The untiled maximum keeps the original Gaussian values and switches."""
+    kt = np.arange(7, dtype=float)
+    gw = np.array([[[1., 2.], [3., 4.]]])
+    turb = np.array([[[4., 3.], [2., 1.]]])
+    frequency = np.tile(kt[:, None, None], (1, 2, 2))
+    for wave, floating in ((True, True), (True, False), (False, True), (False, False)):
+        expected = np.maximum(
+            dispersion.gauss_spectrum_calc(np.tile(gw, (7, 1, 1)), frequency, .7, wave),
+            dispersion.gauss_spectrum_calc(np.tile(turb, (7, 1, 1)), frequency, .7, floating))
+        actual = dispersion.theoretical_spectrum(gw, turb, kt, .7, wave, floating)
+        np.testing.assert_array_equal(actual, expected)

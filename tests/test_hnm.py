@@ -22,6 +22,16 @@ def test_de_default_and_separate_backend_options(flow, inline_pool):
     with pytest.raises(ValueError): optimise.normalise_method('Hough')
 
 
+def test_compiled_ridge_points_keep_plateaus_and_column_order():
+    """Plateau interpolation and point order match the original peak loop."""
+    columns = np.array([[0., 0.], [1., 2.], [1., 0.], [0., 2.],
+                        [3., 0.], [0., 0.], [0., 0.]])
+    points = hnm._ridge_points(columns, np.array([[0, 0], [0, 1]]),
+                               np.arange(7.), np.array([-1.]), np.array([2., 3.]), .5, .5)
+    np.testing.assert_array_equal(points, [[2., -1., 1.5, 1.], [2., -1., 4., 1.],
+                                           [3., -1., 1., 1.], [3., -1., 3., 1.]])
+
+
 def test_compiled_votes_match_original_rasterisation():
     """Keep both physical branches, axial cases and adjacent-bin deposits."""
     vy, vx = np.linspace(-.8, .8, 17), np.linspace(-1.2, 1.2, 25)
