@@ -4,6 +4,19 @@ import pytest
 from iwave import spectral, LazySpectrumArray
 
 
+def test_fused_spectral_mask_matches_original():
+    """Preserve the mean threshold, zero-frequency removal and speed mask."""
+    data = np.arange(80., dtype=float).reshape(2, 4, 2, 5) / 7
+    kt, ky, kx = np.arange(4.), np.array([-1., 0.]), np.arange(5.) - 2
+    expected = data.copy()
+    expected[expected < expected.mean(axis=1, keepdims=True)] = 0
+    expected[:, 0] = 0
+    expected *= kt[:, None, None] <= spectral.dispersion_threshold(ky, kx, 1.)
+    actual = spectral.preprocess_normalized_spectrum(data, kt, ky, kx, 1.)
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(data, np.arange(80.).reshape(2, 4, 2, 5) / 7)
+
+
 def test_get_wave_numbers(img_windows, res=0.02, fps=25):
     """Check shape of wave numbers, conditional on shape of image."""
     # feed in only the first image window, and of that, only the first frame

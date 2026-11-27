@@ -356,6 +356,31 @@ def normalize_power(power, *, copy=True):
     return result
 
 
+@nb.njit(parallel=True, cache=True, nogil=True, fastmath=False)
+def _apply_spectral_mask(result, threshold, support):
+    """Fuse elementwise passes; keep the original NumPy mean reduction."""
+    largest = np.finfo(np.float64).max
+    for window in nb.prange(result.shape[0]):
+        for f in range(result.shape[1]):
+            for y in range(result.shape[2]):
+                for x in range(result.shape[3]):
+                    value = result[window, f, y, x]
+                    if value < threshold[window, 0, y, x]:
+                        value = 0.
+                    if f == 0:
+                        value = 0.
+                    # Multiplication, rather than assignment, preserves -0.
+                    if not support[f, y, x]:
+                        value = value*0.
+                    if np.isnan(value):
+                        value = 0.
+                    elif value == np.inf:
+                        value = largest
+                    elif value == -np.inf:
+                        value = -largest
+                    result[window, f, y, x] = value
+
+
 def preprocess_normalized_spectrum(normalized, kt, ky, kx,
                                    velocity_threshold, spectrum_threshold=1., *, copy=True):
     """Apply the original thresholds to already spatial-normalised power.
@@ -366,6 +391,18 @@ def preprocess_normalized_spectrum(normalized, kt, ky, kx,
     """
     result = normalized.copy() if copy else normalized
     threshold = spectrum_threshold * result.mean(axis=1, keepdims=True)
+    if (result.ndim == 4 and result.dtype == np.float64
+            and result.flags.c_contiguous and result.flags.writeable
+            and result.shape[1] > 0 and threshold.dtype == np.float64
+            and threshold.shape == (result.shape[0], 1, *result.shape[-2:])
+            and all(type(axis) is np.ndarray and axis.ndim == 1
+                    for axis in (kt, ky, kx))
+            and (len(kt), len(ky), len(kx)) == result.shape[1:]
+            and np.isfinite(result).all()):
+        support = kt[:, None, None] <= dispersion_threshold(ky, kx, velocity_threshold)
+        if support.shape == result.shape[1:]:
+            _apply_spectral_mask(result, threshold, support)
+            return result
     result[result < threshold] = 0
     result[:, 0] = 0
     result *= kt[:, None, None] <= dispersion_threshold(ky, kx, velocity_threshold)
