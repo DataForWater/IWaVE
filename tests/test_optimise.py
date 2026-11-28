@@ -1,11 +1,11 @@
 import numpy as np
 import pytest
 import time
-from iwave import spectral, dispersion, optimise, Iwave
+from iwave import spectral, dispersion, optimise, window, Iwave
 
 
 def test_preprocessing():
-    """Check shape of preprocessed spectrum against expected shape."""
+    """Check the dimensions after processing the spectrum."""
     img = np.random.rand(3, 32, 32, 32)
     kt, ky, kx = spectral.wave_numbers(img.shape, res=0.02, fps=25)
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity=[1, 0], depth=1, vel_indx=1)
@@ -13,24 +13,24 @@ def test_preprocessing():
                                                          turbulence_switch=True)
     measured_spectrum = spectral.sliding_window_spectrum(img, img.shape[1], 0)
     preprocessed_spectrum = spectral.spectrum_preprocessing(measured_spectrum, kt, ky, kx, velocity_threshold=5)
-    #test if the size of the preprocessed spectrum matches the one of the theoretical spectrum
+    # Check that processing keeps the measured and model spectrum dimensions compatible.
     assert preprocessed_spectrum[0].shape == synthetic_spectrum.shape
 
     
 def test_nsp(img_size=(256, 64, 64), res=0.02, fps=25):
-    """Compute nsp cost function, compare against known value."""
+    """Compare the inverse-overlap score with a known result."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     kt_gw, kt_turb = dispersion.dispersion(ky, kx, velocity=[1, 0], depth=1, vel_indx=1)
     synthetic_spectrum = dispersion.theoretical_spectrum(kt_gw, kt_turb, kt, gauss_width=1, gravity_waves_switch=True, 
                                                          turbulence_switch=True)
     cost = optimise.nsp_inv(synthetic_spectrum,synthetic_spectrum)
     expected_cost = np.sum(synthetic_spectrum)**2 / np.sum(synthetic_spectrum**2)
-    #test if the auto-correlation matches the theoretical expectation based on a synthetic spectrum
+    # Compare a model spectrum with itself to check the overlap score.
     assert np.allclose(cost, expected_cost)
 
     
 def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
-    """Check cost function (with depth) against expected gradients."""
+    """Check how the fitting score changes when the trial depth changes."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     depth_1 = 0.30
     depth_2 = 0.29
@@ -65,13 +65,12 @@ def test_cost_function_velocity_depth(img_size=(256, 64, 64), res=0.02, fps=25):
         img_size, res, fps, gauss_width=1, penalty_weight = 1,
         gravity_waves_switch=True, turbulence_switch=True
     )
-    #test if the cost function increases when the depth deviates from optimal
+    # Check that changing depth away from the known value makes agreement worse.
     assert cost_12 > cost_11
     assert cost_13 > cost_11
 
-# @pytest.mark.skip(reason="Optimization with depth is not yet stable")
 def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
-    """Check hypothetical case optimization with depth for one single window."""
+    """Fit a generated single-window spectrum with known velocity and depth."""
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity = [1, 0]
     depth = 0.2
@@ -91,10 +90,10 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         gravity_waves_switch=True,
         turbulence_switch=True
     )
-    # synthetic_spectrum = optimise.spectrum_preprocessing(synthetic_spectrum, kt, ky, kx, velocity_threshold=10, spectrum_threshold=1)
-    # define ranges for optimization
+    # Set the allowed velocity and depth ranges.
 
-    synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
+    # Repeat the same spectrum to represent several windows.
+    synthetic_spectrum = np.tile(synthetic_spectrum, (2,1,1,1))
     vel_y_min = 0
     vel_y_max = 2
     vel_x_min = -0.5
@@ -118,12 +117,10 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
         popsize=20,
         workers=1,
         maxiter=1000,
-        # updating="deferred"
     )
     vel_y_optimal = output[:, 0]
     vel_x_optimal = output[:, 1]  
     depth_optimal = output[:, 2] 
-    # print(f"Original velocity/depth was {velocity, depth}, optimized {optimal}")
     t2 = time.time()
     print(f"Took {t2 - t1} seconds")
     assert vel_x_max >= vel_x_min
@@ -135,7 +132,7 @@ def test_optimise_velocity_depth(img_size=(128, 64, 64), res=0.02, fps=12):
     
     
 def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
-    """Check hypothetical case optimization with depth for one single window, using single and double pass"""
+    """Compare one-pass and reduced-then-full fitting on a generated spectrum."""
     np.random.seed(0)
     kt, ky, kx = spectral.wave_numbers(img_size, res, fps)
     velocity = [1, 0]
@@ -168,14 +165,15 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
         gravity_waves_switch=True,
         turbulence_switch=True
     )
-    iw.spectrum = np.tile(synthetic_spectrum, (2,1,1,1)) # simulate multiple windows
+    # Repeat the same spectrum to represent several windows.
+    iw.spectrum = np.tile(synthetic_spectrum, (2,1,1,1))
 
     iw.x = np.array([0., 1.])
     iw.y = np.array([0.])
     
-    # single-pass velocimetry
+    # Fit once using the full spectrum.
     iw.velocimetry(
-        alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+        alpha=0.85,  # alpha is depth-averaged velocity divided by surface velocity.
         depth=depth,
         popsize= 20,
         pass_downsampling=[1],
@@ -189,9 +187,9 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     vx_1step = iw.vx 
     d_1step = iw.d
        
-    # two-passes velocimetry
+    # Fit a reduced spectrum first, then the full spectrum.
     iw.velocimetry(
-        alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
+        alpha=0.85,  # alpha is depth-averaged velocity divided by surface velocity.
         depth=depth,
         popsize= 20,
         dmin=depth_min,
@@ -217,3 +215,34 @@ def test_iwave(img_size=(128, 64, 64), res=0.02, fps=12):
     assert np.all(np.abs(vy_2steps - velocity[0]) < 0.01)
     assert np.all(np.abs(vx_2steps - velocity[1]) < 0.01)
     assert np.all(np.abs(d_2steps - depth) < 0.05)
+
+
+def test_window_batches_reuse_one_worker_pool(monkeypatch):
+    """Check that the DE pipeline handles one batch at a time and reuses its fitting processes."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    imgs = np.random.default_rng(6).integers(0, 255, (64, 8, 24), dtype=np.uint8)
+    iw = Iwave(.1, window_size=(8, 8), time_size=32, time_overlap=16,
+               fps=20., imgs=imgs, smax=1., window_chunk_size=2)
+    batches, pools = [], []
+    extract = spectral._FFTWorkspace._power_rectangular
+
+    def tracked_extract(workspace, images, origins, shape, win_t, overlap):
+        batches.append(len(origins))
+        return extract(workspace, images, origins, shape, win_t, overlap)
+
+    class CountPool(ThreadPoolExecutor):
+        def __init__(self, **kwargs):
+            pools.append(kwargs['max_workers'])
+            # Run the actual DE fitting function in this process for the small test,
+            # without starting extra Python processes or redirecting all program output.
+            super().__init__(max_workers=kwargs['max_workers'])
+
+    monkeypatch.setattr(spectral._FFTWorkspace, '_power_rectangular', tracked_extract)
+    monkeypatch.setattr(optimise, 'ProcessPoolExecutor', CountPool)
+    iw.velocimetry(depth=.3, pass_downsampling=[1], popsize=2,
+                   maxiter=1, seed=0, polish=False)
+    assert batches == [2, 1]
+    assert len(pools) == 1
+    assert pools[0] <= 2
+    assert iw.vx.shape == (1, 3)
