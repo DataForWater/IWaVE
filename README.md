@@ -1,6 +1,11 @@
 # IWaVE
 Image Wave Velocimetry Estimation
 
+> **HNM source snapshot.** This independent branch adds Hough/Nelder–Mead fitting,
+> native diagnostic results and transects. It retains the original preprocessing;
+> the separate FFT branch is not included. See [ALGORITHMS.md](ALGORITHMS.md) for the
+> processing sequence and a guide to the commented source.
+
 This library performs simultaneous analysis of 2D velocimetry and depth in lakes, coastlines, estuaries and
 rivers with highly complex bathymetric and wave dynamics through space-time Fourier transform methods using a physics-based
 approach. Unlike existing velocimetry approaches such as Particle Image Velocimetry or
@@ -80,6 +85,16 @@ pip install "iwave[extra]"
 
 This sets you up with ability to retrieve a sample video, read video frames, and make plots.
 
+The commands above install the **published release**, not this source snapshot. For these files,
+use a separate virtual environment and install `requirements.txt` (or `requirements-test.txt` for tests).
+Run from the directory containing `iwave/`, or replace the corresponding files in a complete project
+checkout and use its editable installation. These source-only snapshots do not include upstream build
+metadata; `pip install -e .` below therefore refers to the complete checkout, not the bare snapshot.
+Verify the active source with `python -c "import iwave; print(iwave.__file__)"`, and restart an already
+imported notebook/kernel when changing branches. The dependency list now explicitly includes the
+SciPy, NumExpr, Pillow and tqdm imports that were missing from the previous requirements file.
+A headless installation may substitute `opencv-python-headless` for `opencv-python`; do not install both.
+
 ## Examples
 
 The main functionality is disclosed via an API class `Iwave`.
@@ -91,17 +106,17 @@ To create an IWaVE instance, you typically start with some settings for deriving
 ```python
 from iwave import Iwave
 
-# Initialize IWaVE object
+# Create the Iwave object and choose the analysis settings.
 iw = Iwave(
-    resolution=0.01,  # image resolution in meters per pixel
-    window_size=(64, 64),  # size of interrogation windows over which velocities are estimated
-    overlap=(32, 32),  # overlap in space (y, x) used to select windows from images or frames
-    time_size=250,  # amount of frames in time used for one spectral analysis
-    time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of
-        # time_size implies that you use a 50% overlap in time between frame sets.
+    resolution=0.01,  # Image resolution, in metres per pixel.
+    window_size=(64, 64),  # Window height and width in pixels.
+    overlap=(32, 32),  # Shared pixels between neighbouring windows, in (y, x) order.
+    time_size=250,  # Frames used in each spectrum time segment.
+    time_overlap=125,  # Frames shared by consecutive time segments.
+        # time_overlap=time_size/2 gives 50% overlap.
 )
 
-# print some information about the IWaVE instance
+# Display the current analysis settings.
 print(iw)
 ```
 Initializing a IWaVE instance is done by only setting some parameters for the analysis. At this stage we have not
@@ -149,33 +164,33 @@ from matplotlib import patches
 from iwave import Iwave, sample_data
 
 iw = Iwave(
-    resolution=0.01,  # resolution of videos you will analyze in meters per pixel.
-    window_size=(64, 64),  # size of interrogation windows over which velocities are estimated
-    overlap=(32, 32),  # overlap in space (y, x) used to select windows from images or frames
-    time_size=250,  # amount of frames used for one spectral analysis
-    time_overlap=125,  # amount of overlap in frames, used to establish time slices. Selecting half of
-        # time_size implies that you use a 50% overlap in time between frame sets.
+    resolution=0.01,  # Resolution of the analysed images, in metres per pixel.
+    window_size=(64, 64),  # Window height and width in pixels.
+    overlap=(32, 32),  # Shared pixels between neighbouring windows, in (y, x) order.
+    time_size=250,  # Frames per spectrum time segment.
+    time_overlap=125,  # Frames shared by consecutive time segments.
+        # time_overlap=time_size/2 gives 50% overlap.
 )
 
-# retrieve a sample video from zenodo. This is built-in sample functionality...
+# Download the built-in example video from Zenodo.
 fn_video = sample_data.get_sheaf_dataset()
 iw.read_video(fn_video, start_frame=0, end_frame=500)
 
-# NOTE: you can also read images from a directory, with the frames per second set:
+# Alternatively, load image files and specify their frame rate:
 # iw.read_imgs("frames", fps=25, wildcard="*.png")
 
 print(iw)
 
-# show the shape of the read images
+# Display the loaded image-array dimensions.
 print(f"Shape of the available images is {iw.imgs.shape}")
 
-# show the shape of the manipulated windows
+# Display the window-array dimensions.
 print(f"Shape of the available windows is {iw.windows.shape}")
 
-# create a new figure with two subplots in one row
+# Make two plot areas side by side.
 f, axs = plt.subplots(nrows=1, ncols=2, figsize=(16, 7))
 
-# plot the first image with a patch at the first window and centers of rest in the first axes instance
+# On the first image, outline the first window and mark the other window centres.
 first_window = patches.Rectangle((0, 0), iw.window_size[1], iw.window_size[0],
                                  linewidth=1, edgecolor='r', facecolor='none', label="first window")
 xi, yi = np.meshgrid(iw.x, iw.y)
@@ -184,7 +199,7 @@ axs[0].add_patch(first_window)
 axs[0].plot(xi.flatten(), yi.flatten(), "o", label="centers")
 axs[0].legend()
 axs[0].set_title("First frame overview")
-# plot the first window of the first image in the second axes instance
+# In the second plot, show the first frame of the first window.
 axs[1].imshow(iw.windows[0][0], cmap="Greys_r")
 axs[1].set_title("First frame zoom first window")
 plt.show()
@@ -214,11 +229,11 @@ You then MUST provide frames-per-second explicitly yourself.
 ### Estimating x and y-directional velocity
 
 ```python
-from iwave import Iwave, sample_data
+from iwave import Iwave, sample_data, dispersion, io
 import matplotlib.pyplot as plt
 
-# the velocity optimization process is parallelized, for this, you MUST wrap
-# your script in a function and protect it with an `if __name__ == "__main__":` check
+# Keep the analysis in main(), so new fitting processes can import this file safely.
+# Call main() only inside the if __name__ == "__main__": check.
 def main():
   iw = Iwave(
       resolution=0.01,
@@ -231,22 +246,32 @@ def main():
   iw.read_video(fn_video, start_frame=0, end_frame=500)
 
   iw.velocimetry(
-    alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
-    depth=0.3,  # depth in [m] has to be known or estimated. If depth = 0, then the depth is estimated.
+    alpha=0.85,  # alpha is depth-averaged velocity divided by surface velocity.
+    depth=0.3,  # Supply depth in metres, or set zero to estimate it.
   )
 
   ax = plt.axes()
   ax.imshow(iw.imgs[0], cmap="Greys_r")
 
-  # add velocity vectors
-  iw.plot_velocimetry(ax=ax, color="b", scale=10)  # accepts matplotlib.pyplot.quiver keyword arguments
+  # Draw velocity arrows.
+  iw.plot_velocimetry(ax=ax, color="b", scale=10)  # Choose arrow appearance with Matplotlib quiver options.
 
-  # plot the measured spectra and fitted dispersion relation (modify window_idx to visualize different windows)
+  # Show measured power and predicted lines; change window_idx to select another window.
   fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 7))
-  p1 = iw.plot_spectrum_fitted(window_idx=4, dim="x", ax=axs[0])
+  # Draw lines using the fitted depth and the chosen alpha below.
+  # The older helper always uses depth=1 m and alpha=0.85 instead.
+  j = 4
+  waves, advected = dispersion.dispersion(
+      iw.ky, iw.kx, (iw.vy.flat[j], iw.vx.flat[j]),
+      depth=iw.d.flat[j], vel_indx=0.85,
+  )
+  measured = iw.spectrum[j]
+  p1 = io.plot_spectrum_fitted(measured, waves, advected, iw.kt, iw.ky, iw.kx,
+                               dim="x", ax=axs[0])
   axs[0].set_xlim([-100, 100])
   plt.colorbar(p1, ax=axs[0])
-  p2 = iw.plot_spectrum_fitted(window_idx=4, dim="y", ax=axs[1])
+  p2 = io.plot_spectrum_fitted(measured, waves, advected, iw.kt, iw.ky, iw.kx,
+                               dim="y", ax=axs[1])
   axs[1].set_xlim([-100, 100])
   plt.colorbar(p2, ax=axs[1])
   plt.show()
@@ -281,7 +306,7 @@ its success depends on the initial estimates. With a supplied depth, HNM uses on
 when estimating depth, it uses up to 12.
 
 ```python
-# Replace the iw.velocimetry call in main() to select HNM:
+# To select HNM, use this in place of the velocimetry call in main():
 iw.velocimetry(method="HNM", alpha=0.85, depth=0.3)
 ```
 
@@ -300,11 +325,11 @@ change the video resolution.
 > import iwave
 >
 > def main():
->     # ... here your core functionalities, making an IWaVE instance, reading video/frames
->     # calling `iw.velocimetry`, storing results, plotting and so on...
+>     # Create Iwave and load your video or image sequence here.
+>     # Keep fitting, saving results and plotting inside this function.
 >     pass
 >
-> # at the end, call your function with main functionalities
+> # Run the analysis function when this file is started as a script.
 > if __name__ == "__main__":
 >     main()
 > ```
@@ -320,7 +345,7 @@ change the video resolution.
 > import os
 > os.environ["IWAVE_NUM_THREADS"] = "1"
 >
-> # make sure you import iwave AFTER setting the environment variable
+> # Set the environment variable before importing iwave.
 > import iwave
 > ```
 
@@ -342,16 +367,20 @@ indicative of large uncertainties in both velocity and depth estimations.
 `iw.status.windows` and `iw.status.windows_message` contain the optimisation outcome and exit message for each window.
 `iw.status.overall` is true only if all windows report success; `iw.status.overall_message` gives a summary.
 
-Spectral uncertainty can be calculated by setting `calculate_spectral_uncertainty=True`. This uses the number of
-temporal averages, accounting for overlap, and the local sensitivity of the fitted spectrum to estimate bounds on
-velocity and reconstructed depth. These bounds describe the optimiser uncertainty near the selected solution; they do not include calibration errors or
-errors in the physical model; they do not account for the presence of potentlially multiple local minima of the cost function.
+Spectral uncertainty can be calculated by setting `calculate_spectral_uncertainty=True`. This uses an approximate
+overlap-corrected effective number of temporal averages and the numerical local sensitivity of the fitted spectrum
+to estimate provisional bounds on velocity and reconstructed depth. These are noise-scaled local sensitivity bounds,
+conditional on the selected solution and fixed fitted mask, not calibrated total confidence intervals. They exclude
+calibration and physical-model errors and do not account for other local minima of the cost function.
 
-A separate option, `calculate_mode_ambiguity=True`, compares distinct solutions obtained from multiple independent instances of the Nelder-Mead refinement step. Solutions that cannot be distinguished on the estimated spectral-noise scale are marked as competitive rival. Alternative solutions with a lower score are marked as separate rival.
+A separate option, `calculate_mode_ambiguity=True`, compares distinct converged, feasible, interior endpoints from the
+existing Nelder–Mead starts. The starts use the same measured data and are **not independent noise realisations**.
+Solutions that cannot be distinguished on the estimated shared-data spectral-noise scale are marked as competitive
+rivals; alternatives resolved as worse on that scale are separated rivals. No additional searches are performed.
 The calculation of mode ambiguity requires more than one starting estimate, so `n_candidates` must be larger than one:
 
 ```python
-# Replace the iw.velocimetry call in main(); both diagnostics are optional.
+# Use this velocimetry call in main(); each optional check has its own switch.
 iw.velocimetry(
     method="HNM", alpha=0.85, depth=0.3,
     hnm_options={"n_candidates": 6},
@@ -359,17 +388,22 @@ iw.velocimetry(
     calculate_mode_ambiguity=True,
 )
 
-# Results for the window in row 0, column 0:
+# Read results for the first row and column of windows:
 print(iw.spectral_uncertainty.vx_bounds[0, 0])  # [lower, upper] in m/s
 print(iw.spectral_uncertainty.vy_bounds[0, 0])
 print(iw.mode_ambiguity.ambiguous_solution[0, 0])
 ```
 
 For reconstructed depth, the corresponding bounds are available at `iw.spectral_uncertainty.depth_bounds` in meters.
+All bound arrays have shape `(rows, columns, 2)`; inspect `.valid` and the per-window `.details[row, column]` for
+acceptance flags, assumptions and failure reasons. `iw.mode_ambiguity.additional_estimates[row, column]` contains
+native rival records with `.vx`, `.vy`, `.depth` and `.ambiguous_solution`; no rival bounds are invented.
 Missing or rejected bounds are `NaN`. The ambiguity flag is `True` if a competing alternative was found, `False` if
 none was found among the assessed solutions, and `None` if ambiguity could not be assessed. DE and single-start HNM
 do not provide an ambiguity assessment. The comparison does not establish that all possible solutions have been found.
-Both diagnostics are disabled by default and do not change the fitted parameters.
+Both diagnostics are disabled by default and do not change the fitted parameters. Passing a tuning dictionary alone
+does not enable either calculation. For DE, use an unpenalised fit (`de_options={"penalty_weight": 0}`) when requesting
+spectral bounds: penalised fits are flagged invalid, not treated as calibrated estimates.
 
 
 ### Estimating water depth as well as x and y-directional velocity
@@ -379,25 +413,25 @@ velocimetry call with the following and add the plots after fitting:
 
 ```python
 iw.velocimetry(
-  alpha=0.85,  # alpha represents the depth-averaged velocity over surface velocity [-]
-  depth=0,  # If depth = 0, then the depth is estimated.
-  dmin=0.01, dmax=3.0,  # lower and upper depth limits [m]
+  alpha=0.85,  # alpha is depth-averaged velocity divided by surface velocity.
+  depth=0,  # A depth of zero asks the method to estimate it.
+  dmin=0.01, dmax=3.0,  # Lower and upper allowed depths, in metres.
 )
 
 f, axs = plt.subplots(nrows=1, ncols=3, figsize=(20, 5))
-# Plot u against y for all x values
+# Plot x velocity along y, for each x position.
 for i in range(iw.vx.shape[1]):
     axs[0].plot(iw.y, iw.vx[:, i], "o", label=f'x={iw.x[i]}')
 axs[0].set_title("u vs y")
 axs[0].set_xlabel("y [pixels]")
 axs[0].set_ylabel("u (m/s)")
-# Plot v against y for all x values
+# Plot y velocity along y, for each x position.
 for i in range(iw.vy.shape[1]):
     axs[1].plot(iw.y, iw.vy[:, i], "o", label=f'x={iw.x[i]}')
 axs[1].set_title("v vs y")
 axs[1].set_xlabel("y [pixels]")
 axs[1].set_ylabel("v (m/s)")
-# Plot d against y for all x values
+# Plot depth along y, for each x position.
 for i in range(iw.d.shape[1]):
     axs[2].plot(iw.y, iw.d[:, i], "o", label=f'x={iw.x[i]}')
 axs[2].set_title("depth vs y")
@@ -415,16 +449,136 @@ The same depth estimation is available with `method="HNM"`.
 windows. Available spectral uncertainty bounds and alternative solutions are included automatically:
 
 ```python
-# Add after fitting, before plt.show() in main():
+# Add this after fitting, before plt.show() in main():
 fig, axs = iw.plot_transect(column=0)
-# Use row=0 instead to select the first row of windows.
+# Use row=0 instead to plot the first row of windows.
 ```
 
 Row and column indices refer to interrogation windows, starting from zero. Positions are in pixels by default;
 `distance_units="m"` converts them to meters. Velocity components remain in m/s.
 
 `iw.plot_velocimetry` also uses pixel positions by default and accepts `distance_units="m"`. Failed fits are omitted
-unless `validate_vectors=False`; known ambiguous vectors are red by default when the ambiguity diagnostic is enabled.
+unless `validate_vectors=False`; nonfinite vectors are always omitted. Known ambiguous vectors use
+`ambiguous_color="tab:red"`; unknown ambiguity keeps the ordinary `color`. Velocity components remain in m/s,
+including when positions are pixels. Matplotlib's `scale` controls displayed arrow length, not the physical units.
+
+Transects return `(figure, axes)` in `vx, vy[, depth], quality` order and never call `show()`.
+Depth appears automatically only when reconstructed; `include_depth=False` hides it, while `True` rejects fixed-depth
+fits. Use `show_uncertainty=False` or `show_modes=False` to hide those layers without recalculation. Reuse `axes` with
+`label`/`color` to overlay strategies with matching panel counts; the shared legend is outside the panels.
+Transects also accept `distance_units="index"`. Window-centre positions refer to the analysed/cropped image,
+not surveyed river coordinates. Open markers indicate unavailable/rejected bounds; red rings indicate a competitive
+alternative. Rivals are separate points, not extensions of the selected error bar. Unknown ambiguity has no warning
+marker and remains `None`, not `False`.
+
+### API and migration reference
+
+Additional constructor controls are `fps`, `imgs`, `norm`, `spectrum_threshold`, `smax` and `window_chunk_size`.
+`imgs` is a `(frames, y, x)` array and needs a supplied frame rate. `norm="time"` is the default; `"xy"` normalises
+per frame and `None` disables image normalisation. `spectrum_threshold=1.0` multiplies the frequency-mean normalised
+power at each spatial wavenumber; increasing it removes more weak power when that mean is finite. It is not an
+absolute intensity threshold. `smax=4.0` m/s sets the velocity search limits; preprocessing retains frequencies up
+to `3*smax*sqrt(kx**2+ky**2)`, which is a different operation from fitting bounds. `window_chunk_size=50` limits
+windows per batch, not total input-video memory. Smaller batches use less peak memory. Spatial window sizes are
+rounded up to even numbers; `time_size` remains in frames. Use positive integer `time_size` no larger than the
+loaded clip and integer `0 <= time_overlap < time_size`; only complete temporal segments are averaged.
+
+`read_video(..., stride=k)` subsamples frames but does not automatically divide the stored frame rate: pass
+`fps=original_fps/k` when using a stride larger than one. Assign cropped/replacement data through `iw.imgs = ...`
+so window coordinates and lazy handles are rebuilt; do not assume in-place mutation invalidates fitted results.
+
+`velocimetry()` still defaults to `method="DE"`, `alpha=0.85`, `depth=1.0`, `dmin=0.01`, `dmax=3.0`, both physical
+branches enabled and `progress=True`. `progress=False` suppresses the parent fitting progress bar. Bounds are in m/s
+and metres. `gravity_waves_switch=False` disables waves; `turbulence_switch=False` disables the advective branch.
+At least one branch is needed for HNM; reconstructing depth additionally requires gravity waves and refinement.
+
+| Settings namespace | Use |
+|---|---|
+| `de_options` | `gauss_width=1.0`, `penalty_weight=1.0`, `pass_downsampling=[2, 1]`, and nested `scipy_options` |
+| `hnm_options` | Flat detector, sampling and local-refinement settings below; there is no HNM velocity penalty |
+| `spectral_uncertainty_options` | Tuning for explicitly enabled local spectral sensitivity |
+| `mode_ambiguity_options` | Tuning for explicitly enabled existing-endpoint comparisons |
+
+New-style nested DE settings merge with the standard defaults. Legacy direct SciPy kwargs retain their previous
+replace-defaults behaviour when nonempty. Do not mix that style or top-level `gauss_width`, `penalty_weight` or
+`pass_downsampling` with `de_options`, or pass DE settings to HNM.
+
+**HNM options** (defaults unless stated otherwise):
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `sampling` | `"fixed"` | Fixed spatial plan or `"adaptive"` scheduling |
+| `filling_ratio` | `1.0` | Maximum processed spatial columns: `ceil(filling_ratio*Ny*Nx)`, capped by eligibility |
+| `velocity_step` | `0.01` | Requested Hough grid spacing [m/s]; actual spacing follows the bounds |
+| `vote_sigma` | `0.015` | Gaussian vote-field smoothing scale [m/s] |
+| `k_min_factor` | `1.0` | Radial cutoff factor multiplying twice the smaller spatial Fourier spacing |
+| `peak_height`, `peak_prominence` | `0.25`, `0.30` | Peak thresholds after common intensity scaling |
+| `scale_percentile` | `99.5` | Percentile for that common intensity scale |
+| `min_ridges` | `12` | Minimum extracted ridge points for a Hough estimate |
+| `max_accumulator_mb` | `None` | Optional estimated accumulator-workspace cap; not a total-RAM limit |
+| `refine` | `True` | Nelder–Mead refinement; `False` supports fixed-depth Hough-only fits |
+| `relative_radius`, `min_radius` | `0.5`, `None` | Hard velocity disk: `max(relative_radius*abs(v_Hough), min_radius)`; `None` uses twice the larger actual grid spacing |
+| `n_candidates` | `1` fixed depth; `12` free depth | Maximum Hough-derived starts; fewer can be available inside the shared disk |
+| `candidate_separation` | `0.1` | Minimum separation between starting velocities [m/s] |
+| `maxfev` | `160` fixed depth; `640` free depth | NM evaluation budget **per start**, excluding subsequent diagnostics |
+| `xatol`, `fatol` | `1e-4`, `1e-6` | NM coordinate/objective tolerances; depth coordinates use log(depth) |
+| `initial_step_factor` | `2.0` | Initial velocity simplex step is this factor times `velocity_step` |
+| `depth_initial` | `None` | Hough reference/NM initial depth; `None` uses `sqrt(dmin*dmax)` |
+| `log_depth_step` | `0.1` | Initial depth-simplex edge in natural-log depth |
+| `gauss_width`, `kernel_truncate` | `1.0`, `5.0` | Forward-model frequency scale [rad/s] and narrow-band tail cutoff in multiples of that scale |
+| `batch_size`, `min_columns` | `64`, `64` | Adaptive processing batch and minimum processed columns |
+| `stable_batches`, `convergence_tol` | `2`, `0.01` | Adaptive successive-estimate stability count and velocity tolerance [m/s] |
+| `exploration_every`, `min_direction_ratio` | `4`, `0.05` | Adaptive geometric exploration cadence and directional-information ratio |
+
+Former `local_options`/`sampling_options` nesting is not accepted: move their entries directly into `hnm_options`.
+Use `initial_step_factor`, not the former `initial_step` key.
+
+The trust disk remains centred on the primary Hough estimate for **all** starts. It is not a velocity penalty and
+is not automatically expanded. Boundary-limited or unconverged selected fits are unsuccessful even if their
+spectral quality is high. Depth-dependent defaults apply independently per key; explicit user values win.
+`filling_ratio` affects Hough evidence only, not the FFT grid or the full-spectrum local refinement.
+HNM requires `0.5 < alpha <= 1`, positive resolution/frame rate/depth limits, at least three retained frequency bins
+and `0 < filling_ratio <= 1`. The reference depth must lie within the positive reconstruction limits.
+
+**Diagnostic tuning:** both dictionaries accept `confidence=0.95`, `variance_estimator="plugin"` (or
+`"gamma_unbiased"`) and `n_effective=None`. The default effective count is the rectangular-Welch overlap
+approximation; an explicit `n_effective` is the user's modelling choice, not an automatically estimated calibration.
+`spectral_uncertainty_options` additionally accepts `fd_step=0.05`, `stability_rtol=0.25`, `curvature_rtol=1e-7`,
+`curvature_atol=1e-10`, `stationarity_tol=0.1`, `parameter_scales=None`, `check_region=True`, `quadratic_rtol=0.5`
+and `kernel_truncate=5.0` (at least 5). Parameter scales follow `(vy, vx[, log_depth])` order.
+`mode_ambiguity_options["merge_tolerances"]` defaults to `None`, meaning ten `xatol` units per coordinate in the
+same order. These are numerical endpoint-merging tolerances, not uncertainties. Neither confidence setting is
+selection-adjusted global coverage. Keep the forward-model kernel convention consistent when changing expert options.
+
+For precomputed/array spectra, either diagnostic requires one entry in `spectral_contexts` per flattened window:
+`{"normalized_spectrum": full, "n_averages": n, "time_size": T, "time_overlap": O}`; `n_effective` may replace
+the averaging metadata. `full` has `(frequency, ky, kx)` shape and is complete, spatially normalised power **before**
+thresholding/DC/support censoring. The processed spectrum alone is insufficient. Normal lazy spectra supply this
+context automatically. Component bounds are accepted independently: a rejected depth interval does not by itself
+remove accepted velocity bounds. Use `.details` to understand missing/invalid components.
+
+Native `SpectralUncertainty`, `ModeAmbiguity` and `AlternativeEstimate` classes, spatial plotting functions,
+`img_windows_norm` and the curvature helpers live in `iwave.io`. Normal use needs only `Iwave` and its native result
+attributes; direct imports from earlier split helper modules should use the current locations. The old standalone
+`plots.py` demonstration is not part of this HNM package.
+
+`iw.method_options` records resolved solver settings and `iw.sampling_metadata[row, column]` the HNM audit record.
+`bool(iw.status)` is equivalent to `iw.status.overall`; `status_windows`, `message_windows` and `message` are
+read-only aliases of the structured status. These are not uncertainty flags. The old `calculate_uncertainty`,
+`uncertainty_options`, `calculate_hough_uncertainty` and `hough_uncertainty_options` interface is removed;
+use the two explicit diagnostic switches above instead.
+
+There is **no preprocessing-overlap option** in this clean version. Remove `preprocessing_overlap` and private
+lookahead assignments from scripts based on the discarded experiment. No FFT-engine, mixed-precision or FFT
+spatial-subsampling switch is added here. `IWAVE_NUM_THREADS` controls fitting-process requests, not a global cap
+on Numba/NumExpr/native thread teams; set environment controls before importing the package.
+
+The legacy `iw.plot_spectrum_fitted()` convenience method still assumes depth 1 m and alpha 0.85 for its overlay;
+use the explicit `dispersion.dispersion`/`io.plot_spectrum_fitted` example above to display another fitted depth or
+alpha. This existing limitation was documented, not silently changed in the cleanup.
+
+This standalone HNM snapshot does not expose `iw.warmup()` or the gathered-FFT workspace. Those belong to the
+FFT/integrated environment; its preprocessing and per-batch process-pool lifecycle are intentionally unchanged.
 
 ## For developers
 
