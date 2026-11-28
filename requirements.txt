@@ -1,7 +1,12 @@
-matplotlib
-numpy
-numba
-opencv-python
-pooch
-rocket-fft
-matplotlib
+# Packages already imported by this version of the source code.
+# Versions are not pinned; validation.json records the versions used for testing.
+numpy          # image/spectrum arrays and numerical calculations
+scipy          # fitting methods, peak finding, smoothing and noise calculations
+numba          # compile repeated numerical calculations for the CPU
+rocket-fft     # calculate transforms over time and across the image
+numexpr        # evaluate the wave-prediction formulas
+matplotlib     # figures and plots of fitted results
+opencv-python  # read video frames
+Pillow         # read image files
+pooch          # download public example data
+tqdm           # show fitting progress in the main program
