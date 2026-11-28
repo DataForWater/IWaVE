@@ -1,4 +1,4 @@
-"""File I/O functions for IWaVE."""
+"""Read image and video files, and plot measured and predicted spectra."""
 
 import glob
 import matplotlib.axes
@@ -18,24 +18,12 @@ except:
 
 
 def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
-    """Read video frames from file
+    """Read selected video frames into a greyscale image array.
 
-    Parameters
-    ----------
-    fn : str
-        Path to the video file.
-    start_frame : int, optional
-        The starting frame number from which to begin extraction (default is 0).
-    end_frame : int, optional
-        The frame number at which to stop extraction (default is 4).
-    stride : int, optional
-        lower the sampling rate by this factor. Default 1.
-
-    Returns
-    -------
-    np.ndarray
-        3D array with images stacked over first dimension
-
+    fn is the video path. start_frame is included; end_frame is excluded.
+    stride=1 keeps every frame; stride=2 keeps every other frame, and so on.
+    Return images in (frame, y, x) order. This function does not return or adjust
+    a frame rate; the caller must use the rate of the retained frames.
     """
     try:
         import cv2
@@ -48,34 +36,25 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1
     cap = cv2.VideoCapture(fn)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    # retrieve images from start to end frame
+    # Read the selected video frames.
     return np.stack(
         [cv2.cvtColor(cap.read()[-1][::stride, ::stride], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
     )
     
 
 def get_imgs(path: str, wildcard: Optional[str] = None):
-    """Read frames from images.
+    """Read greyscale image files from a directory.
 
-    Parameters
-    ----------
-    path : str
-        Directory path where image files are stored.
-    wildcard : Optional[str], default: None
-        Optional wildcard pattern to match specific files within the directory.
-
-    Returns
-    -------
-    np.ndarray
-        3D array with images stacked over first dimension
+    path is the directory and wildcard optionally restricts the filenames.
+    Return the sorted image sequence in (frame, y, x) order.
     """
-    # list all files in folder
+    # Find the image files to read.
     if wildcard:
         path = os.path.join(path, wildcard)
 
     fns = glob.glob(path)
     fns.sort()
-    # read in memory as black-and-white
+    # Load each image in greyscale.
     return np.stack(
         [np.array(Image.open(fn).convert('L')) for fn in tqdm(fns)])
 
@@ -91,33 +70,14 @@ def plot_spectrum(
     ax: Optional[matplotlib.axes.Axes] = None,
     **kwargs
 ):
-    """Plot 2D slice of spectrum of a window.
+    """Plot one two-dimensional slice through a window's power spectrum.
 
-    Parameters
-    ----------
-    spectrum : np.ndarray
-        The spectrum data array.
-    kt : np.ndarray
-        Array of wave numbers or time indices corresponding to the first (time) dimension.
-    ky : np.ndarray
-        Array of wave numbers corresponding to the second (x) dimension.
-    kx : np.ndarray
-        Array of wave numbers corresponding to the third (y) dimension.
-    dim : Literal["x", "y", "time"]
-        Dimension along which to slice the spectrum for plotting ("x", "y", or "time").
-    slice : int, optional
-        Index along the specified dimension to slice the spectrum. If not provided the middle index is used.
-    log : bool, optional
-        If True (default), spectrum is plotted on log scale.
-    ax : matplotlib.axes.Axes, optional
-        Matplotlib Axes object to plot on. If None, a new Axes object is created.
-    kwargs : dict
-        Additional arguments passed to the plotting function `matplotlib.pyplot.pcolormesh`.
-
-    Returns
-    -------
-    matplotlib.collections.QuadMesh
-        matplotlib handle to mesh plot
+    spectrum is in (frequency, ky, kx) order. kt is angular frequency in rad/s;
+    ky and kx are spatial wavenumbers in rad/m. dim selects the dimension held
+    fixed: 'time', 'y' or 'x'. slice selects its index, or the middle if omitted.
+    log=True uses a logarithmic colour scale. ax selects a Matplotlib plot area;
+    when omitted, create one. Forward kwargs to pcolormesh for colour and style.
+    Return the Matplotlib QuadMesh object, which can be used for a colour bar.
     """
     if ax is None:
         ax = plt.axes()
@@ -129,7 +89,7 @@ def plot_spectrum(
             yvals = ky
             slice_vals = kx
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-1] // 2
             imvals = spectrum[:, :, slice]
         case "y":
@@ -139,7 +99,7 @@ def plot_spectrum(
             yvals = kx
             slice_vals = ky
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-2] // 2
             imvals = spectrum[:, slice, :]
         case "time":
@@ -149,7 +109,7 @@ def plot_spectrum(
             yvals = kx
             slice_vals = kt
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-3] // 2
             imvals = spectrum[slice, :]
         case _:
@@ -176,37 +136,16 @@ def plot_spectrum_fitted(
     ax: Optional[matplotlib.axes.Axes] = None,
     **kwargs
 ):
-    """Plot 2D slice of spectrum of a window.
+    """Plot a spectrum slice together with the supplied predicted frequency lines.
 
-    Parameters
-    ----------
-    spectrum : np.ndarray
-        The spectrum data array.
-    kt_waves_theory : np.ndarray
-        Theoretical frequency of gravity waves according to optimised velocity vector.
-    kt_advected_theory : np.ndarray
-        Theoretical frequency of turbulence-driven waves according to optimised velocity vector.
-    kt : np.ndarray
-        Array of wave numbers or time indices corresponding to the first (time) dimension.
-    ky : np.ndarray
-        Array of wave numbers corresponding to the second (x) dimension.
-    kx : np.ndarray
-        Array of wave numbers corresponding to the third (y) dimension.
-    dim : Literal["x", "y", "time"]
-        Dimension along which to slice the spectrum for plotting ("x", "y", or "time").
-    slice : int, optional
-        Index along the specified dimension to slice the spectrum. If not provided the middle index is used.
-    log : bool, optional
-        If True (default), spectrum is plotted on log scale.
-    ax : matplotlib.axes.Axes, optional
-        Matplotlib Axes object to plot on. If None, a new Axes object is created.
-    kwargs : dict
-        Additional arguments passed to the plotting function `matplotlib.pyplot.pcolormesh`.
-
-    Returns
-    -------
-    matplotlib.collections.QuadMesh
-        matplotlib handle to mesh plot
+    spectrum is in (frequency, ky, kx) order. kt_waves_theory and
+    kt_advected_theory contain predictions for waves and flow-carried patterns.
+    kt is angular frequency in rad/s; ky and kx are wavenumbers in rad/m.
+    dim and slice choose the fixed dimension and its index, as in plot_spectrum.
+    The middle slice is used if slice is omitted. log selects a logarithmic colour
+    scale; ax chooses an existing plot area. Forward kwargs to pcolormesh.
+    Return the Matplotlib QuadMesh object. This function does not fit parameters;
+    the caller supplies the lines to draw.
     """
     if ax is None:
         ax = plt.axes()
@@ -218,7 +157,7 @@ def plot_spectrum_fitted(
             yvals = ky
             slice_vals = kx
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-1] // 2
             imvals = spectrum[:, :, slice]
             linevals_waves = np.squeeze(kt_waves_theory[0,:,slice])
@@ -230,7 +169,7 @@ def plot_spectrum_fitted(
             yvals = kx
             slice_vals = ky
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-2] // 2
             imvals = spectrum[:, slice, :]
             linevals_waves = np.squeeze(kt_waves_theory[0,slice,:])
@@ -242,7 +181,7 @@ def plot_spectrum_fitted(
             yvals = kx
             slice_vals = kt
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-3] // 2
             imvals = spectrum[slice, :]
         case _:
