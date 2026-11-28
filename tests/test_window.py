@@ -1,4 +1,4 @@
-""" tests for window manipulations """
+"""Check window positions, image extraction, and brightness normalisation."""
 import numpy as np
 import pytest
 
@@ -6,7 +6,7 @@ from iwave import window
 
 
 def test_get_axis_shape(imgs):
-    # get the last dimension (x-axis), assert if it fits
+    # Check how many windows fit along the image x direction.
     dim_size = imgs.shape[-1]
 
     x_shape = window.get_axis_shape(
@@ -18,7 +18,7 @@ def test_get_axis_shape(imgs):
 
 
 def test_get_array_shape(imgs):
-    # get last two dimensions, assert numbers in returned dims
+    # Check the number of window rows and columns.
     dim_sizes = imgs.shape[-2:]
     xy_shape = window.get_array_shape(
         dim_sizes=dim_sizes,
@@ -45,7 +45,7 @@ def test_get_rect_coordinates(imgs):
         window_sizes=(64, 64),
         overlap=(32, 32),
     )
-    # test first block of coords
+    # Check the first group of window positions.
     assert len(x) == 10
     assert len(y) == 23
     assert np.allclose(x[0:2], np.array([32., 64.]))
@@ -70,9 +70,9 @@ def test_sliding_window_array(imgs):
     ]
 )
 def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):
-    # get the x and y coordinates per window
+    # Find the x/y pixel positions belonging to each window.
     win_x, win_y = window.sliding_window_idx(imgs[0])
-    # apply the coordinates on all images
+    # Extract those positions from every image.
     window_stack = window.multi_sliding_window_array(
         imgs,
         win_x,
@@ -84,13 +84,13 @@ def test_multi_sliding_window_array(imgs, swap_time_dim, test_dims):
 
 def test_normalize(img_windows):
     img_norm = window.normalize(img_windows, mode="xy")
-    # check if shape remains the same
+    # Check that normalisation leaves the array dimensions unchanged.
     assert img_windows.shape == img_norm.shape
-    # check if any window has mean / std of 0. / 1.
+    # Check that the selected mean is zero and standard deviation is one.
     assert np.isclose(img_norm[0][0].std(), 1.)
     assert np.isclose(img_norm[0][0].mean(), 0.)
-    # check time normalization also
+    # Also check normalisation over time.
     img_norm = window.normalize(img_windows, mode="time")
-    # check if random single time slice has mean / std of 0. / 1.
+    # Check the mean and standard deviation of one selected frame.
     assert np.isclose(img_norm[1, :, 1, 1].std(), 1.)
     assert np.isclose(img_norm[1, :, 1, 1].mean(), 0.)

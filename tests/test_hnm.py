@@ -1,14 +1,14 @@
-"""Main solver additions, using synthetic spectra like test_optimise.py."""
+"""Check HNM fitting with generated spectra of known velocity and depth."""
 import numpy as np
 import pytest
 from iwave import dispersion, optimise, optimise_hnm as hnm, spectral
 
 
 def test_de_default_and_separate_backend_options(flow, inline_pool):
-    """DE stays the default; its old and new option styles give the same fit."""
+    """Check that DE remains the default and both supported option styles agree."""
     old, new = flow.make_iwave(), flow.make_iwave()
-    # Old nonempty kwargs replace defaults; the new dictionary merges them.
-    # Supply the same complete settings to compare like with like.
+    # Earlier DE keywords replace defaults; the new dictionary overrides individual entries.
+    # Give both calls the same complete settings so only the calling style differs.
     options = dict(seed=7, maxiter=150, popsize=8, tol=1e-8, atol=1e-12,
                    polish=True, strategy='best1bin', init='sobol', workers=1)
     old.velocimetry(depth=flow.depth, progress=False, penalty_weight=0,
@@ -23,7 +23,7 @@ def test_de_default_and_separate_backend_options(flow, inline_pool):
 
 
 def test_compiled_ridge_points_keep_plateaus_and_column_order():
-    """Plateau interpolation and point order match the original peak loop."""
+    """Check flat-topped peak positions and the order of the returned peaks."""
     columns = np.array([[0., 0.], [1., 2.], [1., 0.], [0., 2.],
                         [3., 0.], [0., 0.], [0., 0.]])
     points = hnm._ridge_points(columns, np.array([[0, 0], [0, 1]]),
@@ -33,7 +33,7 @@ def test_compiled_ridge_points_keep_plateaus_and_column_order():
 
 
 def test_compiled_votes_match_original_rasterisation():
-    """Keep both physical branches, axial cases and adjacent-bin deposits."""
+    """Check votes from both physical components, axis-aligned peaks, and neighbouring grid cells."""
     vy, vx = np.linspace(-.8, .8, 17), np.linspace(-1.2, 1.2, 25)
     dy, dx = vy[1]-vy[0], vx[1]-vx[0]
     points = np.array([[1.5, 0., .25, .7], [0., 2., .35, 1.],
@@ -58,7 +58,7 @@ def test_compiled_votes_match_original_rasterisation():
 
 
 def test_hough_fixed_adaptive_sampling_and_window_scaled_cutoff(flow):
-    """Both sampling plans recover the ridge without exceeding their k-pair budget."""
+    """Check that both column-selection methods find the known velocity within their sampling limit."""
     bounds = [(-1, 1), (-1, 1), (flow.depth, flow.depth)]
     ky, kx = flow.axes[1:]
     pairs, cutoff = hnm.eligible_pairs(ky, kx)
@@ -74,7 +74,7 @@ def test_hough_fixed_adaptive_sampling_and_window_scaled_cutoff(flow):
 
 
 def test_hnm_fixed_and_free_depth_obey_trust_region(flow, inline_pool):
-    """Recover velocity/depth while keeping all existing starts inside the disk."""
+    """Recover the known velocity/depth, keeping all starting guesses in the allowed circle."""
     for depth, candidates, evaluations in [(flow.depth, 1, 160), (0, 12, 640)]:
         iw = flow.make_iwave()
         iw.velocimetry(method='HNM', depth=depth, dmin=.08, dmax=.4,
@@ -91,11 +91,12 @@ def test_hnm_fixed_and_free_depth_obey_trust_region(flow, inline_pool):
         assert np.isclose(trust['radius'], max(.5*np.linalg.norm(trust['centre_vy_vx']), trust['min_radius']))
     empty = hnm.optimize_single_spectrum_velocity_hnm(np.zeros_like(flow.measured),
         [(-1,1),(-1,1),(.15,.15)], .85, flow.dims, flow.res, flow.fps, hnm_options=flow.hnm_options)
-    assert not empty[5]  # No fabricated successful vector when no ridge exists.
+    # A spectrum with no usable peaks must not produce a false successful velocity.
+    assert not empty[5]
 
 
 def test_fast_overlap_matches_original_dense_model(flow):
-    """The fast evaluator changes runtime, not the public theoretical spectrum."""
+    """Check that the faster calculation still represents the same public model spectrum."""
     before = flow.measured.copy()
     for waves, turbulence in [(True,True), (True,False), (False,True)]:
         objective = spectral.SpectralOverlapObjective(flow.measured, flow.axes, flow.depth,
@@ -109,15 +110,15 @@ def test_fast_overlap_matches_original_dense_model(flow):
 
 
 def test_fused_overlap_statistics_match_model_weights(flow):
-    """Preserve dense/narrow support, log-depth and final fit statistics."""
+    """Check full and shortened frequency ranges, positive depth fitting, and final score values."""
     q = np.array([.17, .43, np.log(.19)])
     for width in (1., 8.):
         objective = spectral.SpectralOverlapObjective(flow.measured, flow.axes,
             flow.depth, .85, True, True, dict(gauss_width=width, kernel_truncate=5.))
         model = dispersion.intensity(q[:2], np.exp(q[2]), .85, flow.dims,
                                      flow.res, flow.fps, width, True, True)
-        # The diagnostic weights use the original support convention, including
-        # sparse-band truncation and counting overlapping branches only once.
+        # Check the same model values and frequency ranges used during fitting,
+        # including omitted far tails and counting overlapping ranges only once.
         model *= objective.normalized_weights(q) > 0
         mass, square = model.sum(), np.sum(model*model)
         overlap = np.sum(model*flow.measured)

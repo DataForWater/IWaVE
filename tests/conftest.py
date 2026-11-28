@@ -1,4 +1,4 @@
-"""Test fixtures."""
+"""Shared inputs and helper functions for the tests."""
 import numpy as np
 import pytest
 
@@ -12,16 +12,10 @@ def fn_video():
 
 @pytest.fixture
 def imgs(fn_video):
-    """ 4 selected frames from sample dataset, read with reader helper function.
-    Result is [4 x n x m ] np.ndarray """
+    """Read four example frames and return an array in (frame, y, x) order."""
     return io.get_video(fn_video)
 
 
-# @pytest.fixture
-# def img_windows(fn_windows):
-#     with open(fn_windows, "rb") as f:
-#         windows = np.load(f)
-#     return windows
 
 @pytest.fixture
 def img_windows():
@@ -40,7 +34,7 @@ def img_windows_norm(img_windows):
     return img_windows
 
 
-# Small deterministic inputs for the additions below; no video/download needed.
+# Small repeatable test arrays; no video download is needed.
 @pytest.fixture
 def flow():
     from types import SimpleNamespace
@@ -63,7 +57,7 @@ def flow():
 
 @pytest.fixture
 def inline_pool(monkeypatch):
-    """Run the real window worker synchronously; test maths, not process startup."""
+    """Run the real fitting function directly, so this test checks results without starting processes."""
     from concurrent.futures import Future
     from iwave import optimise
     class InlinePool:

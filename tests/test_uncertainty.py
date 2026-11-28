@@ -1,11 +1,11 @@
-"""Main noise/ambiguity additions: small synthetic inputs, no video downloads."""
+"""Check noise and alternative-solution calculations using small generated spectra."""
 import numpy as np
 import pytest
 from iwave import LazySpectrumArray, dispersion, io, optimise, optimise_hnm as hnm, spectral
 
 
 def test_lazy_context_preserves_power_in_one_averaging_pass(flow, monkeypatch):
-    """Keep uncensored normalized power without calculating the FFTs twice."""
+    """Keep full normalised power for noise checks without repeating the FFT."""
     windows = np.random.default_rng(3).normal(size=(1, 256, 12, 14))
     kt, ky, kx = flow.axes
     lazy = LazySpectrumArray(windows, 128, 64, kt, kx, ky, smax=1., threshold=.2)
@@ -23,7 +23,7 @@ def test_lazy_context_preserves_power_in_one_averaging_pass(flow, monkeypatch):
 
 
 def test_optional_native_outputs_and_strict_boolean_gates(flow, inline_pool):
-    """Diagnostics are opt-in, independent, native, and do not change the fit."""
+    """Check that each optional calculation needs its own switch and does not alter the fit."""
     iw = flow.make_iwave(); args = dict(method='HNM', depth=flow.depth,
         hnm_options=flow.hnm_options, progress=False)
     iw.velocimetry(**args, spectral_uncertainty_options={'confidence': .9})
@@ -34,7 +34,8 @@ def test_optional_native_outputs_and_strict_boolean_gates(flow, inline_pool):
     np.testing.assert_array_equal(point, [iw.vy, iw.vx, iw.d])
     assert isinstance(iw.spectral_uncertainty, io.SpectralUncertainty)
     assert iw.spectral_uncertainty.valid.item() and np.isfinite(iw.spectral_uncertainty.vx_bounds).all()
-    assert np.isnan(iw.spectral_uncertainty.depth_bounds).all()  # Supplied, not estimated.
+    # Depth was supplied, not estimated.
+    assert np.isnan(iw.spectral_uncertainty.depth_bounds).all()
     assert iw.mode_ambiguity.ambiguous_solution.item() is None
     assert 'n_candidates = 1' in iw.mode_ambiguity.message
     with pytest.warns(UserWarning):
@@ -51,7 +52,7 @@ def test_optional_native_outputs_and_strict_boolean_gates(flow, inline_pool):
 
 
 def test_covariance_scales_with_averaging_and_curvature_respects_bounds(flow, inline_pool):
-    """More averages reduce variance; boundary curvature is rejected, not invented."""
+    """Check that more averages reduce predicted noise, and reject score checks at search limits."""
     iw = flow.make_iwave()
     iw.velocimetry(method='HNM', depth=flow.depth, hnm_options=flow.hnm_options, progress=False)
     records = [spectral.estimate_spectral_uncertainty(flow.measured, [iw.vy.item(), iw.vx.item()],
@@ -73,7 +74,7 @@ def test_covariance_scales_with_averaging_and_curvature_respects_bounds(flow, in
 
 
 def test_observed_mode_ambiguity_reuses_existing_endpoints():
-    """A two-pattern spectrum has rivals; lower noise can separate the same fits."""
+    """Check that two patterns can give competing fits, and reduced noise can distinguish them."""
     dims, res, fps, depth = (128,16,16), .25, 20., .15
     axes = spectral.wave_numbers(dims, res, fps)
     raw = dispersion.intensity((.05,.9), depth, .85, dims, res, fps, 1.)

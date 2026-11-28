@@ -1,4 +1,4 @@
-"""Main result/plot additions; figures use Agg so tests need no GUI."""
+"""Check result objects and plots using a non-interactive Matplotlib backend."""
 import copy
 import importlib.util
 from pathlib import Path
@@ -13,7 +13,7 @@ from iwave import io
 
 
 def test_native_results_and_curvature_live_in_io():
-    """Moved objects remain native, with partial bounds and honest unknown flags."""
+    """Check direct result attributes, partly available bounds, and flags for unknown comparisons."""
     for obj in [io.AlternativeEstimate, io.SpectralUncertainty, io.ModeAmbiguity,
                 io.estimate_objective_curvature]:
         assert obj.__module__ == 'iwave.io'
@@ -26,12 +26,13 @@ def test_native_results_and_curvature_live_in_io():
     assert np.isnan(s.depth_bounds[0,0]).all() and s.ambiguous_solution[0,0] is None
     m = io.ModeAmbiguity((1,2)); rival = io.AlternativeEstimate(.7,-.1,.3,True)
     m.additional_estimates[0,0].append(rival)
-    assert m.additional_estimates[0,1] == []  # Lists are not shared between windows.
+    # Each window must have its own list of other solutions.
+    assert m.additional_estimates[0,1] == []
     assert rival.vx_bounds is None and rival.valid is None
 
 
 def test_transect_quality_depth_positions_and_unknown_markers(plot_field):
-    """Quality is last; depth is automatic; pixels and metres locate the same fits."""
+    """Check that quality is last, depth appears when fitted, and position units do not change estimates."""
     iw = plot_field; iw.status.windows[1,0] = False
     iw.mode_ambiguity.ambiguous_solution[0,0] = True
     iw.mode_ambiguity.additional_estimates[0,0] = [
@@ -44,7 +45,8 @@ def test_transect_quality_depth_positions_and_unknown_markers(plot_field):
     labels = [t.get_text() for t in fig.legends[0].get_texts()]
     assert 'ambiguity unassessed' not in labels
     assert 'competitive rival (no bounds)' in labels and 'separated rival (no bounds)' in labels
-    assert not any(line.get_marker() == 'D' for line in axes[-1].lines)  # No rival quality invented.
+    # Do not assign a quality value that was never calculated.
+    assert not any(line.get_marker() == 'D' for line in axes[-1].lines)
     fig.canvas.draw(); legend = fig.legends[0].get_window_extent()
     assert all(legend.x0 >= ax.get_window_extent().x1 for ax in axes)
     metric, ma = iw.plot_transect(column=0, distance_units='m')
@@ -56,7 +58,7 @@ def test_transect_quality_depth_positions_and_unknown_markers(plot_field):
 
 
 def test_vector_validation_units_and_known_ambiguity(plot_field):
-    """Filter failed fits, colour only known rivals, and convert positions not m/s."""
+    """Check failed-vector filtering, known-competitor colours, and position conversion without changing m/s."""
     iw = plot_field; iw.status.windows[1,0] = False
     iw.mode_ambiguity.ambiguous_solution[0,0] = True
     p = iw.plot_velocimetry(); m = iw.plot_velocimetry(distance_units='m')

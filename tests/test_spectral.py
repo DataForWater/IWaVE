@@ -5,8 +5,8 @@ from iwave import spectral
 
 
 def test_get_wave_numbers(img_windows, res=0.02, fps=25):
-    """Check shape of wave numbers, conditional on shape of image."""
-    # feed in only the first image window, and of that, only the first frame
+    """Check frequency and wavenumber counts for the image dimensions."""
+    # Use the first frame of the first window.
     kt, ky, kx = spectral.wave_numbers(img_windows[0].shape, res=res, fps=fps)
     assert len(kt) == int(np.ceil(len(img_windows[0])/2))
     assert len(ky) == img_windows.shape[-2]
@@ -14,7 +14,7 @@ def test_get_wave_numbers(img_windows, res=0.02, fps=25):
 
 
 def test_numpy_fft(img_windows_norm):
-    """Check shape of spectrum."""
+    """Check the dimensions of the calculated spectrum."""
     windows = img_windows_norm[-1]
     spectrum = spectral._numpy_fourier_transform(windows)
     assert spectrum.shape == (
@@ -25,24 +25,24 @@ def test_numpy_fft(img_windows_norm):
 
 
 def test_numba_fft(img_windows_norm):
-    """Compare spectrum derived with numba versus derived with numpy."""
+    """Compare the Numba result with the NumPy reference."""
     spectrum = spectral._numba_fourier_transform(img_windows_norm[-1])
     spectrum_numpy = spectral._numpy_fourier_transform(img_windows_norm[-1])
-    # test if the answer is (very) close to the answer of the numpy version
+    # Compare the values with the NumPy reference calculation.
     assert np.allclose(spectrum_numpy, spectrum)
 
 
 def test_numba_fft_multi(img_windows_norm):
-    """Compare multi-spectrum derived with numba versus derived with numpy."""
+    """Compare a batch of Numba spectra with their NumPy reference values."""
     spectra = spectral._numba_fourier_transform_multi(img_windows_norm)
-    # test if all image windows give the same result as the numpy version of the spectrum code
+    # Compare every window with the NumPy reference spectrum.
     for windows, spectrum in zip(img_windows_norm, spectra):
         spectrum_numpy = spectral._numpy_fourier_transform(windows)
         assert np.allclose(spectrum_numpy, spectrum)
 
 
 def test_sliding_window_spectrum(img_windows_norm):
-    """Check shape of average of multiple spectra over several time slices."""
+    """Check the dimensions after averaging spectra from several time segments."""
     spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10)
-    # test if the spectra have the desired size
+    # Check the expected spectrum dimensions.
     assert spectrum.shape[-3] == int(np.ceil(20 / 2))
