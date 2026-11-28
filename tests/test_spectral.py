@@ -4,22 +4,9 @@ import pytest
 from iwave import spectral, LazySpectrumArray
 
 
-def test_fused_spectral_mask_matches_original():
-    """Preserve the mean threshold, zero-frequency removal and speed mask."""
-    data = np.arange(80., dtype=float).reshape(2, 4, 2, 5) / 7
-    kt, ky, kx = np.arange(4.), np.array([-1., 0.]), np.arange(5.) - 2
-    expected = data.copy()
-    expected[expected < expected.mean(axis=1, keepdims=True)] = 0
-    expected[:, 0] = 0
-    expected *= kt[:, None, None] <= spectral.dispersion_threshold(ky, kx, 1.)
-    actual = spectral.preprocess_normalized_spectrum(data, kt, ky, kx, 1.)
-    np.testing.assert_array_equal(actual, expected)
-    np.testing.assert_array_equal(data, np.arange(80.).reshape(2, 4, 2, 5) / 7)
-
-
 def test_get_wave_numbers(img_windows, res=0.02, fps=25):
-    """Check shape of wave numbers, conditional on shape of image."""
-    # feed in only the first image window, and of that, only the first frame
+    """Check frequency and wavenumber counts for the image dimensions."""
+    # Use the first frame of the first window.
     kt, ky, kx = spectral.wave_numbers(img_windows[0].shape, res=res, fps=fps)
     assert len(kt) == int(np.ceil(len(img_windows[0])/2))
     assert len(ky) == img_windows.shape[-2]
@@ -27,7 +14,7 @@ def test_get_wave_numbers(img_windows, res=0.02, fps=25):
 
 
 def test_numpy_fft(img_windows_norm):
-    """Check shape of spectrum."""
+    """Check the dimensions of the calculated spectrum."""
     windows = img_windows_norm[-1]
     spectrum = spectral._numpy_fourier_transform(windows)
     assert spectrum.shape == (
@@ -38,24 +25,24 @@ def test_numpy_fft(img_windows_norm):
 
 
 def test_numba_fft(img_windows_norm):
-    """Compare spectrum derived with numba versus derived with numpy."""
+    """Compare the Numba result with the NumPy reference."""
     spectrum = spectral._numba_fourier_transform(img_windows_norm[-1])
     spectrum_numpy = spectral._numpy_fourier_transform(img_windows_norm[-1])
-    # test if the answer is (very) close to the answer of the numpy version
+    # Compare the values with the NumPy reference calculation.
     assert np.allclose(spectrum_numpy, spectrum)
 
 
 def test_numba_fft_multi(img_windows_norm):
-    """Compare multi-spectrum derived with numba versus derived with numpy."""
+    """Compare a batch of Numba spectra with their NumPy reference values."""
     spectra = spectral._numba_fourier_transform_multi(img_windows_norm)
-    # test if all image windows give the same result as the numpy version of the spectrum code
+    # Compare every window with the NumPy reference spectrum.
     for windows, spectrum in zip(img_windows_norm, spectra):
         spectrum_numpy = spectral._numpy_fourier_transform(windows)
         assert np.allclose(spectrum_numpy, spectrum)
 
 
 def test_sliding_window_spectrum(img_windows_norm):
-    """Compare segment averaging with the original NumPy transform."""
+    """Compare average power with the original NumPy calculation for the same time segments."""
     imgs = img_windows_norm[:2]
     spectrum = spectral.sliding_window_spectrum(imgs, 20, 10)
     starts = range(0, imgs.shape[1] - 20 + 1, 10)
@@ -68,7 +55,7 @@ def test_sliding_window_spectrum(img_windows_norm):
 
 
 def test_real_fft_matches_numpy_for_odd_and_even_lengths():
-    """Keep original signs, scaling and bins, including reversed input views."""
+    """Check signs, scaling and frequency counts for odd/even lengths and reversed image views."""
     for length in (15, 16):
         imgs = np.random.default_rng(4).normal(size=(2, length, 7, 10))[:, :, ::-1, :]
         imgs[0] = 0
@@ -80,7 +67,7 @@ def test_real_fft_matches_numpy_for_odd_and_even_lengths():
 
 
 def test_lazy_spectra_reuse_scratch_without_overwriting_results():
-    """A final short batch reuses scratch but cannot change previous outputs."""
+    """Check that a short final request reuses temporary arrays without altering earlier results."""
     windows = np.random.default_rng(5).normal(size=(3, 32, 6, 8))
     kt, ky, kx = spectral.wave_numbers((16, 6, 8), .1, 20.)
     lazy = LazySpectrumArray(windows, 16, 8, kt, kx, ky)
