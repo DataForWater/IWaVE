@@ -1,5 +1,13 @@
-import numpy as np
+"""Choose image windows and adjust their brightness for spectrum calculation.
+
+Public functions still accept explicit pixel indices. For normal rectangles,
+copy only the selected regions, and calculate time averages in small pixel
+groups to avoid extra full-video arrays.
+"""
 from typing import Tuple, Literal
+
+import numpy as np
+import numba as nb
 
 
 def sliding_window_idx(
@@ -7,23 +15,11 @@ def sliding_window_idx(
     window_size: Tuple[int, int] = (64, 64),
     overlap: Tuple[int, int] = (32, 32),
 ) -> np.ndarray:
-    """Create y and x indices per interrogation window.
+    """Find which pixels belong to each rectangular image window.
 
-    Parameters
-    ----------
-    image : np.ndarray
-        black-white image or template
-    window_size : tuple
-        size of interrogation window (y, x)
-    overlap : tuple
-        overlap of pixels of interrogation windows (y, x)
-
-    Returns
-    -------
-    win_x : np.ndarray (w * y * x)
-        x-indices of interrogation windows (w)
-    win_y : np.ndarray (w * y * x)
-        y-indices of interrogation windows (w)
+    image provides the image shape. window_size is (height, width) in pixels;
+    overlap gives shared pixels between neighbours in (y, x) order.
+    Return win_x and win_y, each shaped (window, y, x), containing pixel indices.
     """
 
     x, y = get_rect_coordinates(
@@ -61,7 +57,7 @@ def multi_sliding_window_array(
     win_y: np.ndarray,
     swap_time_dim=False,
 ) -> np.ndarray:
-    """Get multiple interrogation windows from a stack of images lazily."""
+    """Extract only the requested image windows from a stack of frames."""
     windows = np.stack(
         [
             sliding_window_array(
@@ -83,22 +79,10 @@ def get_axis_shape(
     window_size: int,
     overlap: int,
 ) -> int:
-    """
-    get shape of image axis given its dimension size
+    """Count how many windows fit along one image dimension.
 
-    Parameters
-    ----------
-    dim_size : int
-        size of axis [pix]
-    window_size : int
-        size of interrogation window over axis dimension [pix]
-    overlap : int
-        size of overlap [pix]
-
-    Returns
-    -------
-    int, amount of interrogation windows over provided axis
-
+    dim_size, window_size and overlap are lengths in pixels. overlap describes
+    shared pixels between adjacent windows. Return the number of valid positions.
     """
     axis_shape = (dim_size - window_size) // (window_size - overlap) + 1
     return axis_shape
@@ -109,22 +93,10 @@ def get_array_shape(
     window_sizes: Tuple[int, int],
     overlaps: Tuple[int, int]
 ):
-    """
-    Get the resulting shape of velocimetry results as a tuple of dimension sizes
+    """Return the rows and columns in the grid of fitted windows.
 
-    Parameters
-    ----------
-    dim_sizes : [int, int]
-        sizes of axes [pix]
-    window_sizes : [int, int]
-        sizes of interrogation windows [pix]
-    overlaps : [int, int]
-        sizes of overlaps [pix]
-
-    Returns
-    -------
-    shape of array returned from velocimetry analysis
-
+    dim_sizes, window_sizes and overlaps are (y, x) pairs in pixels.
+    Count valid window positions along each image direction.
     """
     array_shape = tuple(
         get_axis_shape(dim_size, window_size, overlap) for (
@@ -146,27 +118,14 @@ def get_axis_coords(
     overlap: int,
     center_on_field: bool = False,
 ):
+    """Return window-centre positions along one image axis, in pixels.
+
+    dim_size, window_size and overlap give the image size, window size and shared
+    pixels. Centres start half a window from the edge. center_on_field=True adds
+    an offset to centre the whole window layout in the available image area;
+    it does not change from window corners to centres.
     """
-    Get axis coordinates for one axis with provided dimensions and window size
-    parameters. Overlap for windows can be provided.
-
-    Parameters
-    ----------
-    dim_size : int
-        size of axis [pix]
-    window_size : int
-        size of interrogation window over axis dimension [pix]
-    overlap : int
-        size of overlap [pix]
-    center_on_field : bool, optional
-        take the center of the window as coordinate (default, False)
-
-    Returns
-    -------
-    x- or y-coordinates of resulting velocimetry grid
-
-    """
-    # get the amount of expected coordinates
+    # Count how many window positions fit along this axis.
     ax_shape = get_axis_shape(dim_size, window_size, overlap)
     coords = np.arange(ax_shape) * (window_size - overlap) + (window_size) / 2.0
     if center_on_field is True:
@@ -187,27 +146,12 @@ def get_rect_coordinates(
     overlap: Tuple[int, int],
     center_on_field: bool = False,
 ):
-    """
-    create meshgrid coordinates (x, y) of velocimetry results. Overlap can be
-    provided in case each interrogation window is to overlap with the 
-    neighbouring interrogation window.
+    """Return x and y window-centre positions for the result grid.
 
-    Parameters
-    ----------
-    dim_sizes : [int, int]
-        sizes of axes [pix]
-    window_sizes : [int, int]
-        sizes of interrogation windows [pix]
-    overlaps : [int, int]
-        sizes of overlaps [pix]
-    center_on_field : bool, optional
-        take the center of the window as coordinate (default, False)
-
-    Returns
-    -------
-    xi, yi: np.ndarray (2D), np.ndarray (2D)
-        x- and y-coordinates in meshgrid form
-
+    dim_sizes, window_sizes and overlap are (y, x) pairs in pixels.
+    center_on_field=True shifts the window layout to centre it in the image.
+    Return the one-dimensional x and y coordinate arrays; the fitted field has
+    one row per y position and one column per x position.
     """
     y = get_axis_coords(
         dim_sizes[0],
@@ -224,49 +168,194 @@ def get_rect_coordinates(
 
     return x, y
 
+
 def normalize(
     imgs: np.ndarray,
-    mode: Literal["xy", "time"] = "time"
+    mode: Literal["xy", "time"] = "time",
+    *,
+    copy: bool = True,
 ):
-    """
-    normalizes images assuming the last two dimensions contain the x/y image
-    intensities
+    """Subtract the mean and divide by standard deviation over time or per frame.
 
-    Parameters
-    ----------
-    imgs : np.ndarray (n x Y x X) or (n x m x Y x X)
-        input images, organized in at least one stack
-    Returns
-    -------
-
-    imgs_norm : np.ndarray (n x Y x X) or (n x m x Y x X)
-        output normalized images, organized in at least one stack, 
-        similar to imgs
+    imgs ends in (time, y, x); a leading window dimension is also allowed.
+    mode='time' uses all supplied frames at each pixel. mode='xy' uses each
+    frame's spatial mean and standard deviation. Use population standard
+    deviation, dividing variance by the sample count rather than count minus one.
+    copy=True makes a separate float64 array and protects supplied images.
+    copy=False changes an existing writable floating-point array directly.
+    Return the same shape and apply the existing cleanup for undefined values,
+    including constant-brightness pixels.
     """
-    # compute means and stds
-    if mode == "xy":
-        imgs_std = np.expand_dims(
-            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).std(axis=-1),
-            axis=(-1, -2)
-        )
-        imgs_mean = np.expand_dims(
-            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).mean(axis=-1),
-            axis=(-1, -2)
-        )
-    elif mode == "time":
-        imgs_std = np.expand_dims(
-            imgs.std(axis=-3),
-            axis=-3
-        )
-        imgs_mean = np.expand_dims(
-            imgs.mean(axis=-3),
-            axis=-3
-        )
+    # Use copy=False only for a private floating-point array that is safe to change.
+    # The default public call protects the images supplied by the user.
+    imgs = np.array(imgs, dtype=np.float64, copy=True) if copy else np.asarray(imgs)
+    if not np.issubdtype(imgs.dtype, np.floating) or not imgs.flags.writeable:
+        raise ValueError('In-place normalization needs a writable floating array.')
+    if imgs.ndim < 3:
+        raise ValueError('Images must have time, y and x dimensions.')
+    if mode == 'xy':
+        axes = (-2, -1)
+    elif mode == 'time':
+        axes = -3
     else:
         raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
-    # this step takes a lot of memory, consider doing a stepwise replacement through numba instead of numpy in one go
+    # Calculate the mean and standard deviation before changing image values.
+    # Use population standard deviation (ddof=0) over the whole clip, not per segment.
+    std = imgs.std(axis=axes, keepdims=True)
+    mean = imgs.mean(axis=axes, keepdims=True)
+    np.subtract(imgs, mean, out=imgs)
     with np.errstate(divide='ignore', invalid='ignore'):
-        imgs = (imgs - imgs_mean) / imgs_std
-    imgs = np.nan_to_num(imgs)
-    return imgs
+        np.divide(imgs, std, out=imgs)
+    return np.nan_to_num(imgs, copy=False)
+
+
+def rectangular_window_origins(win_x, win_y, image_shape):
+    """Return each rectangle's starting pixel, or None for irregular selections.
+
+    Check the layout once when setting up the windows, rather than comparing the
+    whole index grid again for every batch.
+    """
+    x, y = np.asarray(win_x), np.asarray(win_y)
+    if x.ndim != 3 or x.shape != y.shape:
+        return None
+    ny, nx = x.shape[-2:]
+    x0, y0 = x[:, 0, 0], y[:, 0, 0]
+    if (np.any(x0 < 0) or np.any(y0 < 0)
+            or np.any(x0 + nx > image_shape[-1])
+            or np.any(y0 + ny > image_shape[-2])):
+        return None
+    if (not np.array_equal(x, np.broadcast_to(x0[:, None, None] + np.arange(nx), x.shape))
+            or not np.array_equal(y, np.broadcast_to(y0[:, None, None] + np.arange(ny)[:, None], y.shape))):
+        return None
+    return np.column_stack((y0, x0)).astype(np.intp)
+
+
+def extract_rectangular_windows(imgs, origins, window_shape):
+    """Copy one selected batch into a separate (window, time, y, x) float64 array.
+
+    Read rectangles directly rather than collecting and joining frame copies.
+    The source can be a cropped image view or a memory-mapped file array.
+    Do not change it or extract all windows in the video.
+    """
+    ny, nx = window_shape
+    result = np.empty((len(origins), len(imgs), ny, nx), dtype=np.float64)
+    for i, (y0, x0) in enumerate(origins):
+        result[i] = imgs[:, y0:y0 + ny, x0:x0 + nx]
+    return result
+
+
+@nb.njit(cache=True, nogil=True, error_model='numpy')
+def _gather_normalize_time_uint8(imgs, origin, output):
+    """Copy one uint8 rectangle and calculate its time means in the same loop.
+
+    Calculate mean first, then variance in a separate pass, in the original time
+    order. With nonnegative uint8 pixels, a window with zero mean is entirely
+    zero and stays zero after normalisation. Do not apply that shortcut to signed
+    or floating-point images; use their general calculation instead.
+    """
+    nt, ny, nx = output.shape
+    data = output.reshape(nt, ny*nx)
+    for start in range(0, ny*nx, 128):
+        size = min(128, ny*nx-start)
+        mean, variance = np.zeros(size), np.zeros(size)
+        ys, xs = np.empty(size, np.intp), np.empty(size, np.intp)
+        for j in range(size):
+            ys[j] = origin[0] + (start+j)//nx
+            xs[j] = origin[1] + (start+j)%nx
+        for t in range(nt):
+            for j in range(size):
+                value = float(imgs[t, ys[j], xs[j]])
+                data[t, start+j] = value
+                mean[j] += value
+        mean /= nt
+        for t in range(nt):
+            for j in range(size):
+                delta = data[t, start+j] - mean[j]
+                variance[j] += delta*delta
+        for j in range(size):
+            variance[j] = np.sqrt(variance[j]/nt)
+        for t in range(nt):
+            for j in range(size):
+                value = (data[t, start+j] - mean[j])/variance[j]
+                if np.isnan(value):
+                    value = 0.
+                elif value == np.inf:
+                    value = np.finfo(np.float64).max
+                elif value == -np.inf:
+                    value = -np.finfo(np.float64).max
+                data[t, start+j] = value
+
+
+@nb.njit(parallel=True, cache=True, nogil=True, error_model='numpy')
+def _normalize_time_owned(windows, nonzero):
+    """Calculate time variance in small pixel groups without a video-sized copy.
+
+    Calculate the mean first and squared deviations second, following the same
+    frame order. Process neighbouring pixels together for efficient memory access.
+    Different groups can run in parallel even when the batch has few windows.
+    Keep the usual floating-point rules, not the less stable
+    mean(x*x) - mean(x)**2 variance shortcut.
+    """
+    n, nt, ny, nx = windows.shape
+    # Process small groups of pixels so the standard-deviation calculation does not
+    # need a second video-sized array. Keep neighbouring pixels together in memory.
+    pixels, block = ny*nx, 128
+    blocks = (pixels + block - 1)//block
+    for task in nb.prange(n*blocks):
+        m = task//blocks
+        if not nonzero[m]:
+            continue
+        start = (task % blocks)*block
+        size = min(block, pixels - start)
+        data = windows[m].reshape(nt, pixels)
+        mean, variance = np.zeros(size), np.zeros(size)
+        for t in range(nt):
+            for j in range(size):
+                mean[j] += data[t, start+j]
+        mean /= nt
+        for t in range(nt):
+            for j in range(size):
+                delta = data[t, start+j] - mean[j]
+                variance[j] += delta*delta
+        # Turn the accumulated variance into standard deviation, reusing the same array.
+        for j in range(size):
+            variance[j] = np.sqrt(variance[j]/nt)
+        for t in range(nt):
+            for j in range(size):
+                value = (data[t, start+j] - mean[j])/variance[j]
+                # Handle undefined results as nan_to_num does, including
+                # constant-brightness pixels.
+                # The selected NumPy error rule allows division by zero before that cleanup.
+                if np.isnan(value):
+                    value = 0.
+                elif value == np.inf:
+                    value = np.finfo(np.float64).max
+                elif value == -np.inf:
+                    value = -np.finfo(np.float64).max
+                data[t, start+j] = value
+
+
+def normalize_owned_windows(windows, mode, nonzero):
+    """Normalise batches using a separate array that is safe to change directly.
+
+    The internal caller supplies 64-bit floating-point values in
+    (window, time, y, x) order, with adjacent x values next to each other in memory.
+    Do not pass the shared source images to this routine.
+    """
+    if (windows.ndim != 4 or windows.dtype != np.float64
+            or not windows.flags.c_contiguous or not windows.flags.writeable):
+        raise ValueError('Owned normalization requires writable contiguous float64 windows.')
+    if not len(windows) or mode is None:
+        return windows
+    if mode == 'time':
+        _normalize_time_owned(windows, nonzero)
+    elif mode == 'xy':
+        if nonzero.all():
+            normalize(windows, mode, copy=False)
+        else:
+            for i in np.flatnonzero(nonzero):
+                normalize(windows[i], mode, copy=False)
+    else:
+        raise ValueError("mode must be 'time', 'xy' or None.")
+    return windows
 

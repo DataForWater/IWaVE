@@ -1,0 +1,1391 @@
+--- a/iwave/data_models.py
++++ b/iwave/data_models.py
+@@ -1,168 +1,165 @@
+-"""Lazy data models for memory intensive processing."""
++"""Lazy preprocessing of one requested window batch at a time.
++
++Image windows and power spectra are never cached here. Only the small metadata
++needed to extract rectangles and bounded reusable FFT/input scratch are retained.
++Every returned spectrum/context owns data independent of that FFT workspace.
++"""
++import operator
++from typing import Optional
++
+ import numpy as np
+-
+-from typing import Optional, Union
+-
+ from iwave import window, spectral
+ 
+ 
++def _selection(idx, length):
++    """Convert an integer to a one-window slice; leave slices unchanged.
++
++    Retaining a window axis through preprocessing gives integers and slices
++    the same numerical path. Remove it only when returning an integer result.
++    """
++    if isinstance(idx, slice):
++        return idx, False
++    try:
++        i = operator.index(idx)
++    except TypeError as exc:
++        raise TypeError('Only an integer or slice is supported.') from exc
++    if i < 0:
++        i += length
++    if not 0 <= i < length:
++        raise IndexError('Window index out of range.')
++    return slice(i, i + 1), True
++
++
+ class LazyWindowArray:
++    """Extract requested windows into owned (window, time, y, x) float64 data."""
++
+     def __init__(self, imgs, sliding_window_func, win_x, win_y, norm):
+-        """Initialize a lazy array-like object for subwindows.
+-
+-        Parameters
+-        ----------
+-        imgs : np.ndarray
+-            Images (3D numpy array)
+-        sliding_window_func : callable
+-            Function that extracts subwindows
+-        win_x : np.ndarray
+-            Sampling indexes for window extraction in x direction
+-        win_y : np.ndarray
+-            Sampling indexes for window extraction in y direction
+-        norm : {'xy', 'time', None}
+-            Whether to normalize the windows and in what way
+-        """
+         self.imgs = imgs
+         self.sliding_window_func = sliding_window_func
+-        self.win_x = win_x
+-        self.win_y = win_y
+-        self.norm = norm  # Optional: normalization parameter
++        self.win_x, self.win_y = win_x, win_y
++        if norm not in ('xy', 'time', None):
++            raise ValueError("norm must be 'xy', 'time' or None.")
++        self.norm = norm
++        # Standard rectangular windows can be copied with basic slicing instead
++        # of a frame-by-frame advanced-index gather followed by np.stack.
++        # Detect this once, not on every batch. Custom callbacks and arbitrary
++        # pixel-index windows retain their original extraction path.
++        self._origins = (
++            window.rectangular_window_origins(win_x, win_y, imgs.shape)
++            if sliding_window_func is window.multi_sliding_window_array else None
++        )
+ 
+     def __repr__(self):
+-        return f"Interrogation windows dimensions (windows, time, y, x): {self.shape}"
++        return f'Interrogation windows dimensions (windows, time, y, x): {self.shape}'
+ 
+     def __getitem__(self, idx):
+-        """
+-        On-the-fly generation of subwindows for the requested index or slice.
+-        """
+-        if isinstance(idx, slice):
+-            # Generate windows for a range of indices
+-            start, stop, step = idx.indices(len(self.win_x))
+-            win_x_sel = self.win_x[start:stop:step]
+-            win_y_sel = self.win_y[start:stop:step]
+-            # indexed_imgs = self.imgs[start:stop:step]
+-        elif isinstance(idx, Union[int, np.integer]):
+-            # Generate windows for a single index
+-            win_x_sel = self.win_x[idx : idx + 1]
+-            win_y_sel = self.win_y[idx : idx + 1]
++        selected, scalar = _selection(idx, len(self))
++        if self._origins is not None:
++            windows = window.extract_rectangular_windows(
++                self.imgs, self._origins[selected], self.win_x.shape[-2:]
++            )
+         else:
+-            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
+-
+-        # Use the sliding_window_func to generate the windows
+-        windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True).astype(np.float64)
+-
+-        # Apply normalization if needed
+-        if self.norm is not None:
+-            # find relevant windows with mean != 0. Only those require normalization
+-            nonzero_idx = np.where(np.mean(windows, axis=(1, 2, 3)) != 0)[0]
+-            if self.norm == "xy":
+-                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="xy")
+-            elif self.norm == "time":
+-                windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="time")
+-        if isinstance(idx, slice):
+-            return windows
+-        elif isinstance(idx, int):
+-            return windows[0]
+-        else:
+-            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
++            # A custom callback may return a view into the original images.
++            # Own the buffer before normalising it in place.
++            windows = np.array(
++                self.sliding_window_func(
++                    self.imgs, self.win_x[selected], self.win_y[selected],
++                    swap_time_dim=True,
++                ),
++                dtype=np.float64, order='C', copy=True,
++            )
++        if self.norm is not None and len(windows):
++            # Preserve the original per-window mean!=0 gate, even for signed
++            # inputs. Normalisation still spans the entire clip, NOT each FFT
++            # segment. Only its allocation/layout strategy has changed.
++            nonzero = windows.mean(axis=(1, 2, 3)) != 0
++            window.normalize_owned_windows(windows, self.norm, nonzero)
++        return windows[0] if scalar else windows
+ 
+     def __len__(self):
+-        """
+-        Return the total number of windows (or equivalent slices).
+-        """
+         return len(self.win_x)
+ 
+     @property
+     def shape(self):
+-        return len(self), self.imgs.shape[0], self.win_x.shape[1], self.win_x.shape[2]
++        return len(self), self.imgs.shape[0], *self.win_x.shape[-2:]
+ 
+ 
+-class LazySpectrumArray(object):
+-    def __init__(
+-        self,
+-        windows: LazyWindowArray,
+-        time_size: int,
+-        time_overlap: int,
+-        kt: np.ndarray,
+-        kx: np.ndarray,
+-        ky: np.ndarray,
+-        smax: Optional[float] = 4.0,
+-        threshold: Optional[float] = 1.0
+-    ):
++class LazySpectrumArray:
++    """Produce full-grid power and, optionally, uncensored noise contexts.
++
++    The FFT workspace is shared between successive requests, not the outputs.
++    This allows the final short batch to reuse buffers without overwriting a
++    spectrum or context retained by the caller from an earlier batch.
++    """
++
++    def __init__(self, windows, time_size: int, time_overlap: int,
++                 kt: np.ndarray, kx: np.ndarray, ky: np.ndarray,
++                 smax: Optional[float] = 4., threshold: Optional[float] = 1.):
+         self.windows = windows
+-        self.time_size = time_size
+-        self.time_overlap = time_overlap
+-        self.kt = kt
+-        self.kx = kx
+-        self.ky = ky
+-        self.smax = smax
+-        self.threshold = threshold
++        self.time_size, self.time_overlap = time_size, time_overlap
++        self.kt, self.kx, self.ky = kt, kx, ky
++        self.smax, self.threshold = smax, threshold
++        self._fft_workspace = spectral._FFTWorkspace()  # Allocates on first use.
+ 
+     def __repr__(self):
+-        """Return string representation showing spectrum dimensions."""
+-        return f"Spectrum dimensions (windows, ft, fy, fx): {self.shape}"
++        return f'Spectrum dimensions (windows, ft, fy, fx): {self.shape}'
++
++    def _power(self, selected):
++        windows = self.windows
++        if (type(windows) is LazyWindowArray and windows._origins is not None
++                and (type(windows.imgs) is np.ndarray or isinstance(windows.imgs, np.memmap))
++                and windows.norm == 'time' and windows.imgs.dtype == np.uint8):
++            return self._fft_workspace._power_rectangular(
++                windows.imgs, windows._origins[selected], windows.win_x.shape[-2:],
++                self.time_size, self.time_overlap,
++            )
++        # Arbitrary indexing, callbacks, signed/floating data and other modes
++        # retain their original extraction and whole-window mean-gate rules.
++        owned = windows[selected]
++        return spectral.sliding_window_spectrum(
++            owned[:, :, ::-1, :], self.time_size, self.time_overlap,
++            _workspace=self._fft_workspace,
++        )
++
++    def _compute(self, idx, retain_context):
++        selected, scalar = _selection(idx, len(self))
++        raw = self._power(selected)
++        count = (self.windows.shape[1] - self.time_size) // (
++            self.time_size - self.time_overlap
++        ) + 1
++
++        # Both outputs share the raw power. Normalise once instead of the
++        # separate divisions used by HNM for context and processed spectra.
++        # Threshold in place unless an uncensored context must be retained.
++        normalized = spectral.normalize_power(raw, copy=False)
++        processed = spectral.preprocess_normalized_spectrum(
++            normalized, self.kt, self.ky, self.kx, self.smax * 3,
++            self.threshold, copy=retain_context,
++        )
++        if not retain_context:
++            return processed[0] if scalar else processed
++
++        # Preserve the original zero-slice rule: NaN cleanup must happen AFTER
++        # constructing thresholds, not before the frequency-mean reduction.
++        np.nan_to_num(normalized, copy=False)
++        contexts = [
++            dict(
++                normalized_spectrum=normalized[i], n_averages=count,
++                time_size=self.time_size, time_overlap=self.time_overlap,
++                source='lazy_full_normalized_before_threshold',
++            )
++            for i in range(len(processed))
++        ]
++        return (processed[0], contexts[0]) if scalar else (processed, contexts)
+ 
+     def __getitem__(self, idx):
+-        """
+-        Generate on-the-fly spectra for subwindows for the requested index or slice.
+-        """
+-
+-        # Use the sliding_window_func to generate the windows
+-        if isinstance(idx, slice):
+-            windows_sel = self.windows[idx]
+-        else:
+-            windows_sel = self.windows[idx : idx + 1]
+-        # now apply spectra on windows, reverse y-direction to positive upwards
+-        spectrum = spectral.sliding_window_spectrum(
+-            windows_sel[:,:,::-1,:],  # reverse y-direction
+-            self.time_size,
+-            self.time_overlap,
+-        )
+-
+-        # preprocess
+-        spectrum = spectral.spectrum_preprocessing(
+-            spectrum,
+-            self.kt,
+-            self.ky,
+-            self.kx,
+-            self.smax*3,
+-            spectrum_threshold=self.threshold
+-        )
+-        if isinstance(idx, slice):
+-            return spectrum
+-        elif isinstance(idx, Union[int, np.integer]):
+-            return spectrum[0]
+-        else:
+-            raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
++        return self._compute(idx, False)
+ 
+     def get_with_spectral_context(self, idx):
+-        """One FFT pass, retaining full normalized power before censoring.
+-
+-        Ordinary __getitem__ is unchanged. Contexts exist only for an explicitly
+-        enabled spectral diagnostic; no raw-cube cache persists on this object.
+-        """
+-        windows_sel = self.windows[idx] if isinstance(idx, slice) else self.windows[idx:idx+1]
+-        length = int(self.time_size)
+-        overlap = int(self.time_overlap)
+-        if length < 1 or not 0 <= overlap < length or windows_sel.shape[1] < length:
+-            raise ValueError('Invalid temporal segmentation for spectral uncertainty.')
+-        raw = spectral.sliding_window_spectrum(windows_sel[:,:,::-1,:], length, overlap)
+-        with np.errstate(divide='ignore', invalid='ignore'):
+-            normalized = raw / np.mean(raw, axis=(2,3), keepdims=True)
+-        normalized = np.nan_to_num(normalized)
+-        processed = spectral.spectrum_preprocessing(raw, self.kt, self.ky, self.kx,
+-                              self.smax*3, spectrum_threshold=self.threshold)
+-        count = (windows_sel.shape[1]-length)//(length-overlap)+1
+-        contexts = [dict(normalized_spectrum=normalized[i], n_averages=count,
+-                         time_size=length, time_overlap=overlap,
+-                         source='lazy_full_normalized_before_threshold') for i in range(len(processed))]
+-        return (processed, contexts) if isinstance(idx, slice) else (processed[0], contexts[0])
++        """Return processed power and contexts from the same averaging pass."""
++        return self._compute(idx, True)
+ 
+     def __len__(self):
+-        """
+-        Return the total number of windows of spectram
+-        """
+         return len(self.windows)
+ 
+     @property
+--- a/iwave/iwave.py
++++ b/iwave/iwave.py
+@@ -121,7 +121,9 @@
+         smax : float, optional
+             Maximum velocity expected in the scene. Defaults to 4 m/s
+         window_chunk_size : int, optional
+-            Number of windows to process at a time. Defaults to 50.
++            Maximum windows extracted and fitted per batch (default 50).
++            Use smaller batches for long clips or large spatial windows.
++            All spectra use the real-input FFT and the complete spatial grid.
+         """
+         self.window_chunk_size = window_chunk_size
+         self.resolution = resolution
+@@ -139,12 +141,14 @@
+         self.spectrum_threshold = spectrum_threshold
+         self.smax = smax
+         self.fps = fps
++        # Initialise before the image setter creates the sampling coordinates.
++        # Otherwise passing imgs= directly would immediately erase them again.
++        self.win_x = None
++        self.win_y = None
+         if imgs is not None:
+             self.imgs = imgs
+         else:
+             self.imgs = None
+-        self.win_x = None
+-        self.win_y = None
+         self.vy = None  # y velocity component (m/s)
+         self.vx = None  # x velocity component (m/s)
+         self.d = None  # water depth (m)
+@@ -461,6 +465,38 @@
+         self.imgs = io.get_video(fn=file, start_frame=start_frame, end_frame=end_frame, stride=stride)
+ 
+ 
++
++    def warmup(self):
++        """Prepare parent-process normalisation/FFT kernels using tiny data.
++
++        Optional: call before timing a run to move JIT/cache/thread startup out
++        of the first timed batch. This does not remove that cost or start solver
++        workers. No supplied images, spectra or fitting results are changed.
++        Returns normalisation, FFT and total seconds spent in this warmup.
++        """
++        from time import perf_counter
++
++        started = perf_counter()
++        # Numba specialises on dtype/layout, not these tiny synthetic sizes.
++        # Match the reversed-y view used in normal spectral preprocessing.
++        dummy = np.arange(8 * 4 * 4, dtype=np.float64).reshape(1, 8, 4, 4)
++        window.normalize_owned_windows(dummy, self.norm, np.ones(1, dtype=bool))
++        normalized = perf_counter()
++        spectral.spectral_imgs(dummy[:, :, ::-1, :])
++        if self.norm == 'time':
++            # Exercise uint8 full-video and strided-ROI specialisations too.
++            # These tiny inputs never refer to supplied video or owner scratch.
++            clip = np.arange(8*4*4, dtype=np.uint8).reshape(8, 4, 4)
++            for source in (clip, clip[:, :, :3]):
++                spectral._FFTWorkspace()._power_rectangular(
++                    source, np.array([[0, 0]], dtype=np.intp), source.shape[1:], 8, 0,
++                )
++        finished = perf_counter()
++        return dict(
++            normalization_seconds=normalized - started,
++            fft_seconds=finished - normalized,
++            total_seconds=finished - started,
++        )
+ 
+     def save_frames(self, dst: str):
+         raise NotImplementedError
+--- a/iwave/optimise.py
++++ b/iwave/optimise.py
+@@ -533,62 +533,70 @@
+                                  gauss_width=de["gauss_width"],
+                                  kwargs=de["scipy_options"])
+ 
+-    idxs = range(len(measured_spectra))  # Pair with indices
+-    # iter_args = generate_args(idxs)
+-
+-    results = [None] * len(idxs)  # Placeholder for results
+-    if CONCURRENCY is not None:
+-        max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
+-    else:
+-        max_workers = None
+-    # Initialize progress bar before submitting tasks
+-    progress_bar = tqdm(total=len(idxs), desc=desc, disable=not progress)
+-    
+-    for idx in idxs[::chunk_size]:
+-        # select and read the current data block in one go
+-        idx_sel = idxs[idx:idx + chunk_size]
+-        if noise_options and spectral_contexts is None:
+-            spectra_sel, contexts_sel = measured_spectra.get_with_spectral_context(slice(idx, idx+chunk_size))
+-        else:
+-            spectra_sel = measured_spectra[idx: idx + chunk_size]
+-            contexts_sel = spectral_contexts[idx:idx+chunk_size] if noise_options else [None]*len(spectra_sel)
+-        # get bounds for this chunk (nonzero check now done in worker)
+-        bnds_sel = bnds_list[idx: idx + chunk_size]
+-
+-        # Generate args for this chunk (handles both one-step and two-step via two_step_downsample parameter)
+-        args_sel = [
+-            dict(
+-                measured_spectrum=measured_spectrum,
+-                bnds=bnds,
+-                vel_indx=vel_indx,
+-                window_dims=window_dims,
+-                res=res,
+-                fps=fps,
+-                gravity_waves_switch=gravity_waves_switch,
+-                turbulence_switch=turbulence_switch,
+-                method=method,
+-                _return_metadata=return_metadata,
+-                calculate_spectral_uncertainty=bool(calculate_spectral_uncertainty),
+-                calculate_mode_ambiguity=bool(calculate_mode_ambiguity),
+-                spectral_uncertainty_options=spectral_options,
+-                mode_ambiguity_options=mode_options,
+-                _spectral_context=spectral_context,
+-                **backend_arguments,
+-            ) for measured_spectrum, bnds, spectral_context in zip(spectra_sel, bnds_sel, contexts_sel)
+-        ]
+-
+-        with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
+-            futures = {
+-                executor.submit(
+-                    optimize_single_spectrum_velocity_unpack, input_args
+-                ): idx for idx, input_args in zip(idx_sel, args_sel)
+-            }
+-            # collect futures
+-            for future in as_completed(futures):
+-                idx = futures[future]
+-                results[idx] = future.result()  # Store result in the correct position
+-                progress_bar.update(1)  # increase
+-    progress_bar.close()
++    idxs = range(len(measured_spectra))
++    results = [None] * len(idxs)
++    available_workers = os.cpu_count() or 1
++    requested_workers = CONCURRENCY if CONCURRENCY is not None else available_workers
++    # A batch cannot use more processes than it has windows. Keep at least one
++    # valid worker setting even for empty input or an unavailable CPU count.
++    max_workers = max(1, min(
++        requested_workers, available_workers, chunk_size, len(idxs) or 1,
++    ))
++
++    # Unlike creating an executor inside the chunk loop, this keeps spawned
++    # interpreters and their per-worker solver caches alive for the whole fit.
++    # It does NOT prefetch: finish and release one batch before reading another.
++    with tqdm(total=len(idxs), desc=desc, disable=not progress) as progress_bar:
++        with ProcessPoolExecutor(
++            mp_context=ctx, max_workers=max_workers, initializer=silence_output,
++        ) as executor:
++            for start in idxs[::chunk_size]:
++                selection = slice(start, start + chunk_size)
++                idx_sel = idxs[selection]
++                if noise_options and spectral_contexts is None:
++                    # Processed power and uncensored contexts share one FFT pass.
++                    spectra_sel, contexts_sel = measured_spectra.get_with_spectral_context(
++                        selection
++                    )
++                else:
++                    spectra_sel = measured_spectra[selection]
++                    contexts_sel = (
++                        spectral_contexts[selection] if noise_options
++                        else [None] * len(spectra_sel)
++                    )
++                bnds_sel = bnds_list[selection]
++                args_sel = [
++                    dict(
++                        measured_spectrum=measured_spectrum,
++                        bnds=bnds,
++                        vel_indx=vel_indx,
++                        window_dims=window_dims,
++                        res=res,
++                        fps=fps,
++                        gravity_waves_switch=gravity_waves_switch,
++                        turbulence_switch=turbulence_switch,
++                        method=method,
++                        _return_metadata=return_metadata,
++                        calculate_spectral_uncertainty=bool(calculate_spectral_uncertainty),
++                        calculate_mode_ambiguity=bool(calculate_mode_ambiguity),
++                        spectral_uncertainty_options=spectral_options,
++                        mode_ambiguity_options=mode_options,
++                        _spectral_context=spectral_context,
++                        **backend_arguments,
++                    )
++                    for measured_spectrum, bnds, spectral_context
++                    in zip(spectra_sel, bnds_sel, contexts_sel)
++                ]
++                futures = {
++                    executor.submit(optimize_single_spectrum_velocity_unpack, item): i
++                    for i, item in zip(idx_sel, args_sel)
++                }
++                for future in as_completed(futures):
++                    results[futures[future]] = future.result()
++                    progress_bar.update(1)
++                # No parent reference to the input power/context batch should
++                # survive into extraction of the next (potentially large) one.
++                del futures, args_sel, spectra_sel, contexts_sel
+ 
+     # wrap results together
+     optimal = np.array([
+--- a/iwave/spectral.py
++++ b/iwave/spectral.py
+@@ -1,31 +1,27 @@
+-"""Spectra, theoretical overlap evaluation and optional spectral sensitivity.
+-
+-The first section builds/preprocesses spectra. The later sections evaluate the
+-same theoretical ridge used by the solvers and propagate spectral noise into
+-local parameter bounds. Moving these routines here does not change their maths.
++"""Full-grid image power spectra with bounded reusable real-FFT scratch.
++
++Preprocessing preserves the original spatial-FFT / temporal-IFFT power, but
++computes the real temporal transform first. The separable transforms commute;
++using its positive-time sign avoids an explicit conjugation pass. Keep the
++original 1/T**2 power scale and ceil(T/2) bins (no even-length Nyquist bin).
++
++Each lazy array retains bounded FFT/input scratch, NOT cached power spectra.
++Uint8 time-normalised rectangles are gathered into one full-clip slot per
++concurrent FFT task, rather than a batch-sized image array. Every temporal
++segment is summed in order; returned spectra remain independent of scratch.
++Only preprocessing is implemented here; fitting stays in the main optimiser.
+ """
++from threading import Lock
+ import numba as nb
+ import numpy as np
+-
+-
+-@nb.njit(cache=True)
+-def fft_x(x):
+-    return np.fft.fft(x, axis=-1)
+-
+-
+-@nb.njit(cache=True)
+-def fft_y(x):
+-    return np.fft.fft(x, axis=-2)
+-
+-
+-@nb.njit(cache=True)
+-def ifft_(x):
+-    return np.fft.ifft(x, axis=0)
+-
+-
+-@nb.njit(cache=True)
+-def fftshift_(x):
+-    return np.fft.fftshift(x)
++from rocket_fft import r2c, c2c
++from iwave import window
++
++
++# Low-level Rocket-FFT calls take explicit integer axis arrays and output
++# buffers. Keep them outside the hot loop; only time is reduced to a half-grid.
++_FFT_TIME_AXES = np.array([0], dtype=np.int64)
++_FFT_SPACE_AXES = np.array([1, 2], dtype=np.int64)
+ 
+ 
+ def wave_numbers(
+@@ -68,78 +64,141 @@
+     return kt, ky, kx
+ 
+ 
++@nb.njit(cache=True, nogil=True)
++def _window_power(img, z, output, win_t, step):
++    """Original transform/sign/segment arithmetic, shared by both input paths."""
++    nt, ny, nx = img.shape
++    nf = (win_t + 1)//2
++    segments = (nt - win_t)//step + 1
++    for segment in range(segments):
++        start = segment*step
++        source = img[start:start + win_t]
++        if not np.any(source):
++            if segment == 0:
++                output[:] = 0.
++            continue
++        # Positive-time RFFT replaces the IFFT; retain its 1/T**2 power scale.
++        r2c(source, z, _FFT_TIME_AXES, False, 1.0, 1)
++        c2c(z, z, _FFT_SPACE_AXES, True, 1.0, 1)
++        for f in range(nf):
++            for y in range(ny):
++                yy = (y + (ny + 1)//2) % ny
++                for x in range(nx):
++                    xx = (x + (nx + 1)//2) % nx
++                    v = z[f, yy, xx]
++                    power = (v.real*v.real + v.imag*v.imag)/(win_t*win_t)
++                    if segment == 0:
++                        output[f, y, x] = power
++                    else:
++                        output[f, y, x] += power
++    output /= segments
++
++
+ @nb.njit(parallel=True, cache=True, nogil=True)
+-def _numba_fourier_transform(
+-    windows: np.ndarray
+-) -> np.ndarray:
+-    """
+-    Perform 3D spectral analysis with numba jitted code.
+-
+-    Parameters
+-    ----------
+-    windows : np.ndarray
+-        time x Y x X windows with intensities
+-
+-    Returns
+-    -------
+-    spectrum : np.ndarray
+-        3D power spectrum of 3D fourier transform
+-
+-    """
+-    spectrum_2d = np.empty(windows.shape, dtype=np.complex128)
+-    for n in nb.prange(windows.shape[0]):
+-        spectrum_2d[n] = fftshift_(
+-        fft_y(
+-            fft_x(windows[n])
+-        )
+-    )
+-    spectrum_3d = ifft_(spectrum_2d)
+-    # return spectrum_3d
+-    power = np.abs(spectrum_3d) ** 2
+-    # abbreviate to positive omega
+-    return power[:int(np.ceil(len(power)/2))]
++def _workspace_power(imgs, work, output, win_t, step):
++    """Reuse disjoint complex slots, with one FFT thread per slot."""
++    n = len(imgs)
++    slots = min(n, work.shape[0])
++    for slot in nb.prange(slots):
++        for m in range(slot, n, slots):
++            _window_power(imgs[m], work[slot], output[m], win_t, step)
+ 
+ 
+ @nb.njit(parallel=True, cache=True, nogil=True)
+-def _numba_fourier_transform_multi(
+-    imgs: np.ndarray
+-) -> np.ndarray:
+-    """
+-    Perform 3D spectral analysis for multiple windows at once with numba jitted code.
+-
+-    Parameters
+-    ----------
+-    imgs : np.ndarray
+-        n x time x Y x X windows with intensities
+-
+-    Returns
+-    -------
+-    spectra : np.ndarray
+-        n x 3D power spectrum of 3D fourier transform of all imgs
+-
+-    """
+-    spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
+-    for m in nb.prange(imgs.shape[0]):
+-        # Skip FFT computation for zero windows (common in edge cases)
+-        if not np.any(imgs[m]):
+-            spectra[m] = 0.0
+-            continue
+-        
+-        spectrum_3d = np.empty(imgs[m].shape, dtype=np.complex128)
+-        for n in nb.prange(imgs.shape[1]):
+-            spectrum_3d[n] = fftshift_(
+-                fft_y(
+-                    fft_x(imgs[m, n])
+-                )
+-            )
+-        for y in nb.prange(spectrum_3d.shape[1]):
+-            for x in nb.prange(spectrum_3d.shape[2]):
+-                spectrum_3d[:, y, x] = ifft_(spectrum_3d[:, y, x])
+-        # return spectrum_3d
+-        power = np.abs(spectrum_3d) ** 2
+-        # abbreviate to positive omega
+-        spectra[m] = power[:int(np.ceil(len(power)/2))]
+-    return spectra
++def _workspace_rectangular_power(imgs, origins, clips, work, output, win_t, step):
++    """Normalise the WHOLE clip in bounded input slots, then average segments."""
++    n = len(origins)
++    slots = min(n, clips.shape[0], work.shape[0])
++    for slot in nb.prange(slots):
++        for m in range(slot, n, slots):
++            window._gather_normalize_time_uint8(imgs, origins[m], clips[slot])
++            _window_power(clips[slot, :, ::-1, :], work[slot], output[m], win_t, step)
++
++
++class _FFTWorkspace:
++    """Transient, per-owner FFT/input scratch; never a cached spectrum.
++
++    Keep the largest concurrency needed for the current transform geometry.
++    A shorter final batch reuses slots. A larger thread/batch request grows
++    the buffer; changed FFT geometry replaces it instead of retaining a cache
++    of shapes. Native Rocket/PocketFFT may still allocate internal scratch.
++    """
++    def __init__(self):
++        self._buffer = None
++        self._input_buffer = None
++        self._lock = Lock()
++
++    def __getstate__(self):
++        # Scratch and locks are not scientific state. Pickled IWaVE/lazy arrays
++        # remain portable and allocate fresh scratch after deserialization.
++        return {}
++
++    def __setstate__(self, state):
++        self.__init__()
++
++    def _power(self, imgs, win_t, overlap):
++        if not self._lock.acquire(blocking=False):
++            raise RuntimeError('The same FFT workspace cannot be used concurrently.')
++        try:
++            n, _, ny, nx = imgs.shape
++            result = np.empty((n, (win_t + 1)//2, ny, nx), dtype=np.float64)
++            if not n:
++                return result
++            slots = min(n, nb.get_num_threads())
++            geometry = (win_t//2 + 1, ny, nx)
++            if (self._buffer is None or self._buffer.shape[1:] != geometry
++                    or self._buffer.shape[0] < slots):
++                # Drop the previous allocation BEFORE reserving the new one.
++                self._buffer = None
++                self._buffer = np.empty((slots, *geometry), dtype=np.complex128)
++            _workspace_power(imgs, self._buffer, result, win_t, win_t - overlap)
++            # No returned array/view references scratch. Callers can retain
++            # this power after every later batch overwrites the scratch.
++            return result
++        finally:
++            self._lock.release()
++
++    def _power_rectangular(self, imgs, origins, window_shape, win_t, overlap):
++        """Private uint8/time-normalised path; no batch-sized image array."""
++        for value in (win_t, overlap):
++            if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
++                raise ValueError('Temporal length and overlap must be integers.')
++        if not 0 <= overlap < win_t <= len(imgs) or min(window_shape) < 1:
++            raise ValueError('Need positive spatial sizes and 0 <= overlap < win_t <= frames.')
++        if not self._lock.acquire(blocking=False):
++            raise RuntimeError('The same FFT workspace cannot be used concurrently.')
++        try:
++            n = len(origins)
++            ny, nx = window_shape
++            result = np.empty((n, (win_t + 1)//2, ny, nx), dtype=np.float64)
++            if not n:
++                return result
++            slots = min(n, nb.get_num_threads())
++            geometry = (win_t//2 + 1, ny, nx)
++            if (self._buffer is None or self._buffer.shape[1:] != geometry
++                    or self._buffer.shape[0] < slots):
++                self._buffer = None
++                self._buffer = np.empty((slots, *geometry), dtype=np.complex128)
++            clip_shape = (len(imgs), ny, nx)
++            if (self._input_buffer is None or self._input_buffer.shape[1:] != clip_shape
++                    or self._input_buffer.shape[0] < slots):
++                self._input_buffer = None
++                self._input_buffer = np.empty((slots, *clip_shape), dtype=np.float64)
++            _workspace_rectangular_power(imgs, origins, self._input_buffer,
++                self._buffer, result, win_t, win_t-overlap)
++            return result
++        finally:
++            self._lock.release()
++
++
++def _numba_fourier_transform_multi(imgs):
++    """Keep the original batched entry point, now using real-input scratch."""
++    return sliding_window_spectrum(imgs, imgs.shape[1], 0)
++
++
++def _numba_fourier_transform(windows):
++    """Single-window wrapper around the same batched real-input kernel."""
++    return _numba_fourier_transform_multi(windows[None])[0]
+ 
+ 
+ def _numpy_fourier_transform(
+@@ -180,80 +239,63 @@
+     return spectrum
+ 
+ 
+-def spectral_imgs(
+-    imgs: np.ndarray,
+-    **kwargs
+-) -> np.ndarray:
+-    """
+-    Perform 3D spectral analysis.
+-
+-    Parameters
+-    ----------
+-    imgs : np.ndarray
+-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in
+-        subwindows of Y * X pixels
+-    engine : str, optional
+-        "numpy" or "numba", compute method to use, typically numba (default) is
+-        a lot faster. Numpy function is easier to read.
+-    kwargs : dict with additional keyword arguments for processing
+-
+-    Returns
+-    -------
+-    spectra : np.ndarray
+-        wave spectra for all image window sequences
+-
+-    """
+-    n, t, y, x = imgs.shape
+-    t_out = int(np.ceil(t / 2))  # Reduced time dimension
+-    spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
+-    return spectra
++def spectral_imgs(imgs: np.ndarray) -> np.ndarray:
++    """Return full spatial power for real (window, time, y, x) images.
++
++    Output shape is (window, ceil(time/2), y, x). Input is not modified.
++    This convenience entry point transforms the complete clip as one segment;
++    sliding_window_spectrum averages shorter, possibly overlapping segments.
++    """
++    if imgs.ndim != 4 or np.iscomplexobj(imgs):
++        raise ValueError('FFT input must be real (window,time,y,x) images.')
++    return _numba_fourier_transform_multi(imgs)
+ 
+ 
+ def sliding_window_spectrum(
+     imgs: np.ndarray,
+     win_t: int,
+     overlap: int,
+-    **kwargs
++    *,
++    _workspace=None,
+ ) -> np.ndarray:
+-    """
+-    Splits the video into shorter segments and calculates the average 3D spectrum.
++    """Average full-grid power over the complete temporal segments of imgs.
+ 
+     Parameters
+     ----------
+     imgs : np.ndarray
+-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in 
+-        subwindows of Y * X pixels
++        Real (window, time, y, x) images, already normalised if required.
+     win_t : int
+-        number of frames per segment
++        Frames per FFT segment.
+     overlap : int
+-        overlap (frames)
+-    kwargs : dict with additional keyword arguments for processing
++        Shared frames between adjacent segments; 0 <= overlap < win_t.
+ 
+     Returns
+     -------
+-    spectra : np.ndarray
+-        average wave spectra for all image window sequences
+-
+-    """
+-    
+-    # Check for division by zero
+-    if win_t == overlap:
+-        raise ValueError("win_t and overlap should not be equal.")
+-    
+-    # number of segments
+-    num_segments = (imgs.shape[1] - win_t) // (win_t - overlap)+ 1
+-    
+-    # sum of individual segments
+-    spectrum_sum = sum(
+-        spectral_imgs(
+-            imgs[:, segment_t0:(segment_t0 + win_t), :, :],
+-            **kwargs
+-        ) for segment_t0 in range(0, imgs.shape[1] - win_t + 1, win_t - overlap)
+-    )
+-    
+-    # renormalisation
+-    spectra = spectrum_sum / num_segments
+-    return spectra
++    np.ndarray
++        Owned float64 power, shape (window, ceil(win_t/2), y, x).
++
++    Notes
++    -----
++    Segments are summed in order, then divided by their count. Normalisation
++    of the image clip and the later power thresholding remain separate steps.
++    The private _workspace argument lets LazySpectrumArray reuse complex
++    buffers between batches. Standalone calls create temporary scratch.
++    """
++    if imgs.ndim != 4 or np.iscomplexobj(imgs):
++        raise ValueError('FFT input must be real (window,time,y,x) images.')
++    for value in (win_t, overlap):
++        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
++            raise ValueError('Temporal length and overlap must be integers.')
++    if win_t < 1 or not 0 <= overlap < win_t or imgs.shape[1] < win_t:
++        raise ValueError('Need 0 <= overlap < win_t <= available frames.')
++    if min(imgs.shape[-2:]) < 1:
++        raise ValueError('Spatial FFT dimensions must be positive.')
++    # Normal lazy windows are already float64: no copy. Converting other real
++    # public inputs avoids low-level FFT dtype mismatches, without changing
++    # image ownership or forcing a copy of reversed/strided float64 views.
++    imgs = np.asarray(imgs, dtype=np.float64)
++    workspace = _FFTWorkspace() if _workspace is None else _workspace
++    return workspace._power(imgs, win_t, overlap)
+ 
+ 
+ def spectrum_preprocessing(
+@@ -296,28 +338,38 @@
+         pre-processed and normalised measured 3D spectrum
+ 
+     """
+-    # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
++    normalized = normalize_power(measured_spectrum)
++    return preprocess_normalized_spectrum(normalized, kt, ky, kx,
++                                          velocity_threshold, spectrum_threshold, copy=False)
++
++
++def normalize_power(power, *, copy=True):
++    """Divide each frequency slice by its spatial mean, once.
++
++    copy=False is used for owned FFT power. Do not clean zero-slice NaNs here:
++    the original threshold rule uses them in the subsequent frequency mean.
++    """
++    result = np.array(power, dtype=np.float64, copy=True) if copy else power
++    denominator = result.mean(axis=(-2, -1), keepdims=True)
+     with np.errstate(divide='ignore', invalid='ignore'):
+-        preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
+-
+-    # apply threshold
+-    threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
+-    preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
+-
+-    # set the first slice (frequency=0) to 0
+-    preprocessed_spectrum[:, 0, :, :] = 0
+-
+-    kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
+-
+-    # create mask
+-    kt_bc = kt[:, None, None]  
+-    mask = kt_bc <= kt_threshold 
+-
+-    preprocessed_spectrum *= mask  # apply mask
+-    
+-    # remove NaNs
+-    preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
+-    return preprocessed_spectrum
++        np.divide(result, denominator, out=result)
++    return result
++
++
++def preprocess_normalized_spectrum(normalized, kt, ky, kx,
++                                   velocity_threshold, spectrum_threshold=1., *, copy=True):
++    """Apply the original thresholds to already spatial-normalised power.
++
++    The public wrapper protects caller input. LazySpectrumArray owns its
++    power buffer and uses copy=False to avoid another spectral allocation.
++    Threshold order and NaN cleanup are unchanged from main.
++    """
++    result = normalized.copy() if copy else normalized
++    threshold = spectrum_threshold * result.mean(axis=1, keepdims=True)
++    result[result < threshold] = 0
++    result[:, 0] = 0
++    result *= kt[:, None, None] <= dispersion_threshold(ky, kx, velocity_threshold)
++    return np.nan_to_num(result, copy=False)
+ 
+ 
+ def dispersion_threshold(
+@@ -357,7 +409,6 @@
+     k_mod = np.sqrt(ky ** 2 + kx ** 2)
+ 
+     return k_mod * velocity_threshold
+-
+ 
+ 
+ # === Shared forward evaluator (moved here without changing its mathematics) ===
+--- a/iwave/window.py
++++ b/iwave/window.py
+@@ -1,5 +1,13 @@
++"""Window geometry and image normalisation.
++
++The public indexing helpers remain available. LazyWindowArray additionally
++uses owned rectangular copies and blocked temporal normalisation to avoid
++frame-stack and variance temporaries for each requested window batch.
++"""
++from typing import Tuple, Literal
++
+ import numpy as np
+-from typing import Tuple, Literal
++import numba as nb
+ 
+ 
+ def sliding_window_idx(
+@@ -224,49 +232,195 @@
+ 
+     return x, y
+ 
++
+ def normalize(
+     imgs: np.ndarray,
+-    mode: Literal["xy", "time"] = "time"
++    mode: Literal["xy", "time"] = "time",
++    *,
++    copy: bool = True,
+ ):
+-    """
+-    normalizes images assuming the last two dimensions contain the x/y image
+-    intensities
+-
+-    Parameters
+-    ----------
+-    imgs : np.ndarray (n x Y x X) or (n x m x Y x X)
+-        input images, organized in at least one stack
+-    Returns
+-    -------
+-
+-    imgs_norm : np.ndarray (n x Y x X) or (n x m x Y x X)
+-        output normalized images, organized in at least one stack, 
+-        similar to imgs
+-    """
+-    # compute means and stds
+-    if mode == "xy":
+-        imgs_std = np.expand_dims(
+-            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).std(axis=-1),
+-            axis=(-1, -2)
+-        )
+-        imgs_mean = np.expand_dims(
+-            imgs.reshape(imgs.shape[0], imgs.shape[1], -1).mean(axis=-1),
+-            axis=(-1, -2)
+-        )
+-    elif mode == "time":
+-        imgs_std = np.expand_dims(
+-            imgs.std(axis=-3),
+-            axis=-3
+-        )
+-        imgs_mean = np.expand_dims(
+-            imgs.mean(axis=-3),
+-            axis=-3
+-        )
++    """Normalise images along time or within each spatial image.
++
++    Parameters
++    ----------
++    imgs : np.ndarray
++        Image stack with trailing (time, y, x) dimensions; a leading window
++        axis is allowed. Time statistics span the complete supplied clip.
++    mode : {'xy', 'time'}
++        Axes over which to subtract the mean and divide by population std.
++    copy : bool, optional
++        True (default) protects caller data with a float64 copy. False is for
++        owned writable floating buffers, allowing subtraction/division in place.
++
++    Returns
++    -------
++    np.ndarray
++        Normalised images with unchanged shape; non-finite results are cleaned
++        as before, including zero-contrast pixels.
++    """
++    # copy=False is only used for a private, floating-point extraction buffer.
++    # The public default does not mutate images supplied by a caller.
++    imgs = np.array(imgs, dtype=np.float64, copy=True) if copy else np.asarray(imgs)
++    if not np.issubdtype(imgs.dtype, np.floating) or not imgs.flags.writeable:
++        raise ValueError('In-place normalization needs a writable floating array.')
++    if imgs.ndim < 3:
++        raise ValueError('Images must have time, y and x dimensions.')
++    if mode == 'xy':
++        axes = (-2, -1)
++    elif mode == 'time':
++        axes = -3
+     else:
+         raise ValueError(f'mode must be "xy" or "time", but is "{mode}"')
+-    # this step takes a lot of memory, consider doing a stepwise replacement through numba instead of numpy in one go
++    # Compute both statistics BEFORE overwriting the intensities. Keep ddof=0
++    # and the original whole-clip time interval, not individual FFT segments.
++    std = imgs.std(axis=axes, keepdims=True)
++    mean = imgs.mean(axis=axes, keepdims=True)
++    np.subtract(imgs, mean, out=imgs)
+     with np.errstate(divide='ignore', invalid='ignore'):
+-        imgs = (imgs - imgs_mean) / imgs_std
+-    imgs = np.nan_to_num(imgs)
+-    return imgs
+-
++        np.divide(imgs, std, out=imgs)
++    return np.nan_to_num(imgs, copy=False)
++
++
++def rectangular_window_origins(win_x, win_y, image_shape):
++    """Return rectangle origins, or None for arbitrary pixel-index windows.
++
++    Checking once when constructing a lazy array retains the general indexing
++    API without repeating a whole grid comparison for every window batch.
++    """
++    x, y = np.asarray(win_x), np.asarray(win_y)
++    if x.ndim != 3 or x.shape != y.shape:
++        return None
++    ny, nx = x.shape[-2:]
++    x0, y0 = x[:, 0, 0], y[:, 0, 0]
++    if (np.any(x0 < 0) or np.any(y0 < 0)
++            or np.any(x0 + nx > image_shape[-1])
++            or np.any(y0 + ny > image_shape[-2])):
++        return None
++    if (not np.array_equal(x, np.broadcast_to(x0[:, None, None] + np.arange(nx), x.shape))
++            or not np.array_equal(y, np.broadcast_to(y0[:, None, None] + np.arange(ny)[:, None], y.shape))):
++        return None
++    return np.column_stack((y0, x0)).astype(np.intp)
++
++
++def extract_rectangular_windows(imgs, origins, window_shape):
++    """Copy only one requested batch into owned (window,time,y,x) float64 data.
++
++    A loop over rectangles avoids frame-by-frame advanced-index gathers and
++    np.stack temporaries. The source may be a non-contiguous ROI or memmap;
++    it is never modified and no full-video window view is materialised.
++    """
++    ny, nx = window_shape
++    result = np.empty((len(origins), len(imgs), ny, nx), dtype=np.float64)
++    for i, (y0, x0) in enumerate(origins):
++        result[i] = imgs[:, y0:y0 + ny, x0:x0 + nx]
++    return result
++
++
++@nb.njit(cache=True, nogil=True, error_model='numpy')
++def _gather_normalize_time_uint8(imgs, origin, output):
++    """Gather one uint8 rectangle, fusing the first time-mean pass.
++
++    Preserve the original two-pass population variance and temporal order.
++    With finite nonnegative uint8 pixels the whole-window mean gate can only
++    skip an all-zero rectangle, whose normalised result is also all zeros.
++    Signed/floating images must use the original path, not this shortcut.
++    """
++    nt, ny, nx = output.shape
++    data = output.reshape(nt, ny*nx)
++    for start in range(0, ny*nx, 128):
++        size = min(128, ny*nx-start)
++        mean, variance = np.zeros(size), np.zeros(size)
++        ys, xs = np.empty(size, np.intp), np.empty(size, np.intp)
++        for j in range(size):
++            ys[j] = origin[0] + (start+j)//nx
++            xs[j] = origin[1] + (start+j)%nx
++        for t in range(nt):
++            for j in range(size):
++                value = float(imgs[t, ys[j], xs[j]])
++                data[t, start+j] = value
++                mean[j] += value
++        mean /= nt
++        for t in range(nt):
++            for j in range(size):
++                delta = data[t, start+j] - mean[j]
++                variance[j] += delta*delta
++        for j in range(size):
++            variance[j] = np.sqrt(variance[j]/nt)
++        for t in range(nt):
++            for j in range(size):
++                value = (data[t, start+j] - mean[j])/variance[j]
++                if np.isnan(value):
++                    value = 0.
++                elif value == np.inf:
++                    value = np.finfo(np.float64).max
++                elif value == -np.inf:
++                    value = -np.finfo(np.float64).max
++                data[t, start+j] = value
++
++
++@nb.njit(parallel=True, cache=True, nogil=True, error_model='numpy')
++def _normalize_time_owned(windows, nonzero):
++    """Stable two-pass variance in small spatial blocks, without a video temp.
++
++    Time is traversed in the original order; nearby pixels are processed
++    together for contiguous memory access. Parallel blocks work even when the
++    spatial-window batch contains fewer windows than there are CPU cores.
++    No fastmath or E[x*x]-E[x]**2 approximation is used.
++    """
++    n, nt, ny, nx = windows.shape
++    # Small per-task mean/variance arrays replace NumPy std's clip-sized
++    # centred temporary. Adjacent pixels stay together for cache locality.
++    pixels, block = ny*nx, 128
++    blocks = (pixels + block - 1)//block
++    for task in nb.prange(n*blocks):
++        m = task//blocks
++        if not nonzero[m]:
++            continue
++        start = (task % blocks)*block
++        size = min(block, pixels - start)
++        data = windows[m].reshape(nt, pixels)
++        mean, variance = np.zeros(size), np.zeros(size)
++        for t in range(nt):
++            for j in range(size):
++                mean[j] += data[t, start+j]
++        mean /= nt
++        for t in range(nt):
++            for j in range(size):
++                delta = data[t, start+j] - mean[j]
++                variance[j] += delta*delta
++        # Reuse the variance accumulator for population standard deviation.
++        for j in range(size):
++            variance[j] = np.sqrt(variance[j]/nt)
++        for t in range(nt):
++            for j in range(size):
++                value = (data[t, start+j] - mean[j])/variance[j]
++                # Match nan_to_num, including zero-contrast windows. The
++                # numpy error model above makes division by zero non-raising.
++                if np.isnan(value):
++                    value = 0.
++                elif value == np.inf:
++                    value = np.finfo(np.float64).max
++                elif value == -np.inf:
++                    value = -np.finfo(np.float64).max
++                data[t, start+j] = value
++
++
++def normalize_owned_windows(windows, mode, nonzero):
++    """Internal batch normalizer; only private float64 C buffers are allowed."""
++    if (windows.ndim != 4 or windows.dtype != np.float64
++            or not windows.flags.c_contiguous or not windows.flags.writeable):
++        raise ValueError('Owned normalization requires writable contiguous float64 windows.')
++    if not len(windows) or mode is None:
++        return windows
++    if mode == 'time':
++        _normalize_time_owned(windows, nonzero)
++    elif mode == 'xy':
++        if nonzero.all():
++            normalize(windows, mode, copy=False)
++        else:
++            for i in np.flatnonzero(nonzero):
++                normalize(windows[i], mode, copy=False)
++    else:
++        raise ValueError("mode must be 'time', 'xy' or None.")
++    return windows
++
+--- a/tests/test_optimise.py
++++ b/tests/test_optimise.py
+@@ -1,7 +1,7 @@
+ import numpy as np
+ import pytest
+ import time
+-from iwave import spectral, dispersion, optimise, Iwave
++from iwave import spectral, dispersion, optimise, window, Iwave
+ 
+ 
+ def test_preprocessing():
+@@ -217,3 +217,34 @@
+     assert np.all(np.abs(vy_2steps - velocity[0]) < 0.01)
+     assert np.all(np.abs(vx_2steps - velocity[1]) < 0.01)
+     assert np.all(np.abs(d_2steps - depth) < 0.05)
++
++
++def test_window_batches_reuse_one_worker_pool(monkeypatch):
++    """The main DE pipeline extracts bounded batches and retains one pool."""
++    from concurrent.futures import ThreadPoolExecutor
++
++    imgs = np.random.default_rng(6).integers(0, 255, (64, 8, 24), dtype=np.uint8)
++    iw = Iwave(.1, window_size=(8, 8), time_size=32, time_overlap=16,
++               fps=20., imgs=imgs, smax=1., window_chunk_size=2)
++    batches, pools = [], []
++    extract = spectral._FFTWorkspace._power_rectangular
++
++    def tracked_extract(workspace, images, origins, shape, win_t, overlap):
++        batches.append(len(origins))
++        return extract(workspace, images, origins, shape, win_t, overlap)
++
++    class CountPool(ThreadPoolExecutor):
++        def __init__(self, **kwargs):
++            pools.append(kwargs['max_workers'])
++            # Exercise the real DE worker without spawning interpreters in
++            # this small unit test or redirecting process-global stdout.
++            super().__init__(max_workers=kwargs['max_workers'])
++
++    monkeypatch.setattr(spectral._FFTWorkspace, '_power_rectangular', tracked_extract)
++    monkeypatch.setattr(optimise, 'ProcessPoolExecutor', CountPool)
++    iw.velocimetry(depth=.3, pass_downsampling=[1], popsize=2,
++                   maxiter=1, seed=0, polish=False)
++    assert batches == [2, 1]
++    assert len(pools) == 1
++    assert pools[0] <= 2
++    assert iw.vx.shape == (1, 3)
+--- a/tests/test_spectral.py
++++ b/tests/test_spectral.py
+@@ -1,7 +1,7 @@
+ import numpy as np
+ import pytest
+ 
+-from iwave import spectral
++from iwave import spectral, LazySpectrumArray
+ 
+ 
+ def test_get_wave_numbers(img_windows, res=0.02, fps=25):
+@@ -42,7 +42,83 @@
+ 
+ 
+ def test_sliding_window_spectrum(img_windows_norm):
+-    """Check shape of average of multiple spectra over several time slices."""
+-    spectrum = spectral.sliding_window_spectrum(img_windows_norm, 20, 10)
+-    # test if the spectra have the desired size
+-    assert spectrum.shape[-3] == int(np.ceil(20 / 2))
+\ No newline at end of file
++    """Compare segment averaging with the original NumPy transform."""
++    imgs = img_windows_norm[:2]
++    spectrum = spectral.sliding_window_spectrum(imgs, 20, 10)
++    starts = range(0, imgs.shape[1] - 20 + 1, 10)
++    expected = sum(
++        np.stack([spectral._numpy_fourier_transform(w[start:start+20]) for w in imgs])
++        for start in starts
++    ) / len(starts)
++    assert spectrum.shape[-3] == 10
++    assert np.allclose(spectrum, expected)
++
++
++def test_real_fft_matches_numpy_for_odd_and_even_lengths():
++    """Keep original signs, scaling and bins, including reversed input views."""
++    for length in (15, 16):
++        imgs = np.random.default_rng(4).normal(size=(2, length, 7, 10))[:, :, ::-1, :]
++        imgs[0] = 0
++        imgs.setflags(write=False)
++        expected = np.stack([spectral._numpy_fourier_transform(w) for w in imgs])
++        actual = spectral.spectral_imgs(imgs)
++        assert actual.shape == (2, (length + 1)//2, 7, 10)
++        assert np.allclose(actual, expected)
++
++
++def test_lazy_spectra_reuse_scratch_without_overwriting_results():
++    """A final short batch reuses scratch but cannot change previous outputs."""
++    windows = np.random.default_rng(5).normal(size=(3, 32, 6, 8))
++    kt, ky, kx = spectral.wave_numbers((16, 6, 8), .1, 20.)
++    lazy = LazySpectrumArray(windows, 16, 8, kt, kx, ky)
++    first = lazy[:2]
++    scratch = lazy._fft_workspace._buffer
++    saved = first.copy()
++    last = lazy[2:]
++    assert lazy._fft_workspace._buffer is scratch
++    assert last.shape == (1, 8, 6, 8)
++    assert np.array_equal(first, saved)
++    assert not np.shares_memory(first, scratch)
++
++
++def test_uint8_rectangles_use_bounded_inputs_without_changing_spectra():
++    import pickle
++    import numba as nb
++    from iwave import window, LazyWindowArray
++    imgs = np.random.default_rng(6).integers(0, 256, (33, 8, 30), dtype=np.uint8)
++    imgs[:, :4, :5] = 0
++    saved = imgs.copy(); imgs.setflags(write=False)
++    wx, wy = window.sliding_window_idx(imgs[0], (4,5), (0,0))
++    windows = LazyWindowArray(imgs, window.multi_sliding_window_array, wx, wy, 'time')
++    kt, ky, kx = spectral.wave_numbers((15,4,5), .1, 20.)
++    lazy = LazySpectrumArray(windows, 15, 7, kt, kx, ky)
++    expected = LazySpectrumArray(windows[:], 15, 7, kt, kx, ky)[:]
++    actual = lazy[:]; retained = actual.copy()
++    np.testing.assert_array_equal(actual, expected)
++    scratch = lazy._fft_workspace._input_buffer
++    assert scratch.shape == (min(len(windows), nb.get_num_threads()),33,4,5)
++    np.testing.assert_array_equal(lazy[-1], expected[-1])
++    np.testing.assert_array_equal(lazy[::-1], expected[::-1])
++    np.testing.assert_array_equal(actual, retained)
++    np.testing.assert_array_equal(imgs, saved)
++    assert lazy[:0].shape[0] == 0
++    assert lazy._fft_workspace._input_buffer is scratch
++    assert not np.shares_memory(actual, scratch)
++    restored = pickle.loads(pickle.dumps(lazy))
++    assert restored._fft_workspace._input_buffer is None
++    np.testing.assert_array_equal(restored[:], expected)
++
++
++def test_other_dtypes_and_normalisation_modes_keep_original_path():
++    from iwave import window, LazyWindowArray
++    original = np.resize(np.array([-1.,1.]), (16,8,12))
++    wx, wy = window.sliding_window_idx(original[0], (4,4), (0,0))
++    kt, ky, kx = spectral.wave_numbers((8,4,4), .1, 20.)
++    for imgs in (original, (original+1).astype(np.uint16), (original+1).astype(np.uint8)):
++        for norm in ('time','xy',None):
++            windows = LazyWindowArray(imgs, window.multi_sliding_window_array, wx, wy, norm)
++            lazy = LazySpectrumArray(windows, 8, 4, kt, kx, ky)
++            expected = LazySpectrumArray(windows[:], 8, 4, kt, kx, ky)[:]
++            np.testing.assert_array_equal(lazy[:], expected)
++            if norm != 'time' or imgs.dtype != np.uint8:
++                assert lazy._fft_workspace._input_buffer is None
+\ No newline at end of file
+--- a/tests/test_window.py
++++ b/tests/test_window.py
+@@ -2,7 +2,7 @@
+ import numpy as np
+ import pytest
+ 
+-from iwave import window
++from iwave import window, LazyWindowArray
+ 
+ 
+ def test_get_axis_shape(imgs):
+@@ -94,3 +94,23 @@
+     # check if random single time slice has mean / std of 0. / 1.
+     assert np.isclose(img_norm[1, :, 1, 1].std(), 1.)
+     assert np.isclose(img_norm[1, :, 1, 1].mean(), 0.)
++
++
++def test_lazy_windows_match_original_extraction():
++    """Fast extraction/normalisation keeps values and protects source images."""
++    imgs = np.random.default_rng(3).integers(0, 255, (24, 12, 16), dtype=np.uint8)
++    original = imgs.copy()
++    imgs.setflags(write=False)
++    win_x, win_y = window.sliding_window_idx(imgs[0], (6, 8), (0, 0))
++    for mode in ('time', 'xy', None):
++        lazy = LazyWindowArray(imgs, window.multi_sliding_window_array, win_x, win_y, mode)
++        expected = window.multi_sliding_window_array(
++            imgs, win_x[:2], win_y[:2], swap_time_dim=True,
++        ).astype(float)
++        if mode is not None:
++            expected = window.normalize(expected, mode)
++        actual = lazy[:2]
++        assert np.allclose(actual, expected)
++        assert actual.flags.c_contiguous
++        assert not np.shares_memory(actual, imgs)
++    assert np.array_equal(imgs, original)

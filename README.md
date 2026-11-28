@@ -382,10 +382,8 @@ You can now run the tests by running:
 pytest ./tests
 ```
 
-Credits:
+### Credits:
 
-Giulio Dolcetti 
-
-Hessel Winsemius
-
-Salvador Peña-Haro
+* Giulio Dolcetti 
+* Hessel Winsemius
+* Salvador Peña-Haro
