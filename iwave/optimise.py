@@ -14,7 +14,7 @@ from numbers import Real
 
 from iwave import dispersion, LazySpectrumArray, CONCURRENCY
 
-# Create a context with the desired start method
+# Start fitting processes with fresh Python interpreters (the spawn method).
 ctx = multiprocessing.get_context("spawn")
 
 def cost_function_velocity_depth(
@@ -29,55 +29,24 @@ def cost_function_velocity_depth(
     turbulence_switch: bool,
     gauss_width: float,
 ) -> float: 
-    """
-    Creates a synthetic spectrum based on guessed parameters, 
-    then compares it with the measured spectrum and returns a cost function for minimisation
+    """Score a trial velocity and depth by comparing model and measured power.
 
-    Parameters
-    ----------
-    x :  [float, float, float]
-        velocity_y, velocity_x, log-depth
-        tentative surface velocity components along y and x (m/s) and log of depth (m)
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-    window_dims : [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-    res : float
-        image resolution (m/pxl)
-    fps : float
-        image acquisition rate (fps)
-    penalty_weight : float
-        Because of the two branches of the surface spectrum (waves and turbulence-forced patterns), the algorithm 
-        may choose the wrong solution causing a strongly overestimated velocity magnitude, especially 
-        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
-        underestimate the velocity and overestimate the depth. Setting penalty_weight = 0 will eliminate the bias, 
-        but may produce more outliers. If the velocity magnitude can be predicted reasonably, setting smax < 2 * the 
-        typical velocity and setting penalty_weight = 0 will provide the most accurate results.
-    gravity_waves_switch : bool
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-    turbulence_switch : bool
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-    gauss_width : float
-        width of the synthetic spectrum smoothing kernel
+    x contains (vy, vx, log(depth)); velocities use m/s and depth uses metres.
+    Build the model spectrum using vel_indx (depth-average / surface velocity),
+    window_dims (frames, y, x), res (m/pixel), fps, gauss_width, and the two
+    physical-component switches.
 
-    Returns
-    -------
-    cost_function : float
-        cost function to be minimised (non-dimensional)
-        the cost function is defined as the inverse of the cross-correlation between the measured spectrum and the
-        synthetic spectrum calculated according to the estimated flow parameters
-
+    Return a dimensionless inverse-overlap score: smaller means closer agreement.
+    A positive penalty_weight increases it for faster trial velocities, to reduce
+    some wrong high-speed fits. This can bias velocity low or depth high; zero
+    removes that penalty, not every other possible bias. The penalty is applied
+    here for DE, not to HNM's separate local fitting score.
     """
     
-    depth = np.exp(x[2])    # guessed depth
-    velocity = [x[0], x[1]]    # guessed velocity components
+    depth = np.exp(x[2])    # Convert trial log(depth) back to depth in metres.
+    velocity = [x[0], x[1]]    # Trial velocity components, in y then x order.
 
-    # calculate the synthetic spectrum based on the guess velocity
+    # Build the model spectrum for this trial velocity and depth.
     synthetic_spectrum = dispersion.intensity(
         velocity, depth, vel_indx,
         window_dims, res, fps, gauss_width,
@@ -85,7 +54,7 @@ def cost_function_velocity_depth(
     )
     cost_function = nsp_inv(measured_spectrum, synthetic_spectrum)
     
-    # add a penalisation proportional to the non-dimensionalised velocity modulus
+    # Increase the score for faster trial velocities when a penalty is requested.
     cost_function = cost_function*(1 + 2 * penalty_weight * np.linalg.norm(velocity)/(res*fps))
     return cost_function
 
@@ -94,27 +63,17 @@ def nsp_inv(
     measured_spectrum: np.ndarray,
     synthetic_spectrum: np.ndarray
 ) -> float:
+    """Compare measured and model power; smaller values mean greater overlap.
+
+    Both spectra have matching (frequency, ky, kx) dimensions. The returned score
+    is sum(measured)*sum(model)/sum(measured*model). It is the inverse-overlap
+    quantity used by this code, not a separate estimate of physical uncertainty.
     """
-    Combine the measured and synthetic spectra and calculate the cost function (inverse of the normalised scalar product)
-
-    Parameters
-    ----------
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-    synthetic_spectrum : np.ndarray
-        synthetic 3D power spectrum
-
-    Returns
-    -------
-    cost : float
-        cost function to be minimised (non-dimensional)
-        the cost function is defined as the inverse of the cross-correlation between the measured spectrum and the
-        synthetic spectrum calculated according to the estimated flow parameters
-
-    """
-    spectra_correlation = measured_spectrum * synthetic_spectrum # calculate correlation
+    # Multiply matching entries to measure overlap between the two spectra.
+    spectra_correlation = measured_spectrum * synthetic_spectrum
     with np.errstate(divide='ignore', invalid='ignore'):
-        cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation) # calculate cost function
+        # A smaller score means greater measured/model overlap.
+        cost = np.sum(synthetic_spectrum)* np.sum(measured_spectrum)  / np.sum(spectra_correlation)
     return cost
 
 
@@ -141,16 +100,13 @@ def optimize_single_spectrum_velocity(
     *,
     _return_search_context: bool = False,
 ) -> Tuple[float, float, float, float, float, bool, str]:
-    """
-    Returns:
-        v, u, d, cost, quality, status, message
-    """
-    # Zero spectra were skipped during FFT, skip optimization for them too
+    """Fit one spectrum and return (vy, vx, depth, cost, quality, status, message)."""
+    # Skip fitting when the measured spectrum is entirely zero.
     if not np.any(measured_spectrum):
         result = (np.nan, np.nan, np.nan, np.nan, np.nan, False, "Spectrum is zero")
         return (*result, None) if _return_search_context else result
     
-    # assume very large depth for initial passes
+    # Use a very large depth for the preliminary fitting passes.
     pass_kwargs = kwargs.copy()
     
     for n, sample in enumerate(pass_downsampling):
@@ -160,17 +116,20 @@ def optimize_single_spectrum_velocity(
                 (pass_vx-0.1,pass_vx+0.1),
                 (np.log(1000), np.log(1000))]
             if n == len(pass_downsampling) - 1:
-                # in the last step, the penalty_weight becomes zero and depth is also
+                # For the final pass, remove the velocity penalty and use the requested
+                # depth limits.
                 penalty_weight = 0
                 
-                # Reduce population size for last step
+                # Use fewer trial solutions in the final DE pass.
                 
                 pass_kwargs["popsize"] = max(1, pass_kwargs.get("popsize", 8) // 2)
                 
                 pass_bnds = [
                     (pass_vy-0.1,pass_vy+0.1),
                     (pass_vx-0.1,pass_vx+0.1),
-                    (np.log(bnds[2][0]), np.log(bnds[2][1]))] # log-transform depth to homogenise convergence
+                    # Fit log(depth) so depth stays positive and a wide depth range is
+                    # easier to search.
+                    (np.log(bnds[2][0]), np.log(bnds[2][1]))]
         else:
             pass_bnds = [bnds[0], bnds[1], (np.log(bnds[2][0]), np.log(bnds[2][1]))]
 
@@ -184,7 +143,7 @@ def optimize_single_spectrum_velocity(
             **pass_kwargs
         )
         
-        # Extract step 1 results
+        # Take the fitted velocity as the starting result for the next pass.
         pass_vy = pass_opt.x[0]
         pass_vx = pass_opt.x[1]
     
@@ -192,11 +151,12 @@ def optimize_single_spectrum_velocity(
     status = pass_opt.success
     message = pass_opt.message
     
-    # Calculate quality metric
+    # Calculate how closely the final model matches the measurements.
     quality = quality_calc(pass_opt.x, measured_spectrum, vel_indx, window_dims, res, fps, 
                           gauss_width, gravity_waves_switch, turbulence_switch)
     cost = np.sum(pass_opt.fun**2)
-    pass_opt.x[2] = np.exp(pass_opt.x[2])  # transforms back optimised depth into linear scale
+    # Convert fitted log(depth) back to depth in metres.
+    pass_opt.x[2] = np.exp(pass_opt.x[2])
     
     vy, vx, d = pass_opt.x
     result = (vy, vx, d, cost, quality, status, message)
@@ -215,7 +175,7 @@ DE_DEFAULTS = {"gauss_width": 1.0, "penalty_weight": 1.0,
 
 
 def normalise_method(method):
-    """Validate the two public backend names."""
+    """Check that the requested fitting method is DE or HNM, using its standard spelling."""
     if isinstance(method, str) and method in ('DE', 'HNM'):
         return method
     raise ValueError("method must be 'DE' or 'HNM'.")
@@ -223,10 +183,11 @@ def normalise_method(method):
 
 def resolve_method_options(method="DE", de_options=None, hnm_options=None,
                            legacy=None, scipy_defaults=None, bnds=None):
-    """Normalise options once in the parent; preserve legacy DE-only calls.
+    """Check method options once in the main program.
 
-    Nested options merge defaults; a legacy nonempty SciPy kwargs dictionary
-    retains its original replace-defaults behaviour. Do not mix the two styles.
+    Values in the new nested DE dictionary override matching defaults. For older
+    DE calls, a nonempty SciPy keyword dictionary replaces those defaults instead.
+    Keep these calling styles separate so their meaning is not ambiguous.
     """
     legacy = dict(legacy or {})
     method = normalise_method(method)
@@ -257,7 +218,9 @@ def resolve_method_options(method="DE", de_options=None, hnm_options=None,
         if not out["pass_downsampling"]:
             out["pass_downsampling"] = [2, 1]
         if legacy:
-            scipy_options = legacy  # historical nonempty kwargs semantics
+            # Keep the earlier rule: supplied DE keyword settings replace the default
+            # dictionary.
+            scipy_options = legacy
     for key in ("gauss_width", "penalty_weight"):
         value = out[key]
         if (isinstance(value, (bool, np.bool_)) or not isinstance(value, Real)
@@ -277,7 +240,11 @@ def resolve_method_options(method="DE", de_options=None, hnm_options=None,
 
 
 def optimize_single_spectrum_velocity_unpack(kwargs):
-    """Module-level, spawn-safe dispatcher; absent method still means DE."""
+    """Send one window to the requested method, defaulting to DE.
+
+    Keep this function at module level so a newly started Python fitting process
+    can import and call it.
+    """
     arguments = dict(kwargs)
     method = normalise_method(arguments.pop("method", "DE"))
     metadata = arguments.pop("_return_metadata", False)
@@ -350,7 +317,7 @@ def reject_removed_uncertainty_options(arguments):
 
 
 def silence_output():
-    """Suppress output of worker functions."""
+    """Run a fitting task without printing its standard output or error messages."""
     sys.stdout = open(os.devnull, "w")
     sys.stderr = open(os.devnull, "w")
 
@@ -381,108 +348,88 @@ def optimise_velocity(
     spectral_contexts = None,
     **kwargs
 ) -> tuple:
-    """
-    Runs the optimisation to calculate the optimal velocity components.
-
-    calculate_spectral_uncertainty=True enables noise-scaled local sensitivity
-    using complete pre-threshold normalized spectra and averaging metadata.
-    calculate_mode_ambiguity=True compares existing successful interior HNM
-    multistart endpoints. No searches are added. Both diagnostics require metadata.
-    spectral_contexts supplies one context per array spectrum; lazy spectra retain
-    this information automatically in the same FFT pass.
-
-    The former fixed-loss uncertainty API has been removed.
+    """Fit the supplied windows and return their velocity, depth, cost and quality.
 
     Parameters
     ----------
-    measured_spectra : np.ndarray
-        measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
-        dimensions [N_windows, Nt, Ny, Nx]
-    bnds_list: List[(float, float), (float, float), (float, float)]
-        [(min_vel_y, max_vel_y), (min_vel_x, max_vel_x), (min_depth, max_depth)] velocity (m/s) and depth (m) bounds
-        this is supplied as a list with potentially different values for each window
+    measured_spectra : array or spectrum-array object
+        Power in (window, frequency, ky, kx) order. A spectrum-array object can
+        prepare windows only as each batch is requested.
+    bnds_list : sequence
+        For each window, limits ((vy_min, vy_max), (vx_min, vx_max), (d_min, d_max)).
+        Velocities are m/s and depth is metres. Equal depth limits fix depth;
+        different positive limits ask the method to fit it.
     vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-    window_dims: List[int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-    res: float
-        image resolution (m/pxl)
-    fps: float
-        image acquisition rate (fps)
-    dof: float
-        spectrum degrees of freedom
-    penalty_weight: float, optional
-        Defaults to 1.0. Because of the two branches of the surface spectrum (waves and turbulence-forced patterns),
-        the algorithm may choose the wrong solution causing a strongly overestimated velocity magnitude, especially
-        when smax > 2 * the actual velocity. The penalty_weight parameter increases the inertia of the optimiser, penalising
-        solutions with a higher velocity magnitude. Setting penalty_weight > 0 will produce more stable results, but may slightly
-        underestimate the velocity. Setting penalty_weight = 0 will eliminate the bias, but may produce more outliers.
-        If the velocity magnitude can be predicted reasonably, setting smax < 2 * the typical velocity and setting 
-        penalty_weight = 0 will provide the most accurate results.
-    gravity_waves_switch: bool, optional
-        if True (default), gravity waves are modelled
-        if False, gravity waves are NOT modelled
-    turbulence_switch: bool, optional
-        if True (default), turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-    gauss_width: float, optional
-        width of the synthetic spectrum smoothing kernel (default 1.0).
-        gauss_width > 1 could be useful with very noisy spectra.
-    chunk_size : int, optional
-        Number of spectra to process at a time. Defaults to 50
-    pass_downsampling: list of int, optional
-        List of downsampling rates. If None (default), this will be set to [2, 1], meaning that first
-        the optimization will occur with a trimmed spectrum of half, and after, refined with the full (1) spectrum. 
-        Trimming removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images 
-        spatially.
-    method : {'DE', 'HNM'}
-        DE is the default. HNM fits fixed depth or jointly fits velocity/log-depth
-        when the supplied positive depth bounds differ.
+        Depth-averaged / surface velocity.
+    window_dims : three integers
+        Original frame count, window height and width. Frequency count in the
+        stored spectrum is smaller than this original frame count.
+    res, fps : floats
+        Metres per pixel and frame rate of the analysed sequence.
+    penalty_weight, gauss_width, pass_downsampling
+        Earlier DE options: speed penalty (default 1), model width (default 1),
+        and reduced/full fitting passes (default [2, 1]). A speed penalty can
+        suppress some outliers but also bias the fit; zero disables it.
+    gravity_waves_switch, turbulence_switch : bool
+        Include waves and/or patterns carried by the flow; both default True.
+    chunk_size : integer
+        Maximum windows handled together, default 50.
+    method : 'DE' or 'HNM'
+        Choose differential evolution (default) or Hough followed by Nelder-Mead.
     de_options, hnm_options : dict, optional
-        Separate method settings; mixing namespaces is an error. DE accepts
-        gauss_width, penalty_weight, pass_downsampling and nested scipy_options.
-        HNM settings are flat, including Hough controls such as velocity_step,
-        vote_sigma, k_min_factor, peak_height and peak_prominence. Sampling,
-        filling_ratio, refine, relative_radius (default 0.5), min_radius,
-        initial_step_factor and NM controls such as maxfev use the same dictionary.
-        depth_initial selects the reference depth for Hough and the NM start;
-        log_depth_step sets the fourth simplex edge when estimating depth.
-        Variable-depth defaults are n_candidates=12, maxfev=640; fixed-depth
-        defaults are 1 and 160. Explicit overrides take precedence independently.
-        Legacy top-level DE parameters/kwargs remain accepted on DE only, but
+        Keep method settings separate. DE accepts gauss_width, penalty_weight,
+        pass_downsampling and nested scipy_options. Older DE parameters/kwargs
         cannot be combined with de_options.
+        HNM uses one flat dictionary for Hough peak/vote controls, fixed/adaptive
+        column selection and local fitting. All starts share a circle with
+        relative_radius=0.5 and min_radius. initial_step_factor sets the first
+        velocity changes; depth_initial and log_depth_step control depth starts.
+        n_candidates/maxfev default to 1/160 at fixed depth or 12/640 when depth
+        is unknown; maxfev is per start. Explicit values override individual keys.
+        See Iwave.velocimetry and README.md for the complete option descriptions.
     progress : bool
-        Enable the parent progress bar (default True); no worker prints.
+        Show the main program's progress bar. Default True.
+    calculate_spectral_uncertainty, calculate_mode_ambiguity : bool
+        Enable noise bounds near the selected fit and/or comparisons of existing
+        HNM solutions. Both default False and neither changes the chosen fit.
+    spectral_uncertainty_options, mode_ambiguity_options : dict
+        Tune the checks, but do not enable them by merely supplying a dictionary.
+    spectral_contexts : sequence of dictionaries, optional
+        Full normalised spectra before filtering, with averaging information.
+        Required for array inputs when either check is on. Ordinary video-window
+        spectra obtain it automatically during the same transform calculation.
     return_diagnostics, return_metadata : bool
-        Default return is the original (optimal, cost, quality). Diagnostics
-        appends status/messages. Metadata additionally appends an object array
-        of per-window HNM audit records (None for DE) and requires diagnostics.
-        HNM cost is the squared unpenalised NSP; quality uses the existing
-        measured/model versus model/self NSP ratio at the final guess. Invalid
-        fits have NaN diagnostics; quality is not a depth uncertainty measure.
-    **kwargs : dict
-        Legacy SciPy DE settings; use de_options['scipy_options'] for new code.
+        Default output is (optimal, cost, quality). Diagnostics also returns
+        status and messages. Metadata additionally returns detailed per-window
+        records and requires diagnostics. These flags control returned information,
+        not whether the two optional checks above are enabled.
+    **kwargs
+        Earlier direct SciPy DE settings. Prefer de_options['scipy_options'].
 
     Returns
     -------
-    optimal : np.ndarray[float]
-        optimized y [0] and x [1] velocity component (m/s) and depth (m) [2]
-    cost : np.ndarray[float]
-        Value of the cost function at the optimum. This parameter is inversely related to the quality parameter.
-    quality : np.ndarray[float]
-        Quality parameters (0 < q < 1), where 1 is highest quality and 0 is lowest quality.
-        q is defined as q = 1 - 0.2*log10(cost_measured/cost_ideal)
-        This parameter measures the similarity between the measured spectra and ideal spectra.
-        While there is no direct link with results uncertainties, higher q indicates better quality data.
+    optimal : array
+        One (vy, vx, depth) row per window, in m/s and metres.
+    cost, quality : arrays
+        Cost is smaller for better agreement. HNM reports the squared inverse
+        overlap without a speed penalty. Quality is
+        1 - 0.2*log10(cost_measured/cost_ideal): a perfect match gives 1,
+        but it is not restricted to [0, 1] and is not a depth error estimate.
+
+    Noise bounds use a model of spectral noise near one selected solution. A
+    failed or missing check does not mean zero error; the old fixed-score-loss
+    uncertainty API is not provided.
     """
 
-    # Independent explicit gates; options never enable calculations by themselves.
+    # Each optional check needs its own True/False switch.
     from iwave.spectral import resolve_spectral_request, validate_spectral_context
     from iwave.optimise_hnm import resolve_mode_request
     reject_removed_uncertainty_options(kwargs)
     method = normalise_method(method)
     spectral_options = resolve_spectral_request(calculate_spectral_uncertainty, spectral_uncertainty_options)
     mode_options = resolve_mode_request(calculate_mode_ambiguity, mode_ambiguity_options)
+    # Supplying option values does not turn either check on.
+    # If a check is requested, retain the full spectrum from before filtering.
     noise_options = [o for o in (spectral_options,mode_options) if o is not None]
     if noise_options and not return_metadata:
         raise ValueError('Enabled uncertainty diagnostics require return_metadata=True.')
@@ -498,7 +445,7 @@ def optimise_velocity(
             scales = options[key] if options is not None else None
             if scales is not None and len(scales)<3 and any(np.asarray(b)[2,0]<np.asarray(b)[2,1] for b in bnds_list):
                 raise ValueError('Joint diagnostics require three '+key+'.')
-    # Resolve and reject incompatible settings before opening worker processes.
+    # Reject incompatible settings before starting any fitting processes.
     legacy = dict(kwargs)
     for key, value in (("penalty_weight", penalty_weight),
                        ("pass_downsampling", pass_downsampling),
@@ -518,14 +465,15 @@ def optimise_velocity(
     if len(bnds_list) != len(measured_spectra):
         raise ValueError("One bounds tuple is required per spectrum.")
     if method == 'HNM':
-        # Validate all HNM settings before opening worker processes.
+        # Check all HNM options before starting fitting processes.
         from iwave.optimise_hnm import validate_hnm_setup
-        # A dummy bounds tuple validates shared settings even for empty batches.
+        # Use temporary limits to check common options even when there are no windows.
         for bounds in bnds_list if len(bnds_list) else [((-1, 1), (-1, 1), (1, 1))]:
             validate_hnm_setup(bounds, vel_indx, window_dims, res, fps,
                                gravity_waves_switch, turbulence_switch, hnm_options)
-        # Keep omitted keys omitted until each worker has its window bounds.
-        # Mixed fixed-/variable-depth batches must receive different defaults.
+        # Wait until each window reaches its fitting process before filling in missing
+        # defaults.
+        # Fixed-depth and unknown-depth windows need different default search settings.
         backend_arguments = {'hnm_options': deepcopy(hnm_options)}
     else:
         backend_arguments = dict(penalty_weight=de["penalty_weight"],
@@ -533,29 +481,31 @@ def optimise_velocity(
                                  gauss_width=de["gauss_width"],
                                  kwargs=de["scipy_options"])
 
-    idxs = range(len(measured_spectra))  # Pair with indices
-    # iter_args = generate_args(idxs)
+    # Keep the original window number with each fitting task.
+    idxs = range(len(measured_spectra))
 
-    results = [None] * len(idxs)  # Placeholder for results
+    results = [None] * len(idxs)  # Reserve space for one result per window.
     if CONCURRENCY is not None:
-        max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)  # never use more than the number of available cores
+        # Do not request more fitting processes than the available CPU count.
+        max_workers = max(min(CONCURRENCY, os.cpu_count()), 1)
     else:
         max_workers = None
-    # Initialize progress bar before submitting tasks
+    # Create the progress display before sending out the fits.
     progress_bar = tqdm(total=len(idxs), desc=desc, disable=not progress)
     
     for idx in idxs[::chunk_size]:
-        # select and read the current data block in one go
+        # Read and prepare this group of windows together.
         idx_sel = idxs[idx:idx + chunk_size]
         if noise_options and spectral_contexts is None:
             spectra_sel, contexts_sel = measured_spectra.get_with_spectral_context(slice(idx, idx+chunk_size))
         else:
             spectra_sel = measured_spectra[idx: idx + chunk_size]
             contexts_sel = spectral_contexts[idx:idx+chunk_size] if noise_options else [None]*len(spectra_sel)
-        # get bounds for this chunk (nonzero check now done in worker)
+        # Select the parameter limits for these windows; each fitting process checks for
+        # zero data.
         bnds_sel = bnds_list[idx: idx + chunk_size]
 
-        # Generate args for this chunk (handles both one-step and two-step via two_step_downsample parameter)
+        # Prepare the arguments for each window, including the requested DE fitting passes.
         args_sel = [
             dict(
                 measured_spectrum=measured_spectrum,
@@ -577,23 +527,27 @@ def optimise_velocity(
             ) for measured_spectrum, bnds, spectral_context in zip(spectra_sel, bnds_sel, contexts_sel)
         ]
 
+        # This HNM-only version starts and closes a set of fitting processes for each batch.
+        # The FFT and integrated versions instead reuse their processes between batches.
         with ProcessPoolExecutor(mp_context=ctx, max_workers=max_workers, initializer=silence_output) as executor:
             futures = {
                 executor.submit(
                     optimize_single_spectrum_velocity_unpack, input_args
                 ): idx for idx, input_args in zip(idx_sel, args_sel)
             }
-            # collect futures
+            # Collect completed fits as they finish.
             for future in as_completed(futures):
                 idx = futures[future]
-                results[idx] = future.result()  # Store result in the correct position
-                progress_bar.update(1)  # increase
+                # Put each result back at its original window number.
+                results[idx] = future.result()
+                progress_bar.update(1)  # Advance the progress display by one window.
     progress_bar.close()
 
-    # wrap results together
+    # Combine the per-window results into output arrays.
     optimal = np.array([
         [res[0], res[1], res[2]] if res is not None else [np.nan, np.nan, np.nan] for res in results
-    ]).reshape(-1, 3)  # vy, vx, d; also well-defined for empty input
+    # Return (vy, vx, depth), including correctly shaped empty results when needed.
+    ]).reshape(-1, 3)
     cost = np.array([res[3] if res is not None else np.nan for res in results])
     quality = np.array([res[4] if res is not None else np.nan for res in results])
 
@@ -619,53 +573,21 @@ def quality_calc(
     gravity_waves_switch, 
     turbulence_switch
 )-> float:
+    """Calculate agreement between the measured spectrum and the fitted model.
+
+    x contains (vy, vx, log(depth)). measured_spectrum is the measured power for
+    one window. vel_indx is depth-average / surface velocity; window_dims is
+    (frames, y, x), res is m/pixel, and fps is the analysed frame rate.
+    gauss_width and the two switches define the same model used for fitting.
+
+    Return q = 1 - 0.2*log10(cost_measured/cost_ideal). A perfect match gives 1,
+    but values are not limited to [0, 1]. A high score indicates spectral agreement,
+    not a measured velocity/depth error or proof that the chosen fit is unique.
     """
-    Calculates a quality metric for the optimisation based on the resemblance between the measured spectrum and the theoretical one.
-    The metric ranges from 0 (worst quality) to 1 (best quality).
+    depth = np.exp(x[2])    # Convert trial log(depth) back to depth in metres.
+    velocity = [x[0], x[1]]    # Trial velocity components, in y then x order.
 
-    Parameters
-    ----------
-    x : np.ndarray
-        Vector of optimised parameters (vy, vx, d).
-        
-    measured_spectrum : np.ndarray
-        measured and averaged 3D power spectra calculated with spectral.sliding_window_spectrum
-        dimensions [N_windows, Nt, Ny, Nx]
-
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-
-    res: float
-        image resolution (m/pxl)
-
-    fps: float
-        image acquisition rate (fps)
-    
-    gauss_width: float=1
-        width of the synthetic spectrum smoothing kernel.
-        gauss_width > 1 could be useful with very noisy spectra.
-
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-        
-    Returns
-    -------
-    quality : float
-        quality metric
-        
-    """
-    depth = np.exp(x[2])    # guessed depth
-    velocity = [x[0], x[1]]    # guessed velocity components
-
-    # calculate the synthetic spectrum based on the guessed velocity
+    # Build the model spectrum from the fitted velocity and depth.
     synthetic_spectrum = dispersion.intensity(
         velocity, depth, vel_indx,
         window_dims, res, fps, gauss_width,

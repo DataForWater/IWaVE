@@ -1,4 +1,8 @@
-"""Lazy data models for memory intensive processing."""
+"""Calculate image windows and spectra only when they are requested.
+
+The video stays in memory, but a request copies and processes only the selected
+windows. This avoids creating every window and spectrum at once.
+"""
 import numpy as np
 
 from typing import Optional, Union
@@ -8,53 +12,47 @@ from iwave import window, spectral
 
 class LazyWindowArray:
     def __init__(self, imgs, sliding_window_func, win_x, win_y, norm):
-        """Initialize a lazy array-like object for subwindows.
+        """Describe how to extract windows from the supplied images.
 
-        Parameters
-        ----------
-        imgs : np.ndarray
-            Images (3D numpy array)
-        sliding_window_func : callable
-            Function that extracts subwindows
-        win_x : np.ndarray
-            Sampling indexes for window extraction in x direction
-        win_y : np.ndarray
-            Sampling indexes for window extraction in y direction
-        norm : {'xy', 'time', None}
-            Whether to normalize the windows and in what way
+        imgs contains frames in (time, y, x) order. win_x and win_y give the pixel
+        positions for each window; sliding_window_func performs the extraction.
+        With norm='time', adjust each pixel using its average and standard deviation
+        over the whole clip. With norm='xy', adjust each frame using its spatial
+        average and standard deviation. None leaves image brightness unchanged.
         """
         self.imgs = imgs
         self.sliding_window_func = sliding_window_func
         self.win_x = win_x
         self.win_y = win_y
-        self.norm = norm  # Optional: normalization parameter
+        # Choose whether to adjust image brightness over time, over each frame, or not at
+        # all.
+        self.norm = norm
 
     def __repr__(self):
         return f"Interrogation windows dimensions (windows, time, y, x): {self.shape}"
 
     def __getitem__(self, idx):
-        """
-        On-the-fly generation of subwindows for the requested index or slice.
-        """
+        """Create only the windows selected by an integer index or slice."""
         if isinstance(idx, slice):
-            # Generate windows for a range of indices
+            # Select the requested range of windows.
             start, stop, step = idx.indices(len(self.win_x))
             win_x_sel = self.win_x[start:stop:step]
             win_y_sel = self.win_y[start:stop:step]
-            # indexed_imgs = self.imgs[start:stop:step]
         elif isinstance(idx, Union[int, np.integer]):
-            # Generate windows for a single index
+            # Select one window.
             win_x_sel = self.win_x[idx : idx + 1]
             win_y_sel = self.win_y[idx : idx + 1]
         else:
             raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
 
-        # Use the sliding_window_func to generate the windows
+        # Copy the requested parts of the images using the supplied extraction function.
         windows = self.sliding_window_func(self.imgs, win_x_sel, win_y_sel, swap_time_dim=True).astype(np.float64)
 
-        # Apply normalization if needed
+        # Calculate brightness averages and standard deviations from the full loaded video.
+        # Doing this separately for each shorter segment would give different spectra.
+        # Adjust brightness only when requested.
         if self.norm is not None:
-            # find relevant windows with mean != 0. Only those require normalization
+            # Keep windows with zero mean unchanged, as in the original calculation.
             nonzero_idx = np.where(np.mean(windows, axis=(1, 2, 3)) != 0)[0]
             if self.norm == "xy":
                 windows[nonzero_idx] = window.normalize(windows[nonzero_idx], mode="xy")
@@ -68,9 +66,7 @@ class LazyWindowArray:
             raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
 
     def __len__(self):
-        """
-        Return the total number of windows (or equivalent slices).
-        """
+        """Return the number of windows described by this object."""
         return len(self.win_x)
 
     @property
@@ -100,27 +96,25 @@ class LazySpectrumArray(object):
         self.threshold = threshold
 
     def __repr__(self):
-        """Return string representation showing spectrum dimensions."""
+        """Describe the number and dimensions of the spectra available."""
         return f"Spectrum dimensions (windows, ft, fy, fx): {self.shape}"
 
     def __getitem__(self, idx):
-        """
-        Generate on-the-fly spectra for subwindows for the requested index or slice.
-        """
+        """Calculate spectra only for the selected windows."""
 
-        # Use the sliding_window_func to generate the windows
+        # Copy the requested parts of the images using the supplied extraction function.
         if isinstance(idx, slice):
             windows_sel = self.windows[idx]
         else:
             windows_sel = self.windows[idx : idx + 1]
-        # now apply spectra on windows, reverse y-direction to positive upwards
+        # Reverse image y so positive y points upwards when calculating the spectrum.
         spectrum = spectral.sliding_window_spectrum(
-            windows_sel[:,:,::-1,:],  # reverse y-direction
+            windows_sel[:,:,::-1,:],  # Reverse the local image y direction.
             self.time_size,
             self.time_overlap,
         )
 
-        # preprocess
+        # Normalise the spectrum and remove values excluded by the filtering rules.
         spectrum = spectral.spectrum_preprocessing(
             spectrum,
             self.kt,
@@ -137,10 +131,12 @@ class LazySpectrumArray(object):
             raise TypeError(f"Invalid index type: {type(idx)}. Only int or slice is supported.")
 
     def get_with_spectral_context(self, idx):
-        """One FFT pass, retaining full normalized power before censoring.
+        """Calculate spectra once and also return the information needed for noise checks.
 
-        Ordinary __getitem__ is unchanged. Contexts exist only for an explicitly
-        enabled spectral diagnostic; no raw-cube cache persists on this object.
+        Keep the full normalised power before the fitting filters discard values.
+        Each returned dictionary also describes the time averaging. These dictionaries
+        are made for this request; the object does not keep a copy of all spectra.
+        Ordinary indexing still returns processed power only.
         """
         windows_sel = self.windows[idx] if isinstance(idx, slice) else self.windows[idx:idx+1]
         length = int(self.time_size)
@@ -151,8 +147,12 @@ class LazySpectrumArray(object):
         with np.errstate(divide='ignore', invalid='ignore'):
             normalized = raw / np.mean(raw, axis=(2,3), keepdims=True)
         normalized = np.nan_to_num(normalized)
+        # Keep a separate spectrum before filtering. The uncertainty calculation needs
+        # values that fitting will discard, and must account for the shared normalisation.
         processed = spectral.spectrum_preprocessing(raw, self.kt, self.ky, self.kx,
                               self.smax*3, spectrum_threshold=self.threshold)
+        # Count only complete time segments. Leftover frames do not add another spectrum.
+        # The effect of overlapping segments on uncertainty is handled later.
         count = (windows_sel.shape[1]-length)//(length-overlap)+1
         contexts = [dict(normalized_spectrum=normalized[i], n_averages=count,
                          time_size=length, time_overlap=overlap,
@@ -160,9 +160,7 @@ class LazySpectrumArray(object):
         return (processed, contexts) if isinstance(idx, slice) else (processed[0], contexts[0])
 
     def __len__(self):
-        """
-        Return the total number of windows of spectram
-        """
+        """Return the number of spectra described by this object."""
         return len(self.windows)
 
     @property

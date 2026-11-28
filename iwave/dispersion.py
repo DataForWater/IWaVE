@@ -15,47 +15,42 @@ def intensity(
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True
 ):
-    """
-    Create synthetic 3D spectrum based on tentative velocity and depth.
+    """Predict a window's power spectrum for a trial velocity and depth.
 
     Parameters
     ----------
-    velocity : [float, float]
-        velocity_y x velocity_x
-        tentative surface velocity components along y and x (m/s)
+    velocity : pair of floats
+        Trial surface velocity (vy, vx), in m/s.
     depth : float
-        tentative water depth (m)
+        Water depth, in metres.
     vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-    res: float
-        image resolution (m/pxl)
-    fps: float
-        image acquisition rate (fps)
-    gauss_width: float
-        width of the synthetic spectrum smoothing kernel
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
+        Depth-averaged velocity divided by surface velocity.
+    window_dims : three integers
+        Numbers of frames, y pixels and x pixels in the analysed window.
+    res : float
+        Image resolution, in metres per pixel.
+    fps : float
+        Frame rate of the analysed image sequence.
+    gauss_width : float
+        Width of the Gaussian around each predicted frequency, in rad/s,
+        using exp(-((frequency - prediction)/gauss_width)**2).
+    gravity_waves_switch, turbulence_switch : bool
+        Include waves and/or patterns carried by the flow.
 
     Returns
     -------
-    Intensities : np.ndarray
-        synthetic 3D power spectrum to be compared with measured spectrum
-
+    numpy.ndarray
+        Predicted power in (frequency, ky, kx) order, ready for comparison with
+        the measured spectrum.
     """
 
-    # calculate the wavenumber/frequency arrays
+    # Set the frequency and spatial-wavenumber axes for this window.
     kt, ky, kx = spectral.wave_numbers(window_dims, res, fps)
 
-    # calculate theoretical dispersion relation of gravity waves and turbulence-forced waves
+    # Predict the frequencies of waves and flow-carried patterns for the trial velocity.
     kt_gw, kt_turb = dispersion(ky, kx, velocity, depth, vel_indx)
 
-    # calculate the theoretical 3D spectrum intensity
+    # Build the predicted power spectrum around those frequencies.
     th_spectrum = theoretical_spectrum(
         kt_gw, kt_turb, kt, gauss_width,
         gravity_waves_switch, turbulence_switch
@@ -72,57 +67,39 @@ def dispersion(
         depth: float, 
         vel_indx: float
 ):
-    """
-    Calculate the frequency of gravity waves and floating particles according to tentative velocity and depth
+    """Predict frequencies for waves and for patterns carried by the flow.
 
-    Parameters
-    ----------
-    ky: np.ndarray
-        wavenumber array along the direction y
-    kx: np.ndarray
-        wavenumber array along the direction x
-    velocity : [float, float]
-        velocity_y x velocity_x
-        tentative surface velocity components along y and x (m/s)
-    depth : float
-        tentative water depth (m)
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
-    Returns
-    -------
-    kt_gw : np.ndarray
-        1 x N_y x N_x: theoretical frequency of gravity waves for each [k_y, k_x] combination
-    
-    kt_turb : np.ndarray
-        1 x N_y x N_x: theoretical frequency of turbulence-generated waves and/or floating particles for each [k_y, k_x] combination
-
+    ky and kx are the y and x wavenumber axes, in rad/m. velocity is (vy, vx)
+    in m/s; depth is in metres. vel_indx is depth-averaged / surface velocity.
+    Return (kt_gw, kt_turb), both in rad/s with shape (1, number_y, number_x).
+    The first describes gravity-capillary waves; the second describes flow-carried
+    patterns or particles.
     """
 
-    # create 2D wavenumber grid
+    # Make a grid containing every combination of x and y wavenumbers.
     kx, ky = np.meshgrid(kx, ky)
 
-    # transpose to 1 x N_y x N_x
+    # Add a length-one frequency axis so these arrays fit the spectrum dimensions.
     ky = np.expand_dims(ky, axis=0)
     kx = np.expand_dims(kx, axis=0)
 
-    # wavenumber modulus
+    # Calculate the magnitude of the spatial wavenumber.
     k_mod = np.sqrt(ky ** 2 + kx ** 2)  
 
-    # calculate the main terms of the dispersion relation
-    # Eq. (7), Dolcetti et al,. 2022
+    # Calculate the terms needed for the wave-frequency prediction.
+    # See Eq. (7), Dolcetti et al., 2022.
     beta = beta_calc(k_mod, depth, vel_indx)
 
-    # Eq. (3), Dolcetti et al., 2022
+    # See Eq. (3), Dolcetti et al., 2022.
     omega_a = omega_a_calc(ky, kx, velocity)
 
-    # Eq. (4), Dolcetti et al., 2022
+    # See Eq. (4), Dolcetti et al., 2022.
     omega_i = omega_i_calc(k_mod, depth)
 
-    # calculate the frequency of gravity-capillary waves, Eq. (6), Dolcetti et al., 2022
+    # Predict gravity-capillary wave frequencies: Eq. (6), Dolcetti et al., 2022.
     kt_gw = omega_gw_calc(beta, omega_a, omega_i)
 
-    #calculate the frequency of turbulence-generated waves and/or floating particles, Eq. (3), Dolcetti et al., 2022
+    # Predict frequencies of flow-carried patterns: Eq. (3), Dolcetti et al., 2022.
     kt_turb = omega_a
 
     return kt_gw, kt_turb
@@ -132,31 +109,19 @@ def beta_calc(
         depth: float,
         vel_indx: float
 ):
-    """
-    Calculate the beta term that represents the effect of the velocity variation along the vertical direction
+    """Calculate how a vertical velocity gradient changes the wave frequency.
 
-    Parameters
-    ----------
-    k_mod: np.ndarray
-        1 x N_y x N_x: wavenumber modulus
-    depth : float
-        tentative water depth (m)
-    vel_indx : float
-        surface velocity to depth-averaged-velocity index (-)
-
-    Returns
-    -------
-    beta : np.ndarray
-        1 x N_y x N_x: shear velocity term for the dispersion relation of gravity waves
-
+    k_mod is spatial-wavenumber magnitude in rad/m; depth is in metres.
+    vel_indx is depth-averaged velocity divided by surface velocity.
+    Return the dimensionless correction beta at each spatial wavenumber.
     """
 
-    # calculate shear rate coefficient of the equivalent linear velocity profile:
-    # vel(z) = vel_0 * ( m*(z/depth) + 1 - m)
+    # Find the slope of the equivalent linear velocity profile:
+    # vel(z) = vel_0 * (m*(z/depth) + 1 - m).
     m = 2 * (1 - vel_indx) 
 
-    # calculate beta forcing beta = 0 where k_mod = 0
-    # beta = (m / 2) * tanh(k_mod * depth) / (k_mod * depth)
+    # Calculate the velocity-profile correction; set it to zero at zero wavenumber.
+    # Away from zero, beta = (m / 2) * tanh(k_mod * depth) / (k_mod * depth).
     beta = np.divide(
         (m / 2) * np.tanh(k_mod * depth),
         k_mod * depth,
@@ -171,23 +136,10 @@ def omega_a_calc(
         kx: np.ndarray,
         velocity: Tuple[float, float]
 ):
-    """
-    Calculate the omega_a term of the dispersion relation, i.e., the frequency of turbulence-generated waves and/or floating particles
+    """Calculate the frequency change caused by movement with the flow.
 
-    Parameters
-    ----------
-    ky: np.ndarray
-        1 x N_y x N_x: wavenumber y-component
-    kx: np.ndarray
-        1 x N_y x N_x: wavenumber x-component
-    velocity : [float, float]
-        [velocity_y, velocity_x] tentative velocity components (m/s)
-
-    Returns
-    -------
-    omega_a : np.ndarray
-        1 x N_y x N_x: frequency of turbulence-generated waves and/or floating particles (rad/s)
-
+    ky and kx contain spatial wavenumbers in rad/m. velocity is (vy, vx) in m/s.
+    Return ky*vy + kx*vx, in rad/s, for each wavenumber pair.
     """
     omega_a = ky * velocity[0] + kx * velocity[1]
 
@@ -197,24 +149,13 @@ def omega_i_calc(
         k_mod: np.ndarray,
         depth: float
 ):
-    """
-    Calculate the omega_i term of the dispersion relation, i.e., the frequency of gravity-capillary waves in still water
+    """Calculate gravity-capillary wave frequencies in still water.
 
-    Parameters
-    ----------
-    k_mod: np.ndarray
-        1 x N_y x N_x: wavenumber modulus
-    depth : float
-        tentative water depth (m)
-
-    Returns
-    -------
-    omega_i : np.ndarray
-        1 x N_y x N_x: frequency of gravity-capillary waves in still water (rad/s)
-
+    k_mod is wavenumber magnitude in rad/m and depth is in metres.
+    Return the intrinsic wave frequency, in rad/s.
     """
 
-    # calculate the frequency of capillary-gravity waves
+    # Predict the gravity-capillary wave frequency in still water.
     omega_i = np.sqrt(
             (const.g + const.surf_tens / const.density * k_mod ** 2) * k_mod * np.tanh(k_mod * depth))
     
@@ -225,23 +166,11 @@ def omega_gw_calc(
         omega_a,
         omega_i,
 ):
-    """
-    Calculate the frequency of gravity-capillary waves considering the effects of the flow velocity.
+    """Combine still-water frequency with flow and velocity-profile effects.
 
-    Parameters
-    ----------
-    omega_i: np.ndarray
-        N_y x N_x: frequency in still water
-    omega_a: np.ndarray
-        N_y x N_x: flow velocity effect
-    beta: np.ndarray
-        N_y x N_x: velocity-profile effect
-
-    Returns
-    -------
-    kt_gw : np.ndarray
-        N_y x N_x: frequency of gravity-capillary waves with flow velocity (rad/s)
-
+    omega_i is the still-water wave frequency; omega_a is the change due to
+    movement with the flow, both in rad/s. beta describes the vertical velocity
+    profile. Return the predicted moving-water wave frequency in rad/s.
     """
 
     kt_gw = (1 - beta) * omega_a + np.sqrt(
@@ -259,41 +188,21 @@ def theoretical_spectrum(
     gravity_waves_switch: bool=True,
     turbulence_switch: bool=True
 ):
-    """
-    Assemble theoretical 3D spectrum with Gaussian width.
+    """Build power around the predicted wave and flow-carried frequencies.
 
-    Parameters
-    ----------
-    kt_gw: np.ndarray
-        1 x N_y x N_x
-        frequency of gravity-capillary waves (rad/s)
-    kt_turb: np.ndarray
-        1 x N_y x N_x
-        frequency of turbulence-generated waves and/or floating particles (rad/s)
-    kt : np.ndarray
-        frequency array (rad/s)
-    gauss_width: float
-        width of the synthetic spectrum smoothing kernel
-    gravity_waves_switch: bool=True
-        if True, gravity waves are modelled
-        if False, gravity waves are NOT modelled
-    turbulence_switch: bool=True
-        if True, turbulence-generated patterns and/or floating particles are modelled
-        if False, turbulence-generated patterns and/or floating particles are NOT modelled
-
-    Returns
-    -------
-    theor_spectrum : np.ndarray
-        synthetic 3D power spectrum to be compared with measured spectrum
-
+    kt_gw and kt_turb give the two predictions in rad/s; kt is the measured
+    frequency axis. gauss_width sets Gaussian width using
+    exp(-((kt - prediction)/gauss_width)**2). Each switch enables its own part.
+    Where both are enabled, keep the larger power value, not their sum.
+    Return power in (frequency, ky, kx) order.
     """
 
-    # Normal float64 models need no dense coordinate tiles. Since exp is
-    # monotone, max(exp(-a), exp(-b)) = exp(-min(a, b)): evaluate ONE Gaussian
-    # per bin, with the original NumExpr exponent arithmetic and full tails.
-    # This is stateless: no geometry/data cache, reusable output, or diagnostic
-    # sharing. Keep a general fallback for other dtypes/shapes and extreme or
-    # nonfinite inputs, including legacy NaN propagation / overflow behaviour.
+    # For ordinary float64 inputs, avoid copying each coordinate across the whole spectrum.
+    # The larger of two Gaussian values comes from the smaller squared distance.
+    # Calculate only that value, using the same exponent formula and keeping its tails.
+    # This path does not save data or results for later windows.
+    # Use the general calculation for other array types, shapes, or extreme values.
+    # That also preserves the original handling of undefined values and overflow.
     if (isinstance(kt, np.ndarray) and kt.ndim == 1 and kt.size
             and isinstance(kt_gw, np.ndarray) and kt_gw.ndim == 3
             and isinstance(kt_turb, np.ndarray) and kt_turb.shape == kt_gw.shape
@@ -315,23 +224,23 @@ def theoretical_spectrum(
             return ne.evaluate('exp(-(frequency-kt_turb)**2 / gauss_width**2)', order='C')
         return np.zeros((len(kt), *kt_gw.shape[1:]), dtype=np.float64)
 
-    # build 3D kt_gw matrix with dimensions N_t x N_y x N_x
+    # Repeat the predicted wave frequency along the measured frequency axis.
     kt_gw = np.tile(kt_gw, (len(kt), 1, 1))
     
-    # build 3D kt_turb matrix with dimensions N_t x N_y x N_x
+    # Repeat the predicted frequency of flow-carried patterns along that same axis.
     kt_turb = np.tile(kt_turb, (len(kt), 1, 1))  
 
-    # build 3D kt matrix with dimensions N_t x N_y x N_x
+    # Repeat the measured frequency axis across all spatial positions in the spectrum.
     kt = np.expand_dims(kt, axis=(1, 2))
     kt = np.tile(kt, (1, kt_gw.shape[-2], kt_gw.shape[-1]))
 
-    # build 3D spectrum of gravity waves
+    # Build the gravity-wave part of the predicted spectrum.
     th_spectrum_gw = gauss_spectrum_calc(kt_gw, kt, gauss_width, gravity_waves_switch)
     
-    # build 3D spectrum of turbulence-generated waves and/or floating particles
+    # Build the part for patterns or particles carried by the flow.
     th_spectrum_turb = gauss_spectrum_calc(kt_turb, kt, gauss_width, turbulence_switch)
 
-    # assemble spectra
+    # At each spectrum position, keep the larger of the two predicted powers.
     th_spectrum = np.maximum(th_spectrum_gw, th_spectrum_turb)
 
     return th_spectrum
@@ -344,28 +253,14 @@ def gauss_spectrum_calc(
         gauss_width: float,
         switch: bool = True,
 ):
+    """Build one Gaussian-shaped part of the predicted power spectrum.
+
+    kt_theory gives its predicted frequency; kt gives the measured frequencies.
+    Both use rad/s. gauss_width appears in
+    exp(-((kt - kt_theory)/gauss_width)**2). If switch is False, return zeros.
+    Otherwise return the power at each supplied frequency and spatial wavenumber.
     """
-    Create branch of the theoretical 3D spectrum with Gaussian width based on input theoretical standard deviation.
-
-    Parameters
-    ----------
-    kt_theory: np.ndarray
-        1 x N_y x N_x
-        theoretical frequency of (gravity waves/turbulence waves) (rad/s)
-    kt : np.ndarray
-        frequency array (rad/s)
-    gauss_width: float
-        width of the synthetic spectrum smoothing kernel
-    switch: bool=True
-        if False, returns empty spectrum
-
-    Returns
-    -------
-    gauss_spectrum : np.ndarray
-        synthetic 3D power spectrum to be compared with measured spectrum
-
-    """
-    # builds 3D spectrum intensity with Gaussian smoothing around the theoretical dispersion relation
+    # Give the predicted frequency line a Gaussian width, rather than zero thickness.
     if switch:
         dkt = kt - kt_theory
         gauss_spectrum = ne.evaluate('exp(-dkt**2 / gauss_width ** 2)')
@@ -383,42 +278,22 @@ def spectrum_downsample(
         window_dims : Tuple[int, int, int],
         downsample: int,
 ) -> Tuple[np.ndarray, float, float, Tuple[int, int, int]]:
-    """
-    trims the measured spectrum reducing its dimensions [1] and [2] bny a factor "downsample"
+    """Keep the central spatial-wavenumber region for a reduced fitting pass.
 
-    Parameters
-    ----------
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-    res: float
-        image resolution (m/pxl)
-    fps: float
-        image acquisition rate (fps)
-    window_dims: [int, int, int]
-        [dim_t, dim_y, dim_x] window dimensions
-    downsample: int
-        downsampling rate. If downsample > 1, then the spectrum is trimmed using a factor of `downsample`.
-        This removes the high-wavenumber tails of the spectrum, which corresponds to downsampling the images spatially
-        using a stride equal to `downsample`.
-
-    Returns
-    -------
-    spectrum_trimmed : np.ndarray
-        spectrum, trimmed by downsample
-    res : float
-        resolution (unchanged)
-    fps : float
-        image acquisition rate (fps, unchanged)
-    window_dims : [int, int, int]
-        downsampled window dimensions
+    measured_spectrum is in (frequency, ky, kx) order. downsample sets how much
+    to reduce its two spatial dimensions: values above one remove the outer,
+    high-wavenumber parts. This is a crop of the spectrum, not averaging pixels.
+    Return the cropped spectrum, res, fps, and the adjusted window_dims.
+    res (m/pixel) and fps are returned unchanged; window_dims contains
+    (frame count, y pixels, x pixels) for the reduced calculation.
     """
     kt_old, ky_old, kx_old = spectral.wave_numbers(window_dims, res, fps)
     res = res*downsample
     fps = fps
     window_dims = [window_dims[0], np.int64(np.ceil(window_dims[1]/downsample)), np.int64(np.ceil(window_dims[2]/downsample))]
     kt_new, ky_new, kx_new = spectral.wave_numbers(window_dims, res, fps)
-    # this could probably be simplified, but it is to ensure that the trimmed wavenumber arrays are correctly
-    # aligned with the untrimmed one, since they will be calculated only based on res and fps in the following
+    # Choose matching start and end positions on each wavenumber axis.
+    # Later calculations must reconstruct axes aligned with the original spectrum.
     kx_indx_first = np.where(np.isclose(kx_old, np.min(kx_new), atol = 1e-06))[0][0]
     kx_indx_last = np.where(np.isclose(kx_old, np.max(kx_new), atol = 1e-06))[0][0]
     kx_indx = np.arange(kx_indx_first, kx_indx_last + 1)
@@ -430,6 +305,6 @@ def spectrum_downsample(
     kt_indx = np.arange(kt_indx_first, kt_indx_last + 1)
     if len(kx_indx) != len(kx_new) or len(ky_indx) != len(ky_new) or len(kt_indx) != len(kt_new):
         raise ValueError("The dimensions of the trimmed array do not match the target after resampling")
-    # trim the spectrum
+    # Keep only the selected central part of the spectrum.
     trimmed_spectrum = measured_spectrum[np.ix_(kt_indx,ky_indx,kx_indx)]
     return trimmed_spectrum, res, fps, window_dims

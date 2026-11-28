@@ -1,8 +1,9 @@
-"""Image/video I/O, spectral displays, transects and velocity-vector plots.
+"""Read images and video, plot results, and organise optional uncertainty checks.
 
-Plotting, native result containers and numerical curvature helpers live here.
-Pixel positions are the default for spatial results; metric positions require
-the image resolution calibration. Noise modelling remains in spectral.py.
+Spatial plots use image pixels unless metres are requested. Conversion to
+metres uses the supplied image resolution, not surveyed river coordinates.
+This module also stores result objects and calculates how a fitting score
+changes near an estimate. spectral.py contains the noise assumptions.
 """
 
 import glob
@@ -23,24 +24,12 @@ except:
 
 
 def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1):
-    """Read video frames from file
+    """Read selected video frames into a greyscale image array.
 
-    Parameters
-    ----------
-    fn : str
-        Path to the video file.
-    start_frame : int, optional
-        The starting frame number from which to begin extraction (default is 0).
-    end_frame : int, optional
-        The frame number at which to stop extraction (default is 4).
-    stride : int, optional
-        lower the sampling rate by this factor. Default 1.
-
-    Returns
-    -------
-    np.ndarray
-        3D array with images stacked over first dimension
-
+    fn is the video path. start_frame is included; end_frame is excluded.
+    stride=1 keeps every frame; stride=2 keeps every other frame, and so on.
+    Return images in (frame, y, x) order. This function does not return or adjust
+    a frame rate; the caller must use the rate of the retained frames.
     """
     try:
         import cv2
@@ -53,34 +42,25 @@ def get_video(fn: str, start_frame: int = 0, end_frame: int = 4, stride: int = 1
     cap = cv2.VideoCapture(fn)
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    # retrieve images from start to end frame
+    # Read the selected video frames.
     return np.stack(
         [cv2.cvtColor(cap.read()[-1][::stride, ::stride], cv2.COLOR_BGR2GRAY) for _ in tqdm(range(end_frame - start_frame))]
     )
     
 
 def get_imgs(path: str, wildcard: Optional[str] = None):
-    """Read frames from images.
+    """Read greyscale image files from a directory.
 
-    Parameters
-    ----------
-    path : str
-        Directory path where image files are stored.
-    wildcard : Optional[str], default: None
-        Optional wildcard pattern to match specific files within the directory.
-
-    Returns
-    -------
-    np.ndarray
-        3D array with images stacked over first dimension
+    path is the directory and wildcard optionally restricts the filenames.
+    Return the sorted image sequence in (frame, y, x) order.
     """
-    # list all files in folder
+    # Find the image files to read.
     if wildcard:
         path = os.path.join(path, wildcard)
 
     fns = glob.glob(path)
     fns.sort()
-    # read in memory as black-and-white
+    # Load each image in greyscale.
     return np.stack(
         [np.array(Image.open(fn).convert('L')) for fn in tqdm(fns)])
 
@@ -96,33 +76,14 @@ def plot_spectrum(
     ax: Optional[matplotlib.axes.Axes] = None,
     **kwargs
 ):
-    """Plot 2D slice of spectrum of a window.
+    """Plot one two-dimensional slice through a window's power spectrum.
 
-    Parameters
-    ----------
-    spectrum : np.ndarray
-        The spectrum data array.
-    kt : np.ndarray
-        Array of wave numbers or time indices corresponding to the first (time) dimension.
-    ky : np.ndarray
-        Array of wave numbers corresponding to the second (x) dimension.
-    kx : np.ndarray
-        Array of wave numbers corresponding to the third (y) dimension.
-    dim : Literal["x", "y", "time"]
-        Dimension along which to slice the spectrum for plotting ("x", "y", or "time").
-    slice : int, optional
-        Index along the specified dimension to slice the spectrum. If not provided the middle index is used.
-    log : bool, optional
-        If True (default), spectrum is plotted on log scale.
-    ax : matplotlib.axes.Axes, optional
-        Matplotlib Axes object to plot on. If None, a new Axes object is created.
-    kwargs : dict
-        Additional arguments passed to the plotting function `matplotlib.pyplot.pcolormesh`.
-
-    Returns
-    -------
-    matplotlib.collections.QuadMesh
-        matplotlib handle to mesh plot
+    spectrum is in (frequency, ky, kx) order. kt is angular frequency in rad/s;
+    ky and kx are spatial wavenumbers in rad/m. dim selects the dimension held
+    fixed: 'time', 'y' or 'x'. slice selects its index, or the middle if omitted.
+    log=True uses a logarithmic colour scale. ax selects a Matplotlib plot area;
+    when omitted, create one. Forward kwargs to pcolormesh for colour and style.
+    Return the Matplotlib QuadMesh object, which can be used for a colour bar.
     """
     if ax is None:
         ax = plt.axes()
@@ -134,7 +95,7 @@ def plot_spectrum(
             yvals = ky
             slice_vals = kx
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-1] // 2
             imvals = spectrum[:, :, slice]
         case "y":
@@ -144,7 +105,7 @@ def plot_spectrum(
             yvals = kx
             slice_vals = ky
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-2] // 2
             imvals = spectrum[:, slice, :]
         case "time":
@@ -154,7 +115,7 @@ def plot_spectrum(
             yvals = kx
             slice_vals = kt
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-3] // 2
             imvals = spectrum[slice, :]
         case _:
@@ -181,37 +142,16 @@ def plot_spectrum_fitted(
     ax: Optional[matplotlib.axes.Axes] = None,
     **kwargs
 ):
-    """Plot 2D slice of spectrum of a window.
+    """Plot a spectrum slice together with the supplied predicted frequency lines.
 
-    Parameters
-    ----------
-    spectrum : np.ndarray
-        The spectrum data array.
-    kt_waves_theory : np.ndarray
-        Theoretical frequency of gravity waves according to optimised velocity vector.
-    kt_advected_theory : np.ndarray
-        Theoretical frequency of turbulence-driven waves according to optimised velocity vector.
-    kt : np.ndarray
-        Array of wave numbers or time indices corresponding to the first (time) dimension.
-    ky : np.ndarray
-        Array of wave numbers corresponding to the second (x) dimension.
-    kx : np.ndarray
-        Array of wave numbers corresponding to the third (y) dimension.
-    dim : Literal["x", "y", "time"]
-        Dimension along which to slice the spectrum for plotting ("x", "y", or "time").
-    slice : int, optional
-        Index along the specified dimension to slice the spectrum. If not provided the middle index is used.
-    log : bool, optional
-        If True (default), spectrum is plotted on log scale.
-    ax : matplotlib.axes.Axes, optional
-        Matplotlib Axes object to plot on. If None, a new Axes object is created.
-    kwargs : dict
-        Additional arguments passed to the plotting function `matplotlib.pyplot.pcolormesh`.
-
-    Returns
-    -------
-    matplotlib.collections.QuadMesh
-        matplotlib handle to mesh plot
+    spectrum is in (frequency, ky, kx) order. kt_waves_theory and
+    kt_advected_theory contain predictions for waves and flow-carried patterns.
+    kt is angular frequency in rad/s; ky and kx are wavenumbers in rad/m.
+    dim and slice choose the fixed dimension and its index, as in plot_spectrum.
+    The middle slice is used if slice is omitted. log selects a logarithmic colour
+    scale; ax chooses an existing plot area. Forward kwargs to pcolormesh.
+    Return the Matplotlib QuadMesh object. This function does not fit parameters;
+    the caller supplies the lines to draw.
     """
     if ax is None:
         ax = plt.axes()
@@ -223,7 +163,7 @@ def plot_spectrum_fitted(
             yvals = ky
             slice_vals = kx
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-1] // 2
             imvals = spectrum[:, :, slice]
             linevals_waves = np.squeeze(kt_waves_theory[0,:,slice])
@@ -235,7 +175,7 @@ def plot_spectrum_fitted(
             yvals = kx
             slice_vals = ky
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-2] // 2
             imvals = spectrum[:, slice, :]
             linevals_waves = np.squeeze(kt_waves_theory[0,slice,:])
@@ -247,7 +187,7 @@ def plot_spectrum_fitted(
             yvals = kx
             slice_vals = kt
             if slice is None:
-                # define middle of dimension
+                # Use the middle slice when no slice number was supplied.
                 slice = spectrum.shape[-3] // 2
             imvals = spectrum[slice, :]
         case _:
@@ -263,9 +203,9 @@ def plot_spectrum_fitted(
     ax.set_ylim([0, np.max(xvals)])
     return p
 
-# === Spatial result plots (formerly plotting.py) ===
-# A transect is just a line of existing windows, not another fit. A column
-# varies y; a row varies x. Panels show vx, vy, optional depth, then quality.
+# Plots of velocity and depth across the image.
+# Plot existing results along one row or column of windows; do not fit again.
+# A column follows y; a row follows x. Show vx, vy, optional depth, then quality.
 from numbers import Integral
 
 
@@ -276,15 +216,15 @@ def _boolean(value, name):
 
 
 def _shared_legend(figure, axes):
-    """Keep one legend in a reserved side area, never over the measurements.
+    """Place one shared legend beside the plots, not over the measurements.
 
-    Each panel can contain the same strategy/status labels. Collect them once
-    for the whole figure. Measuring the rendered legend lets long labels or
-    several overlaid strategies get enough space without squeezing the data.
+    Collect repeated labels only once. Measure the legend so long labels or
+    several overlaid results receive enough space without shrinking the plots
+    unnecessarily.
     """
     handles, labels, seen = [], [], set()
     for ax in axes:
-        # Also remove panel legends if these axes came from an earlier version.
+        # Remove old legends from individual panels if the axes have been reused.
         old = ax.get_legend()
         if old is not None:
             old.remove()
@@ -294,8 +234,8 @@ def _shared_legend(figure, axes):
                 handles.append(handle)
                 labels.append(label)
                 seen.add(label)
-    # Replace only the shared legend owned by this function. Repeated overlays
-    # must not accumulate new legends on top of the previous ones.
+    # Replace the legend created by this function, rather than adding another one.
+    # This keeps repeated calls from drawing several legends in the same place.
     old = getattr(figure, '_iwave_transect_legend', None)
     if old is not None:
         old.remove()
@@ -310,8 +250,8 @@ def _shared_legend(figure, axes):
     box = legend.get_window_extent()
     legend_width, legend_height = box.width / figure.dpi, box.height / figure.dpi
     width, height = figure.get_size_inches()
-    # Keep at least 4.8 inches for the actual panels and a small gap before the
-    # legend. Grow rather than clip if many strategies produce a tall legend.
+    # Leave at least 4.8 inches for the plots, plus a gap before the legend.
+    # Make the figure taller if the legend needs more room.
     width = max(width, 4.8 + legend_width + .4)
     height = max(height, legend_height + .6)
     figure.set_size_inches(width, height, forward=True)
@@ -322,55 +262,53 @@ def _shared_legend(figure, axes):
 def plot_transect(iw, *, row=None, column=None, include_depth=None,
                    show_uncertainty=True, show_modes=True, distance_units='pixels',
                    axes=None, label=None, color=None):
-    """Plot a selected grid row OR column, with local bars and observed rivals.
+    """Plot existing velocity, optional depth, and quality along a row or column.
 
     Parameters
     ----------
-    row, column : nonnegative integer, exactly one required
-        Zero-based WINDOW index, not a pixel coordinate. For a field of shape
-        (13, 1), column=0 plots all thirteen windows; row=0 plots just one.
-    include_depth : None or Boolean
-        None (default) automatically includes depth only if the latest fit
-        reconstructed it. False hides it. True requests it explicitly, but
-        raises an error for fixed-depth fits rather than implying a supplied
-        depth was measured. A depth panel may have no bars if its checks fail.
-    show_uncertainty : Boolean
-        Draw only accepted component bounds. Missing/rejected bounds are not
-        zero uncertainty. Overall uncertainty.valid is not used as a blanket
-        filter because velocity bounds may pass when depth fails.
-    show_modes : Boolean
-        Show observed alternative solutions and selected-point ambiguity flags.
-        Rivals are separate points, not extensions of the selected error bar.
-        Their own bounds are currently unavailable; no new calculations run.
-    distance_units : 'm', 'pixels' or 'index'
-        'pixels' is the default. 'm' multiplies stored window-centre coordinates by resolution.
-        Coordinates retain the analysed/cropped image's origin; they are not
-        automatically shifted to zero or converted to surveyed river positions.
-    axes : sequence of 3 or 4 Matplotlib axes, optional
-        Supply the returned axes again to overlay another strategy. The panel
-        count must agree (two velocities, optional reconstructed depth, quality).
-        One shared legend is placed in reserved space to the right of all data
-        panels. Labels are deduplicated; space is remeasured after each overlay.
+    row, column : nonnegative integer
+        Supply exactly one window index, counted from zero, not a pixel position.
+        For 13 rows and one column, column=0 selects all 13 windows; row=0 selects
+        just the first window.
+    include_depth : None or bool
+        None includes depth only if it was fitted. False hides it. True requests
+        it, but raises an error when depth was supplied rather than measured.
+    show_uncertainty : bool
+        Draw accepted lower/upper bounds for each parameter. A depth check can
+        fail while velocity bounds remain usable. Missing bounds do not mean
+        zero uncertainty.
+    show_modes : bool
+        Draw other solutions already found by fitting. Their own bounds have
+        not been calculated, so do not attach the selected fit's bars to them.
+    distance_units : 'pixels', 'm' or 'index'
+        Choose image pixels (default), metres from image resolution, or window
+        number. Image coordinates keep the analysed image's origin; they are
+        not automatically converted to surveyed river positions.
+    axes : sequence of Matplotlib axes, optional
+        Reuse returned axes to compare another method on the same plots.
+        Both calls must have the same number of panels: vx, vy, optional depth,
+        and quality. A shared legend is placed to the right.
     label, color : optional
-        Series name and Matplotlib color, useful when comparing strategies.
+        Choose the name and colour of the results being added.
 
     Returns
     -------
     figure, axes
-        axes is always a flat NumPy array, in vx, vy[, depth], quality order. This function
-        never calls show(): use plt.show() once you have added all strategies.
+        The figure and a flat array of plot areas, in vx, vy, optional depth,
+        quality order. Call plt.show() after adding all results.
 
-    Interpretation
-    --------------
-    Filled circles: successful selected fits with accepted bounds (or bars
-    disabled). Open circles: successful fits without accepted bounds. Crosses:
-    failed fits. Red rings: an observed competitor. Unassessed ambiguity has
-    no special selected-point marker (its result flag is still None).
-    Rivals use red diamonds when competitive,
-    grey plus signs when separated, grey triangles when comparison unavailable.
-    Local bars condition on the selected basin and noise model; they are not
-    calibrated global confidence intervals. No rival/marker does not prove
-    uniqueness outside the explored endpoints.
+    Reading the symbols
+    -------------------
+    Filled circles are successful fits with accepted bounds, or with bars hidden.
+    Open circles are successful fits without accepted bounds. Crosses are failed
+    fits. A red ring means another solution was competitive; no ring does not
+    prove uniqueness. Other solutions use red diamonds when competitive, grey
+    plus signs when clearly separated on the assumed noise scale, and grey
+    triangles when the comparison could not be made.
+
+    The bars describe noise effects near the chosen fit under the assumed model.
+    They are not a complete, independently calibrated error budget. This plot
+    uses existing results only; it does not run more fits or uncertainty checks.
     """
     import matplotlib.pyplot as plt
     from matplotlib.axes import Axes
@@ -449,7 +387,7 @@ def plot_transect(iw, *, row=None, column=None, include_depth=None,
     prefix = f'{label}: ' if label else ''
 
     for ax, name in zip(axes, names):
-        # Avoid duplicate legend entries when there are many windows/rivals.
+        # Show each legend label only once, even when it appears at many windows.
         seen = set(ax.get_legend_handles_labels()[1])
         def legend(text):
             text = prefix + text
@@ -461,9 +399,9 @@ def plot_transect(iw, *, row=None, column=None, include_depth=None,
         y = np.asarray(values[name][selector], dtype=float)
         finite = np.isfinite(y)
         ok = successful & finite
-        # Quality is an existing fit score, not another reconstructed physical
-        # parameter. Show it along the same transect, without uncertainty bars
-        # or invented quality values for alternative solutions.
+        # Quality describes agreement with the fitted spectrum; it is not velocity or depth.
+        # Plot it along the same line of windows, without uncertainty bars.
+        # Do not assign quality scores to other solutions unless they were calculated.
         if name == 'quality':
             ax.plot(position, np.where(ok, y, np.nan), '-o', color=color,
                     label=legend('selected fit'), ms=4)
@@ -483,7 +421,7 @@ def plot_transect(iw, *, row=None, column=None, include_depth=None,
         lower, upper = y - endpoints[:, 0], endpoints[:, 1] - y
         has_bounds = (ok & np.isfinite(endpoints).all(axis=1)
                       & (lower >= 0) & (upper >= 0))
-        # A failed fit breaks the connecting line, instead of appearing reliable.
+        # Break the line at a failed fit so it is not presented as a reliable estimate.
         ax.plot(position, np.where(ok, y, np.nan), '-', color=color, alpha=.55)
         filled = ok if not show_uncertainty else has_bounds
         if filled.any():
@@ -534,11 +472,11 @@ def plot_transect(iw, *, row=None, column=None, include_depth=None,
 
 
 def img_windows_norm(img_windows):
-    """Normalize a stack over time, replacing undefined values with zero.
+    """Adjust each pixel using its mean and standard deviation over time.
 
-    This small useful helper was moved from the old plots.py demonstration.
-    Existing io.plot_spectrum remains the supported spectral plot; the broken
-    standalone demo with undefined names/hard-coded geometry is not retained.
+    Replace NaN (not-a-number) and infinite results with zero. For example,
+    a constant pixel gives 0/0 before this cleanup.
+    This utility was moved from the earlier plots.py example.
     """
     import numpy as np
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -549,15 +487,17 @@ def img_windows_norm(img_windows):
 def plot_velocimetry(iw, ax=None, *, validate_vectors=True,
                      distance_units='pixels', color='C0',
                      ambiguous_color='tab:red', **kwargs):
-    """Show velocity arrows at window centres, highlighting known ambiguity.
+    """Plot the fitted velocities as arrows at window centres.
 
-    Pixels are the default POSITION units, matching imshow. Set distance_units
-    to 'm' for calibrated image positions. Velocity components stay in m/s.
-    By default failed fits are left out; False includes finite failed vectors.
-    Nonfinite values are always omitted. Red means a known competing solution;
-    unknown ambiguity receives the normal colour, not a misleading warning mark.
-    The returned Quiver has per-arrow face colours and retains ordinary quiver
-    keywords (scale, width, angles, etc.). Both colours must be single colours.
+    Positions use pixels by default; distance_units='m' converts them using image
+    resolution. Velocity components remain in m/s in either case.
+    validate_vectors=True omits failed fits; False also shows finite failed fits.
+    Always omit undefined velocities. Red marks a known competing solution;
+    unknown competition uses the normal colour, not a warning colour.
+
+    Return a Matplotlib Quiver object. Standard arrow options such as scale,
+    width and angles are passed through. Base and ambiguity colours must each
+    be a single colour. This function displays existing results without refitting.
     """
     from matplotlib.colors import to_rgba
     validate_vectors = _boolean(validate_vectors, 'validate_vectors')
@@ -591,7 +531,7 @@ def plot_velocimetry(iw, ax=None, *, validate_vectors=True,
     if ax is None:
         _, ax = plt.subplots()
     if not keep.any():
-        # Autoscaling an empty arrow field has no meaningful average length.
+        # Do not ask Matplotlib to choose arrow sizes when there are no arrows.
         kwargs.setdefault('scale', 1.)
     arrows = ax.quiver(X[keep], Y[keep], vx[keep], vy[keep],
                        color=colours[keep], **kwargs)
@@ -601,22 +541,22 @@ def plot_velocimetry(iw, ax=None, *, validate_vectors=True,
 
 
 # ================================================================
-# Native result containers: simple field bounds, flags and rivals.
-# Arrays use [row, column]; bounds add [lower, upper] on the last axis.
-# Missing bounds are NaN; detailed per-window dictionaries stay in .details.
+# Result objects: parameter bounds, success flags, and other solutions found.
+# Use [row, column] to select a window; bounds also have [lower, upper].
+# NaN means no bound is available. More information is kept in .details.
 # ================================================================
 from dataclasses import dataclass, field
 
 
 @dataclass(eq=False)
 class AlternativeEstimate:
-    """One other solution reached by the existing optimizer.
+    """Store another solution reached during the existing search.
 
-    Its location is known, but the present algorithm has NOT computed its own
-    local uncertainty. Bounds and uncertainty-validity therefore stay None.
-    ambiguous_solution says whether its score competes with the selected fit:
-    True = competitive, False = separated on the approximate noise scale,
-    None = comparison unavailable. It is not a probability.
+    Its parameter values are known, but its own uncertainty bounds have not
+    been calculated. Those bounds and their validity flags therefore stay None.
+    ambiguous_solution is True if its score is competitive with the chosen fit,
+    False if separated on the approximate noise scale, and None if no comparison
+    was possible. These flags are not probabilities.
     """
     vx: float
     vy: float
@@ -630,24 +570,20 @@ class AlternativeEstimate:
 
 
 class SpectralUncertainty:
-    """Accepted local bounds and simple flags for the selected solution.
+    """Store accepted bounds and flags for the selected fit at each window.
 
-    vx_bounds, vy_bounds, depth_bounds : arrays, field_shape + (2,)
-        Lower/upper endpoints in m/s, m/s and metres respectively. Depth bounds
-        may be asymmetric. A fixed depth has no estimated uncertainty bounds.
-    valid : Boolean array, field_shape
-        All reconstructed parameters passed the local interval checks. One
-        failed depth check can make this False while velocity bounds remain
-        usable: plot each component's finite bounds, not only valid windows.
-    ambiguous_solution : object array, field_shape
-        True, False or None, copied from the independent mode assessment.
-        None means unassessed; it must not be interpreted as False.
-    details : object array, field_shape
-        Full per-window dictionaries: standard errors, covariance, reasons for
-        rejection, provisional intervals, noise assumptions and other checks.
+    vx_bounds, vy_bounds and depth_bounds contain [lower, upper] endpoints in
+    m/s, m/s and metres. Their shape is (rows, columns, 2). Depth bounds can be
+    uneven around the estimate; no depth bounds are calculated for supplied depth.
+    valid is True only if every fitted parameter passed its bound checks.
+    Velocity bounds can still be usable if the depth check failed.
+    ambiguous_solution copies the separate competition flag: True, False or None.
+    None means unknown, not False. details holds the full dictionaries, including
+    error estimates, how those errors vary together (covariance), rejected bounds,
+    noise assumptions and reasons for rejection.
 
-    These are local noise-sensitivity intervals, not calibrated total physical
-    uncertainty. They condition on the selected basin, even if a rival exists.
+    These bounds describe the chosen fit under the assumed spectral noise.
+    They do not cover all physical errors or a jump to another solution.
     """
     vx_bounds: np.ndarray
     vy_bounds: np.ndarray
@@ -670,7 +606,7 @@ class SpectralUncertainty:
                 'use vx_bounds, vy_bounds, depth_bounds and details)')
 
     def _set_window(self, index, record, ambiguous_solution):
-        """Fill one output cell while IWaVE assembles the fitted field."""
+        """Store one window's bounds and checks while Iwave collects the full result field."""
         self.details[index] = record
         self.valid[index] = record['valid']
         self.ambiguous_solution[index] = ambiguous_solution
@@ -681,23 +617,19 @@ class SpectralUncertainty:
 
 
 class ModeAmbiguity:
-    """Observed alternative estimates and a three-way ambiguity flag.
+    """Store other solutions found and whether they compete with the chosen fit.
 
-    valid : Boolean field
-        Whether the mode assessment was complete/usable, NOT whether the
-        selected velocity estimate or its local uncertainty was valid.
-    ambiguous_solution : object field (True / False / None)
-        True: an observed rival competes on the approximate noise scale.
-        False: no competitor among eligible endpoints examined; NOT a global
-        uniqueness claim. None: unavailable, for example only one actual start.
-    additional_estimates : object field of lists[AlternativeEstimate]
-        Each [row, column] contains its own independent list, possibly empty.
-        The selected solution is excluded; it remains in iw.vx, iw.vy, iw.d.
-    details : object field
-        Original score comparisons, excluded endpoints, search limits, etc.
+    valid says whether the comparison was complete and usable. It does not say
+    whether the velocity fit or its uncertainty bounds were valid.
+    ambiguous_solution is True when a competitive alternative was found, False
+    when none was found among the eligible solutions examined, and None when the
+    comparison was unavailable. False does not prove no other solution exists.
 
-    With a partial comparison, ambiguous_solution can be True while valid is
-    False: a competitor was found, but not every comparison could be checked.
+    additional_estimates contains a separate list of AlternativeEstimate objects
+    for each [row, column]. The chosen solution is not repeated there; it remains
+    in iw.vx, iw.vy and iw.d. details stores the comparisons, exclusions and limits.
+    An incomplete comparison can have ambiguous_solution=True but valid=False:
+    a competitor was found, but not every comparison could be checked.
     """
     valid: np.ndarray
     ambiguous_solution: np.ndarray
@@ -708,7 +640,8 @@ class ModeAmbiguity:
         self.valid = np.zeros(shape, dtype=bool)
         self.ambiguous_solution = np.full(shape, None, dtype=object)
         self.additional_estimates = np.empty(shape, dtype=object)
-        self.message = None  # e.g. why one requested candidate cannot assess ambiguity
+        # For example, explain why a single starting guess cannot reveal other solutions.
+        self.message = None
         self.details = np.full(shape, None, dtype=object)
         for index in np.ndindex(shape):
             self.additional_estimates[index] = []
@@ -742,8 +675,8 @@ class ModeAmbiguity:
 
 
 # ================================================================
-# Numerical curvature helpers used by spectral-noise propagation.
-# Interval acceptance and noise modelling remain in spectral.py.
+# Estimate how the fitting score changes near the chosen result.
+# spectral.py decides which uncertainty bounds to accept and how to model noise.
 # ================================================================
 from copy import deepcopy
 from itertools import combinations
@@ -786,7 +719,12 @@ def _record(parameters,scales,options):
 
 
 def _curvature(log_objective,parameters,scales,feasible,options):
-    """Full scaled central Hessian; never evaluate outside search constraints."""
+    """Estimate the score's bending near the fit by small parameter changes.
+
+    Use changes on both sides of each parameter and for parameter pairs, giving
+    the matrix of second derivatives (Hessian). Scale the parameters to make
+    steps comparable. Never test a point outside the allowed fitting limits.
+    """
     theta=np.asarray(parameters,float);scales=np.asarray(scales,float);p=len(theta)
     out=_record(theta,scales,options);flags=out['flags'];cache={}
     def sample(q):
@@ -810,6 +748,8 @@ def _curvature(log_objective,parameters,scales,feasible,options):
                 for sj in (-1,1):
                     q=np.zeros(p);q[i]=si*step[i];q[j]=sj*step[j];points.append(q)
         return points
+    # Reduce the parameter changes until all required test points are inside the limits.
+    # Do not replace this symmetric calculation with one that uses only one side.
     for _ in range(7):
         if all(feasible(theta+scales*q) for q in stencil(h)):break
         h*=.5
@@ -826,10 +766,14 @@ def _curvature(log_objective,parameters,scales,feasible,options):
                 q=np.zeros(p);q[i]=si*step[i];q[j]=sj*step[j];values.append(sample(q)-f0)
             H[i,j]=H[j,i]=(values[0]-values[1]-values[2]+values[3])/(4*step[i]*step[j])
         return H,g
+    # Repeat with two change sizes to check stability; use the smaller changes to form H.
+    # Remember repeated test points only until this calculation is finished.
     coarse,_=differentiate(h);H,g=differentiate(h*.5)
     if not np.isfinite(H).all() or not np.isfinite(coarse).all() or not np.isfinite(g).all():flags.append('invalid_stencil');return finish()
     out['hessian']=(H/scales[:,None]/scales[None,:]).tolist();out['scaled_hessian']=H.tolist();out['gradient']=(g/scales).tolist()
     values,V=np.linalg.eigh(H);cutoff=max(options['curvature_atol'],options['curvature_rtol']*float(np.max(np.abs(values))))
+    # Check whether the score constrains each combination of scaled parameters.
+    # A flat or downward-bending direction means an unresolved bound, not zero error.
     positive=values>cutoff;rank=int(np.count_nonzero(positive))
     out.update(eigenvalues=values.tolist(),eigenvectors_scaled=V.tolist(),rank=rank,eigenvalue_cutoff=cutoff)
     if np.any(values < -cutoff):flags.append('negative_curvature');return finish()
@@ -888,8 +832,13 @@ def _auto_scales(evaluator,velocity,depth,free,width):
 def estimate_objective_curvature(measured_spectrum,velocity,depth,depth_estimated,
         window_dims,res,fps,vel_indx,gravity_waves_switch=True,turbulence_switch=True,
         gauss_width=1.,bounds=None,search_constraints=None,options=None):
-    """Return numerical log-overlap curvature, never fixed-loss uncertainty."""
-    # Local imports keep spectral -> io independent of package import order.
+    """Calculate how sharply log-overlap changes around the selected fit.
+
+    Use small parameter changes rather than an analytic derivative. Return
+    curvature information, not uncertainty from an arbitrary allowed score loss.
+    A separate noise model is needed to turn this information into bounds.
+    """
+    # Import here so io.py and spectral.py can call each other without an import loop.
     from iwave import spectral
     from iwave.spectral import SpectralOverlapObjective
     started=perf_counter();opts=resolve_curvature_options(options)

@@ -1,8 +1,8 @@
-"""Spectra, theoretical overlap evaluation and optional spectral sensitivity.
+"""Calculate measured spectra, compare models, and estimate nearby noise effects.
 
-The first section builds/preprocesses spectra. The later sections evaluate the
-same theoretical ridge used by the solvers and propagate spectral noise into
-local parameter bounds. Moving these routines here does not change their maths.
+First prepare the power spectrum used for fitting. Later functions calculate
+model agreement and how assumed spectral noise changes velocity/depth near
+the chosen solution. They do not search for a new solution.
 """
 import numba as nb
 import numpy as np
@@ -33,35 +33,26 @@ def wave_numbers(
     res: float,
     fps: float
 ):
+    """Set the frequency and spatial-wavenumber axes for a window.
+
+    window_dims gives (frame count, y pixels, x pixels); res is metres per pixel
+    in both spatial directions, and fps is frames per second. Return kt in rad/s
+    and ky, kx in rad/m. Retain the nonnegative time frequencies used by fitting;
+    move zero spatial wavenumber to the middle of ky and kx.
     """
-    get t, y, x wave numbers
+    # Frequency axis for changes over time.
+    # Angular frequency, in rad/s.
+    kt = np.fft.fftfreq(window_dims[-3], d=1/fps) * 2 * np.pi
+    # Keep only the nonnegative frequency samples used by the fitting code.
+    kt = kt[:int(np.ceil(len(kt)/2))]
 
-    Parameters
-    ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
-    res : float
-        resolution in xy direction
-    fps : float
-        frames per second
+    # Set spatial wavenumbers along x and y.
+    # Use the same pixel size in both directions.
+    # TODO: allow different x and y pixel sizes.
+    kx = np.fft.fftfreq(window_dims[-1], d=res) * 2 * np.pi  # Angular wavenumber, in rad/m.
+    ky = np.fft.fftfreq(window_dims[-2], d=res) * 2 * np.pi  # Angular wavenumber, in rad/m.
 
-    Returns
-    -------
-    kt, ky, kx: np.ndarray
-        wave numbers of time, y and x
-
-    """
-    # omega wave numbers (time dim)    
-    kt = np.fft.fftfreq(window_dims[-3], d=1/fps) * 2 * np.pi  # rad/s
-    kt = kt[:int(np.ceil(len(kt)/2))]  # abbreviate to positive omega
-
-    # determine wave numbers in x- and y-direction
-    # this assumes the resolution is the same in x and
-    # y-direction: TODO make variable for both directions
-    kx = np.fft.fftfreq(window_dims[-1], d=res) * 2 * np.pi  # rad/m
-    ky = np.fft.fftfreq(window_dims[-2], d=res) * 2 * np.pi  # rad/m
-
-    # apply fftshift on determined wave numbers
+    # Move zero spatial wavenumber to the middle of the axes.
     kx = np.fft.fftshift(kx)
     ky = np.fft.fftshift(ky)
 
@@ -72,19 +63,10 @@ def wave_numbers(
 def _numba_fourier_transform(
     windows: np.ndarray
 ) -> np.ndarray:
-    """
-    Perform 3D spectral analysis with numba jitted code.
+    """Calculate one window's power spectrum with Numba-compiled code.
 
-    Parameters
-    ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
-
-    Returns
-    -------
-    spectrum : np.ndarray
-        3D power spectrum of 3D fourier transform
-
+    windows has (time, y, x) dimensions. Return power in (frequency, ky, kx)
+    order, using the package's spatial FFT and inverse-time FFT convention.
     """
     spectrum_2d = np.empty(windows.shape, dtype=np.complex128)
     for n in nb.prange(windows.shape[0]):
@@ -94,9 +76,8 @@ def _numba_fourier_transform(
         )
     )
     spectrum_3d = ifft_(spectrum_2d)
-    # return spectrum_3d
     power = np.abs(spectrum_3d) ** 2
-    # abbreviate to positive omega
+    # Keep only the nonnegative frequency samples used by the fitting code.
     return power[:int(np.ceil(len(power)/2))]
 
 
@@ -104,23 +85,14 @@ def _numba_fourier_transform(
 def _numba_fourier_transform_multi(
     imgs: np.ndarray
 ) -> np.ndarray:
-    """
-    Perform 3D spectral analysis for multiple windows at once with numba jitted code.
+    """Calculate power spectra for several windows using Numba-compiled code.
 
-    Parameters
-    ----------
-    imgs : np.ndarray
-        n x time x Y x X windows with intensities
-
-    Returns
-    -------
-    spectra : np.ndarray
-        n x 3D power spectrum of 3D fourier transform of all imgs
-
+    imgs has (window, time, y, x) dimensions. Return one (frequency, ky, kx)
+    power array per window, skipping transform work for entirely zero windows.
     """
     spectra = np.empty((imgs.shape[0], int(np.ceil(imgs.shape[1]/2)), imgs.shape[2], imgs.shape[3]), dtype=np.float64)
     for m in nb.prange(imgs.shape[0]):
-        # Skip FFT computation for zero windows (common in edge cases)
+        # Skip the transform for windows containing only zeros.
         if not np.any(imgs[m]):
             spectra[m] = 0.0
             continue
@@ -135,9 +107,8 @@ def _numba_fourier_transform_multi(
         for y in nb.prange(spectrum_3d.shape[1]):
             for x in nb.prange(spectrum_3d.shape[2]):
                 spectrum_3d[:, y, x] = ifft_(spectrum_3d[:, y, x])
-        # return spectrum_3d
         power = np.abs(spectrum_3d) ** 2
-        # abbreviate to positive omega
+        # Keep only the nonnegative frequency samples used by the fitting code.
         spectra[m] = power[:int(np.ceil(len(power)/2))]
     return spectra
 
@@ -146,21 +117,10 @@ def _numpy_fourier_transform(
         windows: np.ndarray,
         norm: bool = False
 ) -> np.ndarray:
-    """
-    Pure numpy implementation of 3D spectral analysis
+    """Calculate one window's power spectrum using NumPy, for reference.
 
-    Parameters
-    ----------
-    windows : np.ndarray
-        time x Y x X windows with intensities
-    norm : bool
-        normalize spectrum (default: False)
-
-    Returns
-    -------
-    power : np.ndarray
-        3D power spectrum of 3D fourier transform
-
+    windows has (time, y, x) dimensions. Return power in (frequency, ky, kx)
+    order, retaining the package's transform signs, scaling and frequency range.
     """
     spectrum_2d = np.fft.fftshift(
         np.fft.fft(np.fft.fft(windows, axis=-2), axis=-1)
@@ -168,7 +128,7 @@ def _numpy_fourier_transform(
     spectrum_3d = np.fft.ifft(spectrum_2d, axis=0)
     spectrum = np.abs(spectrum_3d) ** 2
 
-    # abbreviate to positive omega
+    # Keep only the nonnegative frequency samples used by the fitting code.
     spectrum = spectrum[:int(np.ceil(len(spectrum)/2))]
 
     if norm:
@@ -184,27 +144,15 @@ def spectral_imgs(
     imgs: np.ndarray,
     **kwargs
 ) -> np.ndarray:
-    """
-    Perform 3D spectral analysis.
+    """Calculate power spectra for an image-window batch.
 
-    Parameters
-    ----------
-    imgs : np.ndarray
-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in
-        subwindows of Y * X pixels
-    engine : str, optional
-        "numpy" or "numba", compute method to use, typically numba (default) is
-        a lot faster. Numpy function is easier to read.
-    kwargs : dict with additional keyword arguments for processing
-
-    Returns
-    -------
-    spectra : np.ndarray
-        wave spectra for all image window sequences
-
+    imgs has (window, time, y, x) dimensions. This HNM-only version uses the
+    original Numba transform path; there is no engine selector. kwargs are
+    forwarded to that calculation. Return one spectrum per window.
+    _numpy_fourier_transform provides the separate NumPy reference calculation.
     """
     n, t, y, x = imgs.shape
-    t_out = int(np.ceil(t / 2))  # Reduced time dimension
+    t_out = int(np.ceil(t / 2))  # Number of retained frequency samples.
     spectra =  _numba_fourier_transform_multi(imgs, **kwargs)
     return spectra
 
@@ -215,35 +163,22 @@ def sliding_window_spectrum(
     overlap: int,
     **kwargs
 ) -> np.ndarray:
-    """
-    Splits the video into shorter segments and calculates the average 3D spectrum.
+    """Average the spectra from shorter, possibly overlapping video segments.
 
-    Parameters
-    ----------
-    imgs : np.ndarray
-        [n * t * Y * X] 4-D array containing image [n] sequences [t], split in 
-        subwindows of Y * X pixels
-    win_t : int
-        number of frames per segment
-    overlap : int
-        overlap (frames)
-    kwargs : dict with additional keyword arguments for processing
-
-    Returns
-    -------
-    spectra : np.ndarray
-        average wave spectra for all image window sequences
-
+    imgs has (window, time, y, x) dimensions. win_t is the number of frames per
+    segment; overlap is their shared frame count. Pass kwargs to the transform.
+    Use complete segments only, adding their powers before dividing by the count.
+    Return power in (window, frequency, ky, kx) order.
     """
     
-    # Check for division by zero
+    # Reject an overlap that would give a zero step between time segments.
     if win_t == overlap:
         raise ValueError("win_t and overlap should not be equal.")
     
-    # number of segments
+    # Count complete time segments.
     num_segments = (imgs.shape[1] - win_t) // (win_t - overlap)+ 1
     
-    # sum of individual segments
+    # Add the power spectrum from each segment.
     spectrum_sum = sum(
         spectral_imgs(
             imgs[:, segment_t0:(segment_t0 + win_t), :, :],
@@ -251,7 +186,7 @@ def sliding_window_spectrum(
         ) for segment_t0 in range(0, imgs.shape[1] - win_t + 1, win_t - overlap)
     )
     
-    # renormalisation
+    # Divide by the number of segments to get average power.
     spectra = spectrum_sum / num_segments
     return spectra
 
@@ -264,58 +199,37 @@ def spectrum_preprocessing(
         velocity_threshold: float,
         spectrum_threshold: float = 1
 ) -> np.ndarray:
+    """Prepare measured power for fitting, without changing the input spectrum.
+
+    measured_spectrum has (window, frequency, ky, kx) dimensions. kt is angular
+    frequency in rad/s; ky and kx are spatial wavenumbers in rad/m.
+    First divide each frequency slice by its spatial mean power. At each spatial
+    wavenumber pair, spectrum_threshold multiplies the mean over frequency to
+    set the cutoff; increasing it removes more weak power when the mean is finite.
+    Then remove zero frequency and values outside the velocity_threshold support
+    (velocity in m/s). Finally clean undefined numerical values.
+    Return the processed array with the same dimensions.
     """
-    pre-processing of the measured spectrum to improve convergence of the optimisation
-
-    Parameters
-    ----------
-    measured_spectrum : np.ndarray
-        measured, averaged, and normalised 3D power spectrum calculated with spectral.py
-        dimensions [wi, kti, kyi, kx]
-
-    kt : np.ndarray
-        radian frequency vector (rad/s)
-
-    ky : np.ndarray
-        y-wavenumber vector (rad/m)
-
-    kx : np.ndarray
-        x-wavenumber vector (rad/m)
-
-    velocity_threshold : float
-        maximum threshold velocity for spectrum filtering (m/s).
-
-    spectrum_threshold : float, optional
-        threshold parameter for spectrum filtering (default 1.0).
-        the spectrum with amplitude < threshold_preprocessing * mean(measured_spectrum) is filtered out.
-        threshold_preprocessing < 1 yields a more severe filtering but could eliminate part of useful signal.
-
-    Returns
-    -------
-    preprocessed_spectrum : np.ndarray
-        pre-processed and normalised measured 3D spectrum
-
-    """
-    # spectrum normalisation: divides the spectrum at each frequency by the average across all wavenumber combinations at the same frequency
+    # For each frequency, divide power by its mean over all spatial wavenumbers.
     with np.errstate(divide='ignore', invalid='ignore'):
         preprocessed_spectrum = measured_spectrum / np.mean(measured_spectrum, axis=(2, 3), keepdims=True)
 
-    # apply threshold
+    # Remove power below the chosen relative threshold.
     threshold = spectrum_threshold * np.mean(preprocessed_spectrum, axis=1, keepdims=True)
     preprocessed_spectrum[preprocessed_spectrum < threshold] = 0
 
-    # set the first slice (frequency=0) to 0
+    # Remove the zero-frequency slice, which describes values constant in time.
     preprocessed_spectrum[:, 0, :, :] = 0
 
     kt_threshold = dispersion_threshold(ky, kx, velocity_threshold)
 
-    # create mask
+    # Find which spectrum values are allowed by the velocity limit.
     kt_bc = kt[:, None, None]  
     mask = kt_bc <= kt_threshold 
 
-    preprocessed_spectrum *= mask  # apply mask
+    preprocessed_spectrum *= mask  # Set excluded spectrum values to zero.
     
-    # remove NaNs
+    # Replace undefined numerical values using the existing cleanup rule.
     preprocessed_spectrum = np.nan_to_num(preprocessed_spectrum)
     return preprocessed_spectrum
 
@@ -325,42 +239,27 @@ def dispersion_threshold(
         kx,
         velocity_threshold
 ) -> np.ndarray:
-    """
-    Calculate the frequency corresponding to the threshold velocity
+    """Calculate the largest frequency retained at each spatial wavenumber pair.
 
-    Parameters
-    ----------
-    ky: np.ndarray
-        wavenumber array along the direction y
-
-    kx: np.ndarray
-        wavenumber array along the direction x
-
-    velocity_threshold : float
-        threshold_velocity (m/s)
-
-    Returns
-    -------
-    kt_threshold : np.ndarray
-        1 x N_y x N_x: threshold frequency
-
+    ky and kx are in rad/m and velocity_threshold is in m/s.
+    Return velocity_threshold*sqrt(ky**2 + kx**2), in rad/s, on a (1, y, x) grid.
     """
 
-    # create 2D wavenumber grid
+    # Make a grid containing every combination of x and y wavenumbers.
     kx, ky = np.meshgrid(kx, ky)
 
-    # transpose to 1 x N_y x N_x
+    # Add a length-one frequency axis so these arrays fit the spectrum dimensions.
     ky = np.expand_dims(ky, axis=0)
     kx = np.expand_dims(kx, axis=0)
 
-    # wavenumber modulus
+    # Calculate the magnitude of the spatial wavenumber.
     k_mod = np.sqrt(ky ** 2 + kx ** 2)
 
     return k_mod * velocity_threshold
 
 
 
-# === Shared forward evaluator (moved here without changing its mathematics) ===
+# Model-spectrum comparison used during fitting.
 import math
 from iwave import dispersion
 
@@ -368,17 +267,16 @@ from iwave import dispersion
 @nb.njit(cache=True, nogil=True, fastmath=False, error_model='numpy')
 def _overlap_sums(data, omega, first, second, two_branches, width,
                   radius, dw, dense, statistics):
-    """Fuse Gaussian weights, support selection, data gathering and reductions.
+    """Calculate model weights and their sums in one loop, without full-size temporary arrays.
 
-    Geometry and depth-dependent dispersion stay in the existing NumPy path.
-    No frequency-by-column weights/index/mask arrays are allocated here. Keep
-    both the original dense grid and its sparse union of branch intervals:
-    sparse bins use omega[0] + dw*i, and overlapping intervals count once.
-    max(exp(-u*u), exp(-v*v)) is exp(-min(u*u, v*v)): evaluate one
-    exponential, not a second (often extremely small) discarded Gaussian.
-    This is an algebraic identity, not extra truncation or peak selection.
-    Reductions are serial, with fastmath disabled and no shared sums. Their
-    order differs from NumPy's reductions, so last-bit roundoff can differ.
+    Keep the same Gaussian model, whether using every frequency or just ranges
+    around predicted lines. Where those ranges overlap, count each frequency
+    once. The larger of two Gaussian values can be calculated from the smaller
+    squared distance, so a second exponential is unnecessary. This does not add
+    any filtering or change which peaks are used.
+
+    Run sums in one thread with normal floating-point rules. The order differs
+    from NumPy's sums, so the last digits can differ through rounding.
     """
     numerator = denominator = model_square = 0.
     n, columns = data.shape
@@ -405,7 +303,8 @@ def _overlap_sums(data, omega, first, second, two_branches, width,
                 centre = centres[j]
                 if centre < lower or centre > upper:
                     continue
-                # Preserve clipping before floor/int, including distant models.
+                # Limit frequency indices before converting them to integers, even for
+                # distant predictions.
                 base = int(math.floor(min(max((centre-omega[0])/dw,
                                              -radius-2), n+radius+2)))
                 previous = 0
@@ -433,14 +332,15 @@ def _overlap_sums(data, omega, first, second, two_branches, width,
 
 
 class SpectralOverlapObjective:
-    """Original max-of-Gaussians forward score, evaluated in narrow bands.
+    """Compare measured power with the larger of the two Gaussian model values.
 
-    Minimises -sum(M*T)/sum(T), with no velocity penalty. A band extends at
-    least kernel_truncate*gauss_width from each predicted branch. Outside the
-    union, omitted kernel weights are <= exp(-kernel_truncate**2).
-    Overlapping branch bands are counted once and use max(), not addition.
-    Predictions just outside the observed frequency interval retain their
-    observable Gaussian tails; neither model support nor data are reflected.
+    Minimise -sum(measured*model)/sum(model), without a velocity penalty.
+    Normally calculate frequencies close to either predicted line: keep at least
+    kernel_truncate*gauss_width on each side. Omitted weights are at most
+    exp(-kernel_truncate**2). Count overlapping ranges once, using max rather
+    than adding the two model values. If a predicted line lies just outside the
+    observed frequency range, keep the part of its tail still visible in the data.
+    Do not mirror either data or model at the edge.
     """
     def __init__(self, spectrum, axes, depth, alpha, wave, turb, options):
         self.omega, ky, kx = axes
@@ -450,6 +350,8 @@ class SpectralOverlapObjective:
                 or np.iscomplexobj(a) or not np.isfinite(a).all()
                 or np.any(a < 0)):
             raise ValueError('Local fitting needs a finite nonnegative full spectrum matching (omega,ky,kx).')
+        # Put the two spatial axes into a single list of (ky, kx) pairs.
+        # Keep both signs and every available nonnegative frequency for each pair.
         self.data = np.asarray(a, float).reshape(len(self.omega), -1)
         self.spatial_shape = a.shape[1:]
         self.x, self.y = (v.ravel() for v in np.meshgrid(kx, ky))
@@ -465,14 +367,18 @@ class SpectralOverlapObjective:
         self.radius = int(math.ceil(min(extent, len(self.omega))))
         self.calls = 0
         self.zero = not np.any(self.data)
-        # Avoid making a "narrow" workspace larger than a dense broadcast.
+        # Use the full frequency calculation when a narrower calculation would need more
+        # memory.
+        # Keep the existing choice between these two calculation paths.
+        # The full calculation uses every frequency; the shorter one omits only values
+        # far into the Gaussian tails. Neither path drops spatial columns.
         self.dense = len(self.omega) <= (self.wave + self.turb) * (2*self.radius + 2)
         self.offsets = (None if self.dense else np.arange(-self.radius, self.radius + 2)[:, None])
 
     def normalized_weights(self, parameters):
-        """Diagnostic model weights matching this evaluator's band convention.
+        """Return model weights using the same frequency ranges as the fitting score.
 
-        No fit is performed and solver evaluation counters are not incremented.
+        This does not run a fit or increase the count of fitting evaluations.
         """
         q=np.asarray(parameters,float)
         if q.shape not in ((2,),(3,)) or not np.isfinite(q).all():return None
@@ -501,7 +407,8 @@ class SpectralOverlapObjective:
         return weight.reshape((n,*self.spatial_shape))/mass if np.isfinite(mass) and mass>0 else None
 
     def _set_depth(self, depth):
-        # Geometry/data stay cached. Only these Nk terms depend on depth.
+        # Reuse stored coordinates and measurements; recalculate only terms that depend on
+        # depth.
         if depth != self.depth:
             self.beta = dispersion.beta_calc(self.k, depth, self.alpha)
             self.intrinsic = dispersion.omega_i_calc(self.k, depth)
@@ -512,7 +419,7 @@ class SpectralOverlapObjective:
         return self._evaluate(parameters)
 
     def statistics(self, parameters):
-        # This final diagnostic evaluation is separate from the NM budget.
+        # This last score check does not use up the Nelder-Mead fitting budget.
         return self._evaluate(parameters, statistics=True)
 
     def _evaluate(self, velocity, statistics=False):
@@ -537,9 +444,9 @@ class SpectralOverlapObjective:
                 centres.append((1-self.beta)*a + np.hypot(self.beta*a, self.intrinsic))
         if not all(np.isfinite(c).all() for c in centres):
             return (np.inf, 0., 0., 0.) if statistics else np.inf
-        # Retain validation, depth caching and the physical centres above.
-        # Only repeated array construction/gather/reduction is fused. The
-        # diagnostic weights method and evaluation-counter semantics stay as-is.
+        # Keep the same validation, saved depth terms, and predicted wave frequencies.
+        # Only combine the repeated array operations into one loop.
+        # Do not change the separate diagnostic weights or the count of fitting evaluations.
         numerator, denominator, model_square = _overlap_sums(
             self.data, self.omega, centres[0], centres[-1], len(centres) == 2,
             self.width, self.radius, self.dw, self.dense, statistics,
@@ -550,9 +457,9 @@ class SpectralOverlapObjective:
         return (value, denominator, model_square, numerator) if statistics else value
 
 
-# === Optional spectral-noise sensitivity; numerical detail stays in records ===
-# This requires complete power before thresholding. It describes local
-# sensitivity, not a calibrated physical confidence interval or basin changes.
+# Optional check of how spectral noise affects the selected estimate.
+# It needs the full spectrum before filtering and describes variation near this fit.
+# It is not a complete error budget and does not cover jumps to other solutions.
 from copy import deepcopy
 from numbers import Real
 from time import perf_counter
@@ -604,6 +511,9 @@ def effective_averages(n, length, overlap):
         if isinstance(value,(bool,np.bool_)) or not isinstance(value,(int,np.integer)):
             raise ValueError(name+' must be an integer.')
     if n<1 or length<1 or not 0<=overlap<length:raise ValueError('Invalid temporal averaging metadata.')
+    # Overlapping time segments share frames, so their spectra are not independent.
+    # Use their squared overlap fractions to adjust the noise of the average.
+    # This is an approximation, not a measured calibration of physical errors.
     hop=length-overlap;denominator=1.
     for lag in range(1,min(n-1,(length-1)//hop)+1):
         rho=(length-lag*hop)/length
@@ -634,12 +544,18 @@ def validate_spectral_context(context, shape, options):
 
 def normalization_jacobian(gradient, full, active):
     den=full.mean(axis=(-2,-1),keepdims=True);safe=np.where(den>0,den,1.)
+    # Each frequency slice is divided by a shared spatial mean.
+    # Account for the resulting link between its values when estimating noise effects.
+    # Keep the fitting mask fixed; do not apply the threshold again to changed data.
     a=gradient*active[None];n=full.shape[-1]*full.shape[-2]
     return (a/safe[None]-(a*full[None]).sum(axis=(-2,-1),keepdims=True)/(n*safe[None]**2))*(den>0)[None]
 
 
 def prepare_spectral_data(spectrum,spectral_context,options):
-    """Validate uncensored context and its relation to the fixed fitted mask."""
+    """Check the full normalised spectrum and the fixed set of values used for fitting.
+
+    The noise calculation needs pre-filter power, not only the surviving values.
+    """
     original=np.asarray(spectrum)
     if not np.issubdtype(original.dtype,np.number) or np.iscomplexobj(original):
         raise ValueError('The processed spectrum must contain real numeric power.')
@@ -657,10 +573,12 @@ def estimate_spectral_uncertainty(spectrum, velocity, depth, depth_estimated,
         window_dims,res,fps,vel_indx,spectral_context,gravity_waves_switch=True,
         turbulence_switch=True,gauss_width=1.,bounds=None,search_constraints=None,
         options=None,optimizer_success=None,penalized_fit=False):
-    """Noise-scaled marginal thresholds; never refits or changes an estimate.
+    """Estimate a bound for each parameter near the fit, under the assumed noise.
 
-    intervals are provisional. accepted_intervals excludes invalid components.
-    Fixed depth returns depth=None. Failed curvature never gives zero errors.
+    Do not refit or alter the estimate. intervals holds trial bounds;
+    accepted_intervals retains only parameters that pass the checks.
+    Supplied depth has no estimated bound. Failed checks mean missing bounds,
+    not zero error.
     """
     started=perf_counter();opts=resolve_spectral_request(True,options)
     free=boolean(depth_estimated,'depth_estimated');p=3 if free else 2
@@ -701,6 +619,9 @@ def estimate_spectral_uncertainty(spectrum, velocity, depth, depth_estimated,
     for reason in curv['flags']:flag(reason)
     if curv['hessian'] is None or curv.get('rank')!=p or 'negative_curvature' in curv['flags']:
         flag('unresolved_curvature');return finish()
+    # Make small parameter changes to estimate how the score and model weights vary.
+    # Do not change the fitted result. When fitting depth, make these changes in log(depth).
+    # Convert the resulting depth-bound endpoints back to metres.
     H=np.asarray(curv['hessian']);inverse=np.linalg.inv(H)
     theta=np.r_[velocity,np.log(depth)] if free else np.asarray(velocity,float)
     steps=.5*np.asarray(curv['difference_steps'])
@@ -718,6 +639,10 @@ def estimate_spectral_uncertainty(spectrum, velocity, depth, depth_estimated,
     J=normalization_jacobian(J,full,active)
     variance=full**2/(k if opts['variance_estimator']=='plugin' else k+1)
     V=np.einsum('pijk,qijk,ijk->pq',J,J,variance)
+    # Use the local change in score to translate spectral-noise effects into parameter
+    # errors.
+    # The covariance matrix records those error sizes and how they vary together.
+    # This applies near the chosen fit only; it does not cover other possible solutions.
     C=inverse@V@inverse.T;C=(C+C.T)*.5
     if not np.isfinite(C).all() or np.any(np.diag(C)<=0):flag('unresolved_noise_variance');return finish()
     se=np.sqrt(np.diag(C));gradient=np.asarray(curv['gradient'])
@@ -736,6 +661,9 @@ def estimate_spectral_uncertainty(spectrum, velocity, depth, depth_estimated,
             with np.errstate(over='ignore',under='ignore'):limits=np.exp(limits)
         if not np.isfinite(limits).all() or (name=='depth' and limits[0]<=0):flag('unbounded_interval',[name])
         else:out['intervals'][name]=limits.tolist()
+    # Reject bounds that cross allowed limits or extend beyond where the local
+    # curved approximation of the score is adequate. A rejected bound means missing
+    # information, not zero error; other parameters may still have usable bounds.
     _,disk,feasible=_constraints(bounds,search_constraints,free)
     for i,name in enumerate(names):
         for sign in (-1,1):

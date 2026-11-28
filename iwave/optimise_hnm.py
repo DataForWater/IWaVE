@@ -1,10 +1,12 @@
-"""Hough/Nelder-Mead velocity and optional log-depth estimation.
+"""Estimate velocity, and optionally depth, using Hough followed by Nelder-Mead.
 
-Hough voting supplies the initial velocity. Nelder-Mead refines it within a
-fixed velocity disk centred on that estimate, intersected with the global bounds.
-When depth is unknown, Hough uses one reference depth and only NM estimates it.
-The final section optionally compares already-found endpoints using shared
-spectral noise; it does not start another search or assign basin probabilities.
+Hough counts which velocities are supported by measured frequency peaks.
+Nelder-Mead then improves a starting estimate by comparing nearby trial
+parameters with the full spectrum. Keep its velocity search inside a fixed
+circle around the main Hough estimate and within the overall parameter limits.
+When depth is unknown, Hough uses one reference depth; only Nelder-Mead varies it.
+Optional comparisons at the end use solutions already found, not extra searches
+or probabilities assigned to all possible solutions.
 """
 from dataclasses import dataclass
 from functools import lru_cache
@@ -21,27 +23,28 @@ from iwave.spectral import SpectralOverlapObjective as _RidgeObjective
 
 from copy import deepcopy
 
-K_MIN_BASE_BINS = 2.0  # Radial cutoff, in spatial Fourier bins.
-# Hough proposal controls, exposed directly as entries in hnm_options.
+# Exclude spatial wavenumbers closer to zero than this many grid steps.
+K_MIN_BASE_BINS = 2.0
+# Settings for the initial Hough velocity estimate; keys go directly in hnm_options.
 DEFAULTS = dict(velocity_step=.01, vote_sigma=.015, k_min_factor=1.,
                 peak_height=.25, peak_prominence=.30, scale_percentile=99.5,
                 min_ridges=12, max_accumulator_mb=None)
-# Fixed design conventions, not separately fitted parameters.
+# Fixed choices in the method, not additional parameters to estimate.
 RADIAL_STRATA, ANGULAR_STRATA, CALIBRATION_COLUMNS = 4, 12, 32
 
 
-# Adaptive sampling and NM settings share the public hnm_options dictionary.
+# Options for selecting spectrum columns and refining the fit use the same dictionary.
 ADAPTIVE_DEFAULTS = dict(
     batch_size=64, min_columns=64, stable_batches=2, convergence_tol=.01,
     exploration_every=4, min_direction_ratio=.05,
 )
-# Baseline refinement settings for fixed depth.
+# Default refinement settings when depth is supplied.
 REFINEMENT_DEFAULTS = dict(
     gauss_width=1., kernel_truncate=5., maxfev=160, xatol=1e-4,
     fatol=1e-6, initial_step_factor=2., n_candidates=1,
     candidate_separation=.1, depth_initial=None, log_depth_step=.1,
 )
-# Used only for variable-depth fits, before applying explicit user settings.
+# Larger search defaults when depth is unknown; explicit user settings still take priority.
 DEPTH_SEARCH_DEFAULTS = dict(n_candidates=12, maxfev=640)
 HNM_DEFAULTS = {
     **DEFAULTS,
@@ -51,7 +54,8 @@ HNM_DEFAULTS = {
     "filling_ratio": 1.0,
     "refine": True,
     "relative_radius": 0.5,
-    "min_radius": None,  # None uses twice the larger actual grid spacing.
+    # None means twice the larger of the actual x/y velocity-grid spacings.
+    "min_radius": None,
 }
 
 
@@ -62,22 +66,23 @@ class Result:
     depth: float
     success: bool
     message: str
-    pairs: np.ndarray                  # (iy, ix), in processing order
+    # Indices (iy, ix), in the order the spectrum columns will be examined.
+    pairs: np.ndarray
     metadata: dict
     cost: float = np.nan
     quality: float = np.nan
 
     def as_iwave_tuple(self):
-        """Return velocity, physical depth, squared NSP cost and fit quality."""
+        """Return velocity, depth in metres, squared inverse-overlap cost, and quality."""
         return self.vy, self.vx, self.depth, self.cost, self.quality, self.success, self.message
 
 
 
 def resolve_hnm_options(options=None, *, bnds=None):
-    """Resolve depth-dependent defaults, then apply and validate user settings.
+    """Choose defaults for fixed or unknown depth, then check user settings.
 
-    Without bounds the fixed-depth defaults apply. Public entry points supply
-    the bounds before resolving options; an explicit setting always wins.
+    Without bounds, use fixed-depth defaults. Public calls supply the bounds.
+    An explicit user value takes priority for that option.
     """
     if options is not None and not isinstance(options, dict):
         raise ValueError('hnm_options must be a dictionary or None.')
@@ -89,6 +94,8 @@ def resolve_hnm_options(options=None, *, bnds=None):
     unknown = set(options or {}) - set(HNM_DEFAULTS)
     if unknown:
         raise ValueError('Unknown hnm_options: ' + ', '.join(map(str, unknown)))
+    # Equal depth limits mean depth is fixed; different limits mean it must be fitted.
+    # Choose the corresponding defaults first, then apply the user settings.
     out = deepcopy(HNM_DEFAULTS)
     if bnds is not None:
         bounds = _checked_depth_bounds(bnds)
@@ -129,13 +136,13 @@ def resolve_hnm_options(options=None, *, bnds=None):
 def validate_hnm_setup(bnds, vel_indx, window_dims, res, fps,
                         gravity_waves_switch=True, turbulence_switch=True,
                         hnm_options=None):
-    """Validate shared geometry without reading spectra or allocating votes."""
+    """Check dimensions and shared settings before reading spectra or creating a vote grid."""
     options = resolve_hnm_options(hnm_options, bnds=bnds)
     bounds, proposal_bounds, _, _ = _depth_setup(bnds, options, gravity_waves_switch)
     validated = validate_setup(proposal_bounds, vel_indx, window_dims, res, fps,
                                 gravity_waves_switch, turbulence_switch,
                                 {key: options[key] for key in DEFAULTS})
-    # Expose the true bounds to callers, not Hough's fixed reference-depth copy.
+    # Report the full allowed depth range, not the single depth used by Hough.
     return validated[0], bounds, *validated[2:]
 
 
@@ -144,7 +151,7 @@ def optimize_single_spectrum_velocity_hnm(
     gravity_waves_switch=True, turbulence_switch=True,
     hnm_options=None, return_metadata=False,
 ):
-    """Estimate one velocity and optionally return fit/search audit metadata."""
+    """Fit one spectrum and optionally include information about sampling and fitting."""
     started = perf_counter()
     options = resolve_hnm_options(hnm_options, bnds=bnds)
     validate_hnm_setup(bnds, vel_indx, window_dims, res, fps,
@@ -156,6 +163,8 @@ def optimize_single_spectrum_velocity_hnm(
                      gravity_waves_switch=gravity_waves_switch, turbulence_switch=turbulence_switch,
                      filling_ratio=options['filling_ratio'],
                      detector_options={key: options[key] for key in DEFAULTS})
+    # Selecting fewer (ky, kx) columns speeds up only the initial Hough estimate.
+    # The later fitting step still compares the full spectrum.
     if options['sampling'] == 'adaptive':
         proposal, state = adaptive_estimate(
             **arguments,
@@ -193,7 +202,7 @@ def optimize_single_spectrum_velocity_hnm(
     return (*output, dict(result.metadata, selected_pairs=result.pairs)) if return_metadata else output
 
 
-# Hough sampling, peak extraction and voting.
+# Choose spectrum columns, locate their frequency peaks, and count velocity votes.
 
 
 def resolve_options(options=None):
@@ -223,7 +232,7 @@ def resolve_options(options=None):
 def budget(filling_ratio, ny, nx, n_eligible):
     if isinstance(filling_ratio,(bool,np.bool_)) or not isinstance(filling_ratio,Real) or not np.isfinite(filling_ratio) or not 0<filling_ratio<=1:
         raise ValueError('filling_ratio must be in (0,1].')
-    # The budget counts spatial Fourier columns, not frequency bins.
+    # The limit counts (ky, kx) columns, each of which contains all frequencies.
     return min(int(math.ceil(float(filling_ratio)*ny*nx)), n_eligible)
 
 
@@ -237,12 +246,14 @@ def eligible_pairs(ky,kx,factor=1.):
 
 @lru_cache(maxsize=8)
 def _geometry_order(ky_tuple,kx_tuple,factor):
-    """A-priori stratified greedy log-det design, cached for repeated windows.
+    """Choose spectrum columns that cover different lengths and directions of waves.
 
-    Equal-population radial groups and signed angular sectors prevent collapsing
-    onto only the high-k boundary. Within each cell maximise log-det information
-    gain for regressors (kx,ky), with equal nominal frequency errors.
-    This is an explicitly defined heuristic, NOT a globally optimal design.
+    Divide spatial wavenumbers into groups by distance from zero and by direction.
+    Within those groups, prefer directions not already represented. The matrix
+    calculation assumes equal nominal frequency errors when ranking choices.
+    It is a practical sampling rule, not proof of the best possible selection.
+    Save this order for other windows with the same spatial-wavenumber grid;
+    measured intensities are not used to choose it.
     """
     ky,kx=np.array(ky_tuple),np.array(kx_tuple)
     pairs,_=eligible_pairs(ky,kx,factor)
@@ -256,6 +267,9 @@ def _geometry_order(ky_tuple,kx_tuple,factor):
     angle=np.minimum(((np.arctan2(v[:,1],v[:,0])+np.pi)/(2*np.pi)*ANGULAR_STRATA).astype(int),ANGULAR_STRATA-1)
     angular_order=[0,6,3,9,1,7,4,10,2,8,5,11]
     cells=[np.flatnonzero((radial==r)&(angle==a)) for a in angular_order for r in (3,0,2,1)]
+    # Choose a repeatable sampling order without using measured power values.
+    # G records which directions are already represented.
+    # Prefer new directions; a small diagonal term keeps this calculation well-defined.
     used=np.zeros(len(pairs),bool); order=[]; G=np.eye(2)*1e-3
     while len(order)<len(pairs):
         for cell in cells:
@@ -289,9 +303,9 @@ def fixed_plan(ky,kx,filling_ratio=1.,k_min_factor=1.):
 def validate_setup(bnds, vel_indx, window_dims, res, fps,
                    gravity_waves_switch=True, turbulence_switch=True,
                    detector_options=None, check_grid=True):
-    """Validate geometry/resources without reading data or allocating a grid.
+    """Check dimensions and memory limits before reading data or creating the grid.
 
-    Shared by the parent process and direct single-spectrum calls.
+    Use the same checks for batch fitting and direct single-window calls.
     """
     options = resolve_options(detector_options)
     try:
@@ -336,13 +350,12 @@ def validate_setup(bnds, vel_indx, window_dims, res, fps,
 
 @nb.njit(cache=True, nogil=True, fastmath=False, error_model='numpy')
 def _accumulate_votes(acc, points, beta, intrinsic, vy, vx, dy, dx, wave, turb):
-    """Rasterise already detected/interpolated peaks, without changing votes.
+    """Add each detected peak's support to the velocity grid.
 
-    SciPy smoothing/find_peaks and physical dispersion arrays stay outside.
-    Retain peak order, branch order, the sensitive-axis choice and the two-bin
-    linear split. Different 'other' coordinates touch disjoint cells, so both
-    adjacent deposits can be made together without changing addition order at
-    any cell. Serial updates avoid atomics, races and a per-thread grid copy.
+    Peak detection and predicted frequencies have already been calculated.
+    Split each contribution linearly between its two neighbouring grid cells,
+    keeping the original peak/branch order and order of additions. Run these
+    updates in one thread to avoid simultaneous writes to the same grid values.
     """
     for p in range(len(points)):
         x, y, w, weight = points[p]
@@ -358,8 +371,9 @@ def _accumulate_votes(acc, points, beta, intrinsic, vy, vx, dy, dx, wave, turb):
             for other in range(count):
                 pos = (((a-y*vy[other])/x-vx[0])/dx if swap
                        else ((a-x*vx[other])/y-vy[0])/dy)
-                # Outside this interval neither adjacent cell is in the grid.
-                # Check before int conversion; no clipped edge vote is created.
+                # Outside this range, neither neighbouring velocity-grid cell exists.
+                # Check before converting to an integer; do not put an out-of-range vote
+                # on the edge.
                 if not -1. <= pos < limit:
                     continue
                 low = int(np.floor(pos))
@@ -378,11 +392,12 @@ def _accumulate_votes(acc, points, beta, intrinsic, vy, vx, dy, dx, wave, turb):
 
 @nb.njit(cache=True, nogil=True, error_model='numpy')
 def _ridge_points_finite(columns, pairs, omega, ky, kx, height, prominence):
-    """SciPy-compatible finite-column peaks, prominence and point ordering.
+    """Find peaks in finite data, keeping SciPy's peak and prominence rules.
 
-    No distance/width/wlen rules are requested by HNM. Plateaus use their
-    rounded-down midpoint; equal-height peaks do not stop prominence scans.
-    Work is serial inside each existing process, with fastmath disabled.
+    For a flat-topped peak, choose its midpoint rounded down. Equal-height peaks
+    do not stop the search for surrounding low points. Keep peak and column order.
+    No distance or width restriction is added. Run this loop in one thread and
+    keep the compiler's normal floating-point rules.
     """
     nf, count = columns.shape
     scratch = np.empty((count*(nf//2), 4), dtype=np.float64)
@@ -409,9 +424,17 @@ def _ridge_points_finite(columns, pairs, omega, ky, kx, height, prominence):
                             if columns[j, column] < right_min:
                                 right_min = columns[j, column]
                             j += 1
+                        # Peak prominence measures how far a peak rises above its
+                        # surroundings.
+                        # Use the higher of the two surrounding low points, not peak
+                        # height or width.
                         weight = value-max(left_min, right_min)
                         if weight >= prominence:
                             l, c, r = columns[peak-1, column], value, columns[peak+1, column]
+                            # Fit a parabola to three frequency samples to locate the peak
+                            # between them.
+                            # This refines the peak position; it does not estimate an
+                            # error bar.
                             denominator = l-2*c+r
                             off = 0. if denominator == 0 else .5*(l-r)/denominator
                             if off < -.5:
@@ -428,12 +451,12 @@ def _ridge_points_finite(columns, pairs, omega, ky, kx, height, prominence):
                 i = right+1
             else:
                 i += 1
-    # Do not retain the worst-case capacity behind a small returned view.
+    # Copy the used results so a short result does not keep a much larger array in memory.
     return scratch[:used].copy()
 
 
 def _ridge_points(columns, pairs, omega, ky, kx, height, prominence):
-    """Fast ordinary finite data; preserve SciPy's nonfinite fallback."""
+    """Use the compiled peak finder for finite values; otherwise use the SciPy path."""
     if np.isfinite(columns).all():
         return _ridge_points_finite(columns, pairs, omega, ky, kx, height, prominence)
     rows = []
@@ -448,7 +471,7 @@ def _ridge_points(columns, pairs, omega, ky, kx, height, prominence):
 
 
 class State:
-    """Accumulate Hough votes and retain the sampler's per-window state."""
+    """Keep the selected columns, detected peaks, and accumulated velocity votes for one fit."""
 
     def __init__(self, spectrum, bnds, vel_indx, window_dims, res, fps,
                  gravity_waves_switch=True,turbulence_switch=True,
@@ -471,8 +494,9 @@ class State:
         self.plan=fixed_plan(self.ky,self.kx,filling_ratio,self.options['k_min_factor'])
         self.times['planning']+=perf_counter()-t
         self.filling_ratio=filling_ratio
-        # One scale for all selected columns preserves their relative weights.
-        # Calibration reads only the fixed spatial plan, within the same budget.
+        # Use one brightness scale for all selected columns to preserve relative peak
+        # strengths.
+        # Determine it from the fixed sampling plan, without exceeding the column limit.
         C = self.M
         self.calibration_pairs=self.plan[:C]
         t=perf_counter()
@@ -481,7 +505,7 @@ class State:
         if self.scale<=0 and calibration.size:
             self.scale=float(np.max(calibration))
         self.scale_fallback=False
-        # A zero calibration set must not trigger reads outside the sampling plan.
+        # If those columns are all zero, do not search unplanned columns for a scale.
         if self.scale<=0:
             self.scale=1.; self.scale_fallback=True
         self.times['calibration']+=perf_counter()-t
@@ -497,14 +521,14 @@ class State:
         self.history=[]
 
     def columns(self,pairs):
-        """Read the requested (ky, kx) columns with all frequency bins."""
+        """Read selected (ky, kx) columns, keeping every available frequency in each."""
         a=self.spectrum[:,pairs[:,0],pairs[:,1]]
         if not np.isfinite(a).all() or np.any(a<0):
             raise ValueError('Inspected spectrum columns must be finite and nonnegative.')
         return np.asarray(a,float)
 
     def process(self,pairs):
-        """Extract frequency peaks and add both physical branches to the votes."""
+        """Find frequency peaks and add votes from waves and flow-carried patterns."""
         pairs=np.asarray(pairs,int).reshape(-1,2)
         if not len(pairs):
             return
@@ -513,11 +537,12 @@ class State:
         if len(self.used)+len(pairs)>self.M:
             raise ValueError('Sampler exceeded the spatial-column budget.')
         t=perf_counter(); columns=self.columns(pairs)/self.scale
-        # Smooth only along frequency before detecting ridge peaks.
+        # Smooth along frequency only, then find the peaks.
         columns = gaussian_filter1d(
             columns,
-            sigma=2.0,          # standard deviation in frequency bins
-            axis=0,            # columns has shape (n_frequencies, n_pairs)
+            # Smoothing standard deviation, measured in frequency-grid steps.
+            sigma=2.0,
+            axis=0,            # One array column per (ky, kx) pair; one row per frequency.
             mode="reflect",
         )
         points = _ridge_points(columns, pairs, self.omega, self.ky, self.kx,
@@ -535,7 +560,7 @@ class State:
         self.times['voting']+=perf_counter()-t
 
     def score(self):
-        """Locate the vote maximum and update adaptive directional information."""
+        """Find the velocity with most support and update which directions have been used."""
         t=perf_counter()
         sigma=self.options['vote_sigma']
         smoothed=gaussian_filter(self.acc,(sigma/self.dy,sigma/self.dx)) if sigma else self.acc
@@ -582,7 +607,7 @@ class State:
         return Result(float(vy),float(vx),self.depth,bool(ok),reason,np.asarray(self.used,int).reshape(-1,2),metadata)
 
 
-# Fixed spatial sampling.
+# Use the predetermined set of spectrum columns.
 
 def fixed_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
              filling_ratio=1.,detector_options=None,
@@ -594,7 +619,7 @@ def fixed_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
     result = state.result('fixed','fixed spatial-column budget processed')
     return (result, state) if _return_state else result
 
-# Adaptive sampling combines integrated power with directional coverage.
+# Choose additional columns using both their total power and their directions.
 
 def resolve_sampling_options(options=None):
     if options is not None and not isinstance(options,dict):
@@ -624,7 +649,7 @@ def adaptive_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
         result = state.result('adaptive','budget cannot constrain two velocity components')
         return (result, state) if _return_state else result
     t=perf_counter()
-    # Integrated power ranks columns without fitting a dispersion model.
+    # Rank columns by total power without fitting the wave model first.
     if not np.isfinite(state.spectrum).all() or np.any(state.spectrum<0):
         raise ValueError('Adaptive power proxy requires a finite nonnegative full spectrum.')
     energy=np.sum(state.spectrum,axis=0,dtype=float)
@@ -636,6 +661,8 @@ def adaptive_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
     if not len(powers) or np.max(powers)<=0:
         result = state.result('adaptive','zero integrated spectral power')
         return (result, state) if _return_state else result
+    # Strong power helps select columns; it is not a probability that a fit is correct.
+    # Also favour different directions, so one strong direction cannot use the whole limit.
     strength=np.sqrt(np.maximum(powers/np.max(powers),1e-3))
     features=np.column_stack((state.kx[candidates[:,1]],state.ky[candidates[:,0]]))/state.kmax
     eligible_index={tuple(pair):i for i,pair in enumerate(candidates.tolist())}
@@ -677,8 +704,10 @@ def adaptive_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
         else:
             stable=0
         previous=current
-        # Ensure the common calibration prefix was actually counted/processed.
+        # Make sure the columns used to set the scale are included in the sampling count.
         calibration_done=priority_position>=len(priority)
+        # Stop early only when successive velocity estimates change little and enough
+        # directions are represented. This is a practical rule, not a statistical guarantee.
         if (len(state.used)>=min(opt['min_columns'],state.M) and calibration_done
                 and stable>=opt['stable_batches']):
             reason='heuristic parameter stability reached'
@@ -688,14 +717,14 @@ def adaptive_estimate(measured_spectrum,bnds,vel_indx,window_dims,res,fps,
     return (result, state) if _return_state else result
 
 
-# Local forward-model refinement.
+# Improve the initial velocity by comparing the full measured and model spectra.
 
 class _TrustRegionObjective:
-    """Hard velocity disk and parameter-box gate; no in-region penalty.
+    """Reject trial parameters outside the allowed circle or parameter limits.
 
-    Infeasible proposals return infinity without evaluating the spectrum. This
-    is a constraint, not a velocity penalty. A feasible initial simplex keeps
-    finite vertices available for Nelder-Mead's inward contractions.
+    Rejected trials return infinity without building a spectrum. Valid trials have
+    no additional speed penalty here. Start with trial points inside the limits
+    so Nelder-Mead can continue even when some later proposals are rejected.
     """
     def __init__(self, objective, centre, radius, bounds):
         self.objective = objective
@@ -720,7 +749,10 @@ class _TrustRegionObjective:
 
 
 def _trust_simplex(seed, centre, radius, bounds, step):
-    """Three distinct feasible vertices; pull boundary starts slightly inward."""
+    """Choose three distinct allowed velocity points to start Nelder-Mead.
+
+    Move a starting point slightly inward if it is on the search boundary.
+    """
     seed = np.asarray(seed, float).copy()
     centre = np.asarray(centre, float)
     distance = np.hypot(*(seed-centre))
@@ -756,7 +788,7 @@ def _hough_candidates(state, count, separation, centre, radius):
     for index in order:
         iy, ix = indices[index]
         v = np.array([state.vy[iy], state.vx[ix]])
-        # Restarts stay inside the disk of the primary Hough maximum.
+        # Keep every new starting guess within the circle around the main Hough estimate.
         if np.hypot(*(v-centre)) > radius:
             continue
         if all(np.linalg.norm(v-p) > 1e-12 and np.linalg.norm(v-p) >= separation for p in candidates):
@@ -778,7 +810,7 @@ def _boundary_flags(velocity, centre, radius, bounds, xatol):
 
 
 def _checked_depth_bounds(bnds):
-    """Validate the shape and depth interval before selecting defaults."""
+    """Check the shape of the parameter-limit table and require positive, ordered depth limits."""
     try:
         bounds = np.asarray(bnds, dtype=float)
     except (TypeError, ValueError) as error:
@@ -790,7 +822,7 @@ def _checked_depth_bounds(bnds):
 
 
 def _depth_setup(bnds, options, wave):
-    """Keep Hough at one reference depth; return the original NM depth bounds."""
+    """Choose the one reference depth for Hough, keeping the full depth limits for fitting."""
     bounds = _checked_depth_bounds(bnds)
     free = bool(bounds[2, 0] < bounds[2, 1])
     if free and not options['refine']:
@@ -804,6 +836,8 @@ def _depth_setup(bnds, options, wave):
         logs = np.log(bounds[2])
         if logs[0] >= logs[1]:
             raise ValueError('Depth bounds are indistinguishable in log coordinates.')
+        # Use the geometric mean of the depth limits: the midpoint on a logarithmic scale.
+        # Hough uses this one depth; the following Nelder-Mead search can change it.
         reference = options['depth_initial']
         if reference is None:
             reference = float(np.exp(.5*logs[0] + .5*logs[1]))
@@ -815,7 +849,10 @@ def _depth_setup(bnds, options, wave):
 
 
 def _joint_simplex(seed, centre, radius, bounds, step, log_depth, log_bounds, log_step):
-    """Add one feasible log-depth vertex to the velocity triangle."""
+    """Add a fourth starting point so Nelder-Mead can change depth too.
+
+    Change log(depth), not depth directly, and keep the point inside the limits.
+    """
     triangle = _trust_simplex(seed, centre, radius, bounds, step)
     simplex = np.empty((4, 3))
     simplex[:3, :2] = triangle
@@ -836,11 +873,11 @@ def _depth_boundary(log_depth, log_bounds, xatol):
 
 
 def _fit_metrics(objective, parameters):
-    """Recover the existing NSP-based cost/quality from final model statistics.
+    """Calculate final cost and quality using the existing overlap formulas.
 
-    The NM scalar supplies measured/model overlap per unit model mass, but
-    quality additionally needs the model self-overlap. Accumulate it once at
-    the final guess, using the same narrow-band model as the objective.
+    Nelder-Mead's score already compares measured and model power. Quality also
+    needs the model compared with itself. Calculate that once at the final result,
+    using the same Gaussian frequency ranges as the fitting calculation.
     """
     value, model_mass, model_square, overlap = objective.statistics(parameters)
     measured_mass = float(np.sum(objective.data))
@@ -856,7 +893,7 @@ def _fit_metrics(objective, parameters):
     with np.errstate(over='ignore'):
         cost = float(np.exp(2*log_cost))
         stats.update(nsp_cost=float(np.exp(log_cost)), ideal_nsp_cost=float(np.exp(log_ideal)))
-    # DE returns its final objective squared. HNM has no penalty factor.
+    # Match DE's squared final score, but do not add a velocity penalty for HNM.
     return cost, float(quality), stats
 
 
@@ -878,7 +915,7 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                     parameter_names=['vy','vx','log_depth'] if free_depth else ['vy','vx'],
                     trust_region=None, at_trust_boundary=False, at_global_boundary=False,
                     at_depth_boundary=False, at_boundary=False)
-    # There is no defensible trust centre if the detector produced no candidate.
+    # Without a Hough estimate, there is no centre for the allowed local search circle.
     if state.best is None or not np.isfinite([proposal.vy, proposal.vx]).all():
         metadata['timings'].update(objective_setup=0., local_fit=0., diagnostics=0., total=perf_counter()-started)
         depth = np.nan if free_depth else reference_depth
@@ -894,6 +931,9 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
     if minimum is None:
         minimum = 2.*max(state.dy, state.dx)
         minimum_source = 'twice_actual_max_grid_spacing'
+    # Radius = max(relative_radius*|Hough velocity|, min_radius). All starts use this
+    # circle.
+    # Do not move or enlarge it when a local fit fails.
     radius = max(options['relative_radius']*float(np.hypot(*centre)), minimum)
     if not np.isfinite(radius) or radius <= 8*np.spacing(max(1., float(np.max(np.abs(centre))))):
         raise ValueError('Trust radius must be finite and larger than velocity floating-point resolution.')
@@ -942,6 +982,9 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                           correction_norm=distance, at_trust_boundary=at_trust, at_global_boundary=at_global,
                           at_depth_boundary=bool(at_depth), converged=bool(result.success), message=str(result.message))
             runs.append(record)
+            # Choose the lowest finite score among results inside the allowed limits.
+            # Then check whether that chosen fit converged and stayed away from the limits.
+            # Do not silently replace it with a worse fit just to report success.
             if record['feasible'] and np.isfinite(result.fun) and result.fun < best_value:
                 best, best_value, best_result = result.x.copy(), float(result.fun), result
                 selected_run_index = len(runs)-1
@@ -988,8 +1031,8 @@ def _refine_estimate(spectrum, bnds, alpha, window_dims, res, fps, wave, turb,
                   'HNM: '+reason, proposal.pairs, metadata, cost, quality)
 
 
-# === Optional comparisons of existing HNM endpoints; no extra searches ===
-# These comparisons describe observed endpoints only, never global coverage.
+# Compare solutions already found by HNM; do not run additional fits.
+# These comparisons cannot rule out solutions the search never reached.
 from scipy.stats import norm
 from iwave.spectral import SpectralOverlapObjective
 from iwave.spectral import (boolean,resolve_spectral_request,
@@ -1025,8 +1068,15 @@ def _score_statistics(weights,M,full,active,variance):
 
 
 def _contrast(reference,alternative,variance,multiplier):
-    """Stable shared-data contrast variance, including normalization covariance."""
+    """Estimate noise in the difference between two scores from the same spectrum.
+
+    Include their shared measurements and the effect of dividing by a shared
+    spatial mean; do not treat the two scores as independent measurements.
+    """
     gap=float(alternative['log_score']-reference['log_score'])
+    # Both scores use the same measured spectrum, so their noise is related.
+    # Calculate noise in their difference directly, including the effect of normalisation.
+    # Treating the starts as independent measurements would give the wrong noise scale.
     difference=alternative['gradient']-reference['gradient']
     v=float(np.sum(difference*difference*variance))
     covariance=float(np.sum(reference['gradient']*alternative['gradient']*variance))
@@ -1053,10 +1103,12 @@ def _contrast(reference,alternative,variance,multiplier):
 def estimate_mode_ambiguity(spectrum,velocity,depth,bounds,window_dims,res,fps,vel_indx,
         spectral_context,metadata,fit_options,gravity_waves_switch=True,turbulence_switch=True,
         options=None,optimizer_success=None,method='HNM'):
-    """Compare distinct interior endpoints from existing NM starts.
+    """Compare different successful solutions already found by Nelder-Mead.
 
-    A false ambiguous flag applies ONLY to the explored endpoints. Selection and
-    multiple-comparison effects are not calibrated. The estimator is untouched.
+    Exclude results on the search limits. False competition means no competitor
+    among the solutions examined, not proof that no other solution exists.
+    The thresholds are approximate: searching/selecting several solutions is not
+    independently calibrated here. Do not change the selected estimate.
     """
     started=perf_counter();opts=resolve_mode_request(True,options)
     M,full,active,k,source=prepare_spectral_data(spectrum,spectral_context,opts)
@@ -1126,7 +1178,7 @@ def estimate_mode_ambiguity(spectrum,velocity,depth,bounds,window_dims,res,fps,v
     chosen=[r for r in qualified if r['run_index']==selected]
     if not chosen or np.max(abs(chosen[0]['point']-q0)/tolerances)>1:
         return finish('selected_run_unavailable')
-    # Complete-link merging avoids chaining many nearly adjacent endpoints.
+    # Group results only if every member is close to every other member.
     groups=[dict(point=q0.copy(),depth=float(depth),members=[chosen[0]],selected=True)]
     for run in sorted(qualified,key=lambda r:(r['value'],r['run_index'])):
         if run['run_index']==selected:continue
@@ -1143,6 +1195,8 @@ def estimate_mode_ambiguity(spectrum,velocity,depth,bounds,window_dims,res,fps,v
     if len(groups)==1:
         out.update(status='assessed',assessed=True,valid=True,ambiguous=False)
         return finish('one_observed_basin')
+    # Use the full spectrum before filtering to estimate noise, including discarded power.
+    # Keep the fitting mask fixed during this comparison; do not search again.
     variance=full**2/(k if opts['variance_estimator']=='plugin' else k+1)
     evaluator=SpectralOverlapObjective(M,spectral.wave_numbers(window_dims,res,fps),depth,vel_indx,
         gravity_waves_switch,turbulence_switch,fit_options)
